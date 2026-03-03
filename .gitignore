@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+.venv-bench/
+ENV/
+env/
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# MPI/HPC
+*.out
+*.err
+slurm-*.out
+
+# Logs
+*.log
+
+# Test outputs
+*.json
+!benchmarks/*.json
+
+# Virtual environments in subdirectories
+pdmrg/venv/
+pdmrg2/venv/
+a2dmrg/venv/

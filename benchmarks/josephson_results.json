@@ -1,0 +1,19 @@
+{
+  "benchmark": "josephson_junction_array",
+  "timestamp": "2026-02-19T19:28:49.112194",
+  "parameters": {
+    "L": 12,
+    "E_C": 1.0,
+    "E_J": 2.0,
+    "n_g": 0.0,
+    "n_max": 2,
+    "phi_ext": 0.7853981633974483,
+    "bond_dim": 30
+  },
+  "reference": {
+    "energy": "(-9.0141198964323+4.440892098500626e-16j)",
+    "time": 94.26806855201721
+  },
+  "pdmrg": {},
+  "a2dmrg": {}
+}

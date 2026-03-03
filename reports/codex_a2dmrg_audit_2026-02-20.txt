@@ -1,0 +1,144 @@
+READ-ONLY CODE AUDIT REPORT
+Repository: /home/captain/clawd/work/dmrg-implementations
+Date: 2026-02-20
+Mode: Static audit only (no file modifications, no runtime profiling executed)
+
+1) CODEPATH MAP
+
+Entry + setup
+- CLI parses args and initializes MPI in `a2dmrg/a2dmrg/__main__.py:192`, `a2dmrg/a2dmrg/__main__.py:198`.
+- MPO built in `a2dmrg/a2dmrg/__main__.py:137`.
+- Main algorithm called via `a2dmrg_main(...)` in `a2dmrg/a2dmrg/__main__.py:238`.
+
+Main loop structure (per sweep)
+- Initialization/warmup in `a2dmrg/a2dmrg/dmrg.py:278` (rank 0 runs quimb `DMRG2`, then broadcasts).
+- Local microsteps call in `a2dmrg/a2dmrg/dmrg.py:374` -> `a2dmrg/a2dmrg/parallel/local_steps.py:29`.
+- Gather all local updates in `a2dmrg/a2dmrg/dmrg.py:387` -> `a2dmrg/a2dmrg/parallel/local_steps.py:279`.
+- Candidate list assembly in `a2dmrg/a2dmrg/dmrg.py:401` -> `a2dmrg/a2dmrg/parallel/local_steps.py:289`.
+- Coarse matrices build in `a2dmrg/a2dmrg/dmrg.py:406` -> `a2dmrg/a2dmrg/parallel/coarse_space.py:119`.
+- Coarse eigen solve on rank 0 in `a2dmrg/a2dmrg/dmrg.py:421`, coefficients broadcast in `a2dmrg/a2dmrg/dmrg.py:442`.
+- Linear combination in `a2dmrg/a2dmrg/dmrg.py:450` -> `a2dmrg/a2dmrg/parallel/linear_combination.py:43`.
+- Compress + convergence check in `a2dmrg/a2dmrg/dmrg.py:467`, `a2dmrg/a2dmrg/dmrg.py:494`.
+
+2) MPI DISTRIBUTION / RANK-0 BOTTLENECKS
+
+Distribution
+- Sites are balanced by contiguous block in `a2dmrg/a2dmrg/parallel/distribute.py:8`.
+- Coarse matrix elements are also distributed by pair index in `a2dmrg/a2dmrg/parallel/coarse_space.py:250` and reduced with Allreduce at `a2dmrg/a2dmrg/parallel/coarse_space.py:320`.
+
+Bottlenecks
+- Rank 0-only warmup DMRG (`DMRG2`) at `a2dmrg/a2dmrg/dmrg.py:279` + full-state broadcast at `a2dmrg/a2dmrg/dmrg.py:311`.
+- Rank 0-only coarse eigensolve at `a2dmrg/a2dmrg/dmrg.py:421` (small matrix, likely minor vs contraction cost).
+- Rank 0-only finalization DMRG (if enabled) at `a2dmrg/a2dmrg/dmrg.py:526` + broadcast at `a2dmrg/a2dmrg/dmrg.py:569`.
+- Major MPI pressure is not rank0 compute, but all-rank replication via allgather of full MPS updates: `a2dmrg/a2dmrg/parallel/local_steps.py:279`.
+
+3) COPY / MEMORY HOTSPOTS
+
+High-impact hotspots
+- Per-site deep copies for orthogonal decompositions:
+  - `a2dmrg/a2dmrg/mps/canonical.py:228` (lazy path still one copy per assigned site).
+- Per-local-update full MPS copy:
+  - `a2dmrg/a2dmrg/numerics/local_microstep.py:59`, `a2dmrg/a2dmrg/numerics/local_microstep.py:167`, `a2dmrg/a2dmrg/numerics/local_microstep.py:343`.
+- All local results allgathered to every rank:
+  - `a2dmrg/a2dmrg/parallel/local_steps.py:279` (dict values are full updated MPS objects).
+- Candidate list stores original copy + one updated full MPS per site:
+  - `a2dmrg/a2dmrg/parallel/local_steps.py:317`.
+- Linear combination performs repeated MPS additions, creating intermediates:
+  - `a2dmrg/a2dmrg/parallel/linear_combination.py:128`, `a2dmrg/a2dmrg/parallel/linear_combination.py:133`.
+
+Compute-amplifying hotspot
+- Each local microstep computes full-chain energy (`compute_energy`) before returning:
+  - `a2dmrg/a2dmrg/numerics/local_microstep.py:119`, `:285`, `:447`.
+- `compute_energy` is O(L) sweep contractions:
+  - `a2dmrg/a2dmrg/numerics/observables.py:90`, `:128`.
+
+4) ENV CACHING BYPASS / FAILURE MODES
+
+- Two-site “cached” path still calls uncached microstep:
+  - `a2dmrg/a2dmrg/parallel/local_steps.py:173` -> `local_microstep_2site(...)`, which rebuilds environments internally (`a2dmrg/a2dmrg/numerics/local_microstep.py:346`).
+- Silent cache miss/fallback:
+  - If env bond dims mismatch, one-site update is skipped and returns unchanged state + zero energy:
+    - `a2dmrg/a2dmrg/numerics/local_microstep.py:87`, `a2dmrg/a2dmrg/numerics/local_microstep.py:221`.
+  - This can hide invalid cache compatibility and degrade convergence without explicit signal.
+- Cache construction itself duplicates/canonizes MPS twice per sweep:
+  - `a2dmrg/a2dmrg/environments/cached_environment.py:80`, `:87`.
+
+5) COARSE-SPACE O(K^2) / O(L^2) TRAPS
+
+K = number of candidates (up to L+1 before filtering)
+- Energy prefilter computes energy for every candidate, then allgathers:
+  - `a2dmrg/a2dmrg/parallel/coarse_space.py:181`, `:189`, `:196`.
+- Overlap redundancy filter is nested pairwise overlap checks:
+  - `a2dmrg/a2dmrg/parallel/coarse_space.py:93` + norm overlaps at `:97`, `:98`.
+- Coarse matrix assembly is quadratic in candidates (upper triangle pairs):
+  - `a2dmrg/a2dmrg/parallel/coarse_space.py:250`, `:255`.
+- Off-diagonal contractions build TN contraction per pair:
+  - `a2dmrg/a2dmrg/parallel/coarse_space.py:294`, `:297`.
+- Allreduce combines full coarse matrices:
+  - `a2dmrg/a2dmrg/parallel/coarse_space.py:320`, `:321`.
+
+Mitigation already present but limiting
+- Hard cap `max_candidates=8` in coarse builder:
+  - `a2dmrg/a2dmrg/parallel/coarse_space.py:126`.
+- If cap is raised or disabled, quadratic behavior will reappear quickly.
+
+6) CONVERGENCE / TOLERANCE MISMATCH VS QUIMB
+
+Observed mismatches
+- Mixed tolerance policy:
+  - Main tol user-driven (`a2dmrg/a2dmrg/dmrg.py:494`), but compression cutoff fixed `1e-12` (`a2dmrg/a2dmrg/dmrg.py:467`, `:514`), and coarse regularization fixed `1e-8` (`a2dmrg/a2dmrg/dmrg.py:426`).
+  - Warmup/finalization use quimb DMRG with fixed tight tolerances (`a2dmrg/a2dmrg/dmrg.py:289`, `:548`).
+- Test/expectation mismatch:
+  - README frames paper tolerance around 1e-6 (`a2dmrg/README.md:189`), but one test enforces 1e-10 exact match (`a2dmrg/a2dmrg/tests/test_l20_validation.py:45`).
+  - Separate practical test explicitly relaxes tol to 1e-4 due runtime/convergence reality (`a2dmrg/a2dmrg/tests/test_l20_practical.py:36`).
+- Net effect: benchmark/runtime comparisons vs quimb can be apples-to-oranges unless warmup/finalize/compression/regularization are aligned for both methods.
+
+7) PRIORITIZED RECOMMENDATIONS
+
+P0 (highest)
+1. Remove full-MPS allgather from sweep critical path.
+   - Replace `allgather(local_results)` of full states (`a2dmrg/a2dmrg/parallel/local_steps.py:279`) with rank-owner pairwise coarse contributions or compressed deltas.
+2. Stop recomputing full energy inside every local microstep.
+   - Remove `compute_energy(...)` from per-site returns (`a2dmrg/a2dmrg/numerics/local_microstep.py:119`, `:285`, `:447`); compute only where needed for convergence/reporting.
+3. Make cache mismatch explicit failure, not silent skip.
+   - Current `return mps, 0.0` (`a2dmrg/a2dmrg/numerics/local_microstep.py:87`, `:221`) should at least emit a hard warning/counter.
+
+P1
+4. Implement true cached envs for two-site path.
+   - Current “cached” branch still calls env-rebuilding two-site routine (`a2dmrg/a2dmrg/parallel/local_steps.py:173`).
+5. Unify tolerance policy knobs.
+   - Tie coarse regularization/compression cutoff/warmup-finalize tolerances to a coherent configuration, and document quimb parity mode.
+
+P2
+6. Reduce copy churn in decomposition + linear combination.
+   - Reuse gauge-transformed views where possible; avoid repeated intermediate MPS sums in `linear_combination`.
+7. Keep coarse candidate cap small by default, but validate energy impact when cap changes.
+   - Current cap `max_candidates=8` is essential for avoiding quadratic blowups.
+
+8) MINIMAL VALIDATING EXPERIMENTS
+
+Experiment A (communication footprint)
+- Compare baseline vs no-full-state-allgather prototype.
+- Measure per-sweep wall time and MPI bytes at L=20,40; bond_dim=50; np=1,2,4,8.
+- Success criterion: significant reduction in sweep time growth with np>1.
+
+Experiment B (energy recomputation removal)
+- Remove per-site `compute_energy` calls from microsteps; keep only sweep-end energy.
+- Validate same final energy (within 1e-6 paper tolerance) and lower phase-2 time.
+
+Experiment C (cache integrity)
+- Add instrumentation counter for env-mismatch skips (currently silent).
+- Run L=20,np=4 one-site and two-site.
+- Success criterion: zero silent skips in healthy path.
+
+Experiment D (two-site cache effectiveness)
+- Implement/compare true cached two-site env use.
+- Measure phase-2 time for one-site vs two-site at identical settings.
+- Success criterion: two-site no longer regresses to uncached O(L^2)-like behavior.
+
+Experiment E (tolerance parity vs quimb)
+- Define parity profile: same effective truncation/cutoff/regularization policy.
+- Compare A2DMRG vs quimb on L=10,20 with fixed bond_dim and matched stopping criteria.
+- Report both energy delta and runtime; stop mixing 1e-6 paper target with ad hoc 1e-10 assertions.
+
+End of report.

@@ -1,0 +1,6 @@
+== shared ==
+python: .venv-bench/bin/python
+Python 3.13.11
+sys.executable= /home/captain/clawd/work/dmrg-implementations/.venv-bench/bin/python
+sys.prefix= /home/captain/clawd/work/dmrg-implementations/.venv-bench
+pip 26.0.1 from /home/captain/clawd/work/dmrg-implementations/.venv-bench/lib64/python3.13/site-packages/pip (python 3.13)
