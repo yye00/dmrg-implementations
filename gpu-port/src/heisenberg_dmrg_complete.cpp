@@ -87,14 +87,26 @@ double power_iteration(
         // Apply H|psi>
         apply_heisenberg_2site(d_psi, d_Hpsi, D_L, D_R, rb_handle);
 
-        // Compute energy = <psi|H|psi>
+        // Flip sign to find minimum: |Hpsi> = -H|psi>
+        Complex neg_one = make_complex(-1.0, 0.0);
+        rocblas_zscal(rb_handle, psi_size,
+                     (rocblas_double_complex*)&neg_one,
+                     (rocblas_double_complex*)d_Hpsi, 1);
+
+        // Compute energy = <psi|H|psi> (use original H, not -H)
+        Complex* d_Hpsi_orig;
+        HIP_CHECK(hipMalloc(&d_Hpsi_orig, psi_size * sizeof(Complex)));
+        apply_heisenberg_2site(d_psi, d_Hpsi_orig, D_L, D_R, rb_handle);
+
         rocblas_double_complex energy_z;
         rocblas_zdotc(rb_handle, psi_size,
                      (rocblas_double_complex*)d_psi, 1,
-                     (rocblas_double_complex*)d_Hpsi, 1,
+                     (rocblas_double_complex*)d_Hpsi_orig, 1,
                      &energy_z);
 
-        // Extract real part (use std::real for compatibility)
+        HIP_CHECK(hipFree(d_Hpsi_orig));
+
+        // Extract real part
         hipDoubleComplex* e_hip = reinterpret_cast<hipDoubleComplex*>(&energy_z);
         energy = e_hip->x;
 
