@@ -715,13 +715,18 @@ private:
         int D_R = bond_dims[site + 2];
         int psi_size = D_L * d * d * D_R;
 
+        std::cout << "[DBG] optimize_site " << site << ": D_L=" << D_L << " D_M=" << D_M << " D_R=" << D_R << " psi_size=" << psi_size << std::endl;
+
         // Form 2-site wavefunction
         Complex* d_theta;
+        std::cout << "[DBG]   hipMalloc..." << std::flush;
         HIP_CHECK(hipMalloc(&d_theta, psi_size * sizeof(Complex)));
+        std::cout << " done" << std::endl;
 
         Complex alpha = make_complex(1.0, 0.0);
         Complex beta = make_complex(0.0, 0.0);
 
+        std::cout << "[DBG]   zgemm (form theta)..." << std::flush;
         rocblas_zgemm(rb_handle, rocblas_operation_none, rocblas_operation_none,
                      d * D_R, D_L * d, D_M,
                      (rocblas_double_complex*)&alpha,
@@ -729,6 +734,7 @@ private:
                      (rocblas_double_complex*)d_mps[site], D_M,
                      (rocblas_double_complex*)&beta,
                      (rocblas_double_complex*)d_theta, d * D_R);
+        std::cout << " done" << std::endl;
 
         // Apply effective Hamiltonian WITH environments
         auto apply_H_eff = [&](const Complex* d_in, Complex* d_out) {
@@ -736,13 +742,19 @@ private:
         };
 
         // Optimize with power iteration
+        std::cout << "[DBG]   power iteration..." << std::flush;
         PowerIterationEigensolver solver(rb_handle, 30, 1e-12);
         double energy = solver.solve(apply_H_eff, psi_size, d_theta);
+        std::cout << " done (E=" << energy << ")" << std::endl;
 
         // SVD and update MPS
+        std::cout << "[DBG]   update_mps_with_svd..." << std::flush;
         update_mps_with_svd(site, d_theta);
+        std::cout << " done" << std::endl;
 
+        std::cout << "[DBG]   hipFree..." << std::flush;
         HIP_CHECK(hipFree(d_theta));
+        std::cout << " done" << std::endl;
         return energy;
     }
 
