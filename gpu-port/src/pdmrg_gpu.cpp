@@ -433,176 +433,125 @@ public:
     }
 
     // update_left_env: L[site+1] = contract(L[site], A[site], W[site], A*[site])
+    // CPU-based contraction for correctness (hipTensor env updates had mode issues)
     void update_left_env(int site, const std::vector<Complex*>& d_mps, MPOBase& mpo) {
         int Da  = mps_dims[site];
         int Db  = mps_dims[site + 1];
         int Dw  = mpo.get_left_dim(site);
         int Dwp = mpo.get_right_dim(site);
 
-        Complex* d_A    = d_mps[site];
-        Complex* d_W    = mpo.get_mpo(site);
-        Complex* d_L_in = d_left_env[site];
-
         int env_out_size = Db * Dwp * Db;
         if (d_left_env[site + 1]) {
             HIP_CHECK(hipFree(d_left_env[site + 1]));
             d_left_env[site + 1] = nullptr;
         }
+
+        int L_size = Da * Dw * Da;
+        int A_size = Da * d * Db;
+        int W_size = Dw * d * d * Dwp;
+
+        std::vector<Complex> hL(L_size), hA(A_size), hW(W_size);
+        HIP_CHECK(hipMemcpy(hL.data(), d_left_env[site], L_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hA.data(), d_mps[site], A_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hW.data(), mpo.get_mpo(site), W_size * sizeof(Complex), hipMemcpyDeviceToHost));
+
+        std::vector<Complex> hL_new(env_out_size, make_complex(0.0, 0.0));
+
+        for (int b = 0; b < Db; b++)
+            for (int wp = 0; wp < Dwp; wp++)
+                for (int bstar = 0; bstar < Db; bstar++) {
+                    Complex sum = make_complex(0.0, 0.0);
+                    for (int a = 0; a < Da; a++)
+                        for (int astar = 0; astar < Da; astar++)
+                            for (int w = 0; w < Dw; w++)
+                                for (int s = 0; s < d; s++)
+                                    for (int sp = 0; sp < d; sp++) {
+                                        Complex Lv = hL[a * (Dw * Da) + w * Da + astar];
+                                        Complex Av = hA[a * (d * Db) + s * Db + b];
+                                        Complex Wv = hW[w * (d * d * Dwp) + s * (d * Dwp) + sp * Dwp + wp];
+                                        Complex Ac = hA[astar * (d * Db) + sp * Db + bstar];
+                                        Ac.y = -Ac.y;  // conjugate
+
+                                        Complex p;
+                                        p.x = Lv.x * Av.x - Lv.y * Av.y;
+                                        p.y = Lv.x * Av.y + Lv.y * Av.x;
+                                        Complex q;
+                                        q.x = p.x * Wv.x - p.y * Wv.y;
+                                        q.y = p.x * Wv.y + p.y * Wv.x;
+                                        Complex r;
+                                        r.x = q.x * Ac.x - q.y * Ac.y;
+                                        r.y = q.x * Ac.y + q.y * Ac.x;
+
+                                        sum.x += r.x;
+                                        sum.y += r.y;
+                                    }
+                    hL_new[b * (Dwp * Db) + wp * Db + bstar] = sum;
+                }
+
         HIP_CHECK(hipMalloc(&d_left_env[site + 1], env_out_size * sizeof(Complex)));
-
-        // Step 1: temp1[w,a*,s,b] = sum_a L[a,w,a*] * A[a,s,b]
-        Complex* d_temp1;
-        int temp1_size = Dw * Da * d * Db;
-        HIP_CHECK(hipMalloc(&d_temp1, temp1_size * sizeof(Complex)));
-
-        {
-            int64_t extentL[] = {Da, Dw, Da};
-            int64_t extentA[] = {Db, d, Da};
-            int64_t extent_temp1[] = {Db, d, Da, Dw};
-            int32_t modesL[] = {2, 1, 0};
-            int32_t modesA[] = {4, 3, 0};
-            int32_t modes_temp1[] = {4, 3, 2, 1};
-
-            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
-
-            ht_contractor->contract(
-                d_L_in, 3, extentL, modesL, HIPTENSOR_OP_IDENTITY,
-                d_A, 3, extentA, modesA, HIPTENSOR_OP_IDENTITY,
-                d_temp1, 4, extent_temp1, modes_temp1,
-                alpha, beta, 0);
-        }
-
-        // Step 2: temp2[a*,s',b,w'] = sum_{w,s} temp1[w,a*,s,b] * W[w,s,s',w']
-        Complex* d_temp2;
-        int temp2_size = Da * d * Db * Dwp;
-        HIP_CHECK(hipMalloc(&d_temp2, temp2_size * sizeof(Complex)));
-
-        {
-            int64_t extent_temp1[] = {Db, d, Da, Dw};
-            int64_t extentW[] = {Dwp, d, d, Dw};
-            int64_t extent_temp2[] = {Dwp, Db, d, Da};
-            int32_t modes_temp1[] = {4, 3, 2, 1};
-            int32_t modesW[] = {6, 5, 3, 1};
-            int32_t modes_temp2[] = {6, 4, 5, 2};
-
-            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
-
-            ht_contractor->contract(
-                d_temp1, 4, extent_temp1, modes_temp1, HIPTENSOR_OP_IDENTITY,
-                d_W, 4, extentW, modesW, HIPTENSOR_OP_IDENTITY,
-                d_temp2, 4, extent_temp2, modes_temp2,
-                alpha, beta, 0);
-        }
-
-        HIP_CHECK(hipFree(d_temp1));
-
-        // Step 3: L_new[b,wp,b*] = sum_{a*,s'} temp2[a*,s',b,w'] * conj(A[a*,s',b*])
-        {
-            int64_t extent_temp2[] = {Dwp, Db, d, Da};
-            int64_t extentA[] = {Db, d, Da};
-            int64_t extent_Lnew[] = {Db, Dwp, Db};
-            int32_t modes_temp2[] = {6, 4, 5, 2};
-            int32_t modesA_conj[] = {7, 5, 2};
-            int32_t modes_Lnew[] = {7, 6, 4};
-
-            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
-
-            ht_contractor->contract(
-                d_temp2, 4, extent_temp2, modes_temp2, HIPTENSOR_OP_IDENTITY,
-                d_A, 3, extentA, modesA_conj, HIPTENSOR_OP_CONJ,
-                d_left_env[site + 1], 3, extent_Lnew, modes_Lnew,
-                alpha, beta, 0);
-        }
-
-        HIP_CHECK(hipFree(d_temp2));
+        HIP_CHECK(hipMemcpy(d_left_env[site + 1], hL_new.data(), env_out_size * sizeof(Complex), hipMemcpyHostToDevice));
     }
 
     // update_right_env: R[site] = contract(A[site], W[site], A*[site], R[site+1])
+    // update_right_env: R[site] = contract(A[site], W[site], A*[site], R[site+1])
+    // CPU-based contraction for correctness
     void update_right_env(int site, const std::vector<Complex*>& d_mps, MPOBase& mpo) {
         int Da  = mps_dims[site];
         int Db  = mps_dims[site + 1];
         int Dw  = mpo.get_left_dim(site);
         int Dwp = mpo.get_right_dim(site);
 
-        Complex* d_A    = d_mps[site];
-        Complex* d_W    = mpo.get_mpo(site);
-        Complex* d_R_in = d_right_env[site + 1];
-
         int env_out_size = Da * Dw * Da;
         if (d_right_env[site]) {
             HIP_CHECK(hipFree(d_right_env[site]));
             d_right_env[site] = nullptr;
         }
+
+        int R_size = Db * Dwp * Db;
+        int A_size = Da * d * Db;
+        int W_size = Dw * d * d * Dwp;
+
+        std::vector<Complex> hR(R_size), hA(A_size), hW(W_size);
+        HIP_CHECK(hipMemcpy(hR.data(), d_right_env[site + 1], R_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hA.data(), d_mps[site], A_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hW.data(), mpo.get_mpo(site), W_size * sizeof(Complex), hipMemcpyDeviceToHost));
+
+        std::vector<Complex> hR_new(env_out_size, make_complex(0.0, 0.0));
+
+        // R_new[a, w, astar] = sum_{b,bstar,wp,s,sp} A[a,s,b] * W[w,s,sp,wp] * R[b,wp,bstar] * conj(A[astar,sp,bstar])
+        for (int a = 0; a < Da; a++)
+            for (int w = 0; w < Dw; w++)
+                for (int astar = 0; astar < Da; astar++) {
+                    Complex sum = make_complex(0.0, 0.0);
+                    for (int b = 0; b < Db; b++)
+                        for (int bstar = 0; bstar < Db; bstar++)
+                            for (int wp = 0; wp < Dwp; wp++)
+                                for (int s = 0; s < d; s++)
+                                    for (int sp = 0; sp < d; sp++) {
+                                        Complex Av = hA[a * (d * Db) + s * Db + b];
+                                        Complex Wv = hW[w * (d * d * Dwp) + s * (d * Dwp) + sp * Dwp + wp];
+                                        Complex Rv = hR[b * (Dwp * Db) + wp * Db + bstar];
+                                        Complex Ac = hA[astar * (d * Db) + sp * Db + bstar];
+                                        Ac.y = -Ac.y;  // conjugate
+
+                                        Complex p;
+                                        p.x = Av.x * Wv.x - Av.y * Wv.y;
+                                        p.y = Av.x * Wv.y + Av.y * Wv.x;
+                                        Complex q;
+                                        q.x = p.x * Rv.x - p.y * Rv.y;
+                                        q.y = p.x * Rv.y + p.y * Rv.x;
+                                        Complex r;
+                                        r.x = q.x * Ac.x - q.y * Ac.y;
+                                        r.y = q.x * Ac.y + q.y * Ac.x;
+
+                                        sum.x += r.x;
+                                        sum.y += r.y;
+                                    }
+                    hR_new[a * (Dw * Da) + w * Da + astar] = sum;
+                }
+
         HIP_CHECK(hipMalloc(&d_right_env[site], env_out_size * sizeof(Complex)));
-
-        Complex* d_temp1;
-        int temp1_size = Da * d * Dwp * Db;
-        HIP_CHECK(hipMalloc(&d_temp1, temp1_size * sizeof(Complex)));
-
-        {
-            int64_t extentA[] = {Db, d, Da};
-            int64_t extentR[] = {Db, Dwp, Db};
-            int64_t extent_temp1[] = {Db, Dwp, d, Da};
-            int32_t modesA[] = {2, 1, 0};
-            int32_t modesR[] = {4, 3, 2};
-            int32_t modes_temp1[] = {4, 3, 1, 0};
-
-            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
-
-            ht_contractor->contract(
-                d_A, 3, extentA, modesA, HIPTENSOR_OP_IDENTITY,
-                d_R_in, 3, extentR, modesR, HIPTENSOR_OP_IDENTITY,
-                d_temp1, 4, extent_temp1, modes_temp1,
-                alpha, beta, 0);
-        }
-
-        Complex* d_temp2;
-        int temp2_size = Da * Dw * d * Db;
-        HIP_CHECK(hipMalloc(&d_temp2, temp2_size * sizeof(Complex)));
-
-        {
-            int64_t extent_temp1[] = {Db, Dwp, d, Da};
-            int64_t extentW[] = {Dwp, d, d, Dw};
-            int64_t extent_temp2[] = {Db, d, Dw, Da};
-            int32_t modes_temp1[] = {4, 3, 1, 0};
-            int32_t modesW[] = {3, 6, 1, 5};
-            int32_t modes_temp2[] = {4, 6, 5, 0};
-
-            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
-
-            ht_contractor->contract(
-                d_temp1, 4, extent_temp1, modes_temp1, HIPTENSOR_OP_IDENTITY,
-                d_W, 4, extentW, modesW, HIPTENSOR_OP_IDENTITY,
-                d_temp2, 4, extent_temp2, modes_temp2,
-                alpha, beta, 0);
-        }
-
-        HIP_CHECK(hipFree(d_temp1));
-
-        {
-            int64_t extent_temp2[] = {Db, d, Dw, Da};
-            int64_t extentA[] = {Db, d, Da};
-            int64_t extent_Rnew[] = {Da, Dw, Da};
-            int32_t modes_temp2[] = {4, 6, 5, 0};
-            int32_t modesA_conj[] = {4, 6, 7};
-            int32_t modes_Rnew[] = {7, 5, 0};
-
-            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
-
-            ht_contractor->contract(
-                d_temp2, 4, extent_temp2, modes_temp2, HIPTENSOR_OP_IDENTITY,
-                d_A, 3, extentA, modesA_conj, HIPTENSOR_OP_CONJ,
-                d_right_env[site], 3, extent_Rnew, modes_Rnew,
-                alpha, beta, 0);
-        }
-
-        HIP_CHECK(hipFree(d_temp2));
+        HIP_CHECK(hipMemcpy(d_right_env[site], hR_new.data(), env_out_size * sizeof(Complex), hipMemcpyHostToDevice));
     }
 
     Complex* get_left(int site) { return d_left_env[site]; }
