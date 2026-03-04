@@ -206,10 +206,10 @@ public:
 
 class SVDTruncation {
 private:
-    rocsolver_handle handle;
+    rocblas_handle handle;
 
 public:
-    SVDTruncation(rocsolver_handle h) : handle(h) {}
+    SVDTruncation(rocblas_handle h) : handle(h) {}
 
     // Perform SVD: M = U S Vt
     // Returns actual rank kept
@@ -259,7 +259,7 @@ private:
 
     std::vector<rocblas_handle> rb_handles;
     std::vector<hipStream_t> streams;
-    rocsolver_handle rs_handle;
+    rocblas_handle rs_handle;
 
     std::vector<int> bond_dims;
     std::vector<Complex*> d_mps;

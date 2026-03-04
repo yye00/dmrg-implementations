@@ -118,12 +118,12 @@ public:
 class BlockDavidsonEigensolver {
 private:
     rocblas_handle handle;
-    rocsolver_handle rs_handle;
+    rocblas_handle rs_handle;
     int block_size, max_iter;
     double tol;
 
 public:
-    BlockDavidsonEigensolver(rocblas_handle h, rocsolver_handle rsh,
+    BlockDavidsonEigensolver(rocblas_handle h, rocblas_handle rsh,
                             int bs = 4, int max_it = 20, double tolerance = 1e-12)
         : handle(h), rs_handle(rsh), block_size(bs), max_iter(max_it), tol(tolerance) {}
 
@@ -251,7 +251,7 @@ private:
 
     std::vector<rocblas_handle> rb_handles;
     std::vector<hipStream_t> streams;
-    rocsolver_handle rs_handle;
+    rocblas_handle rs_handle;
 
     std::vector<int> bond_dims;
     std::vector<Complex*> d_mps;
