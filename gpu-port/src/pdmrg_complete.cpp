@@ -232,7 +232,7 @@ public:
                         d_S,
                         (rocblas_double_complex*)d_U, m,
                         (rocblas_double_complex*)d_Vt, n,
-                        nullptr, 0, d_rwork, d_info);
+                        d_rwork, d_info);
 
         int info;
         HIP_CHECK(hipMemcpy(&info, d_info, sizeof(int), hipMemcpyDeviceToHost));
@@ -317,9 +317,9 @@ public:
     }
 
     ~PDMRG() {
-        for (auto& s : streams) hipStreamDestroy(s);
+        for (auto& s : streams) HIP_CHECK(hipStreamDestroy(s));
         for (auto& h : rb_handles) rocblas_destroy_handle(h);
-        rocsolver_destroy_handle(rs_handle);
+        rocblas_destroy_handle(rs_handle);  // Use rocblas version in ROCm 7.2
         for (auto& p : d_mps) HIP_CHECK(hipFree(p));
     }
 

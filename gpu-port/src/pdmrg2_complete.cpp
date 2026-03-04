@@ -307,9 +307,9 @@ public:
     }
 
     ~PDMRG2() {
-        for (auto& s : streams) hipStreamDestroy(s);
+        for (auto& s : streams) HIP_CHECK(hipStreamDestroy(s));
         for (auto& h : rb_handles) rocblas_destroy_handle(h);
-        rocsolver_destroy_handle(rs_handle);
+        rocblas_destroy_handle(rs_handle);  // Use rocblas version in ROCm 7.2
         for (auto& p : d_mps) HIP_CHECK(hipFree(p));
     }
 
