@@ -44,17 +44,13 @@ include_directories(
     ${ROCM_PATH}/include
 )
 
-# Heisenberg benchmark
+# Heisenberg benchmark (original)
 add_executable(heisenberg_gpu src/heisenberg_dmrg_gpu.cpp)
-
-# Mark as HIP source to use proper compiler
 set_source_files_properties(src/heisenberg_dmrg_gpu.cpp PROPERTIES LANGUAGE HIP)
-
-target_compile_options(heisenberg_gpu PRIVATE 
+target_compile_options(heisenberg_gpu PRIVATE
     $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
     -O3
 )
-
 target_link_libraries(heisenberg_gpu
     hip::device
     roc::rocblas
@@ -62,8 +58,25 @@ target_link_libraries(heisenberg_gpu
     ${HIPTENSOR_LIBRARY}
 )
 
+# DMRG Benchmark (PDMRG vs PDMRG2 comparison)
+add_executable(dmrg_benchmark
+    src/dmrg_benchmark.cpp
+    src/heisenberg_mpo.cpp
+)
+set_source_files_properties(src/dmrg_benchmark.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(dmrg_benchmark PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(dmrg_benchmark
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+)
+
 # Installation
-install(TARGETS heisenberg_gpu DESTINATION bin)
+install(TARGETS heisenberg_gpu dmrg_benchmark DESTINATION bin)
 
 # Configuration summary
 message(STATUS "==============================================")
