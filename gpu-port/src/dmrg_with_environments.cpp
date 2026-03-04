@@ -900,6 +900,7 @@ private:
 
         // SVD: theta = U * S * Vt
         std::cout << "[DBG SVD] Calling rocsolver_zgesvd..." << std::flush;
+        HIP_CHECK(hipDeviceSynchronize());  // Ensure previous ops complete
         rocsolver_zgesvd(rb_handle,
                        rocblas_svect_singular,   // Compute U
                        rocblas_svect_singular,   // Compute Vt
@@ -909,7 +910,17 @@ private:
                        (rocblas_double_complex*)d_U, m,
                        (rocblas_double_complex*)d_Vt, n,
                        d_E, rocblas_outofplace, d_info);
+        HIP_CHECK(hipDeviceSynchronize());  // Wait for SVD to complete
         std::cout << " done" << std::endl;
+
+        // Check SVD return status
+        int h_info;
+        HIP_CHECK(hipMemcpy(&h_info, d_info, sizeof(int), hipMemcpyDeviceToHost));
+        std::cout << "[DBG SVD] SVD info=" << h_info << " (0=success)" << std::endl;
+        if (h_info != 0) {
+            std::cerr << "ERROR: rocsolver_zgesvd failed with info=" << h_info << std::endl;
+            exit(1);
+        }
 
         // CRITICAL FIX: Keep bond dimension FIXED to avoid breaking environments
         // Use current bond dimension, don't change it
