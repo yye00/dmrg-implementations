@@ -10,6 +10,7 @@
 #include <vector>
 #include <complex>
 #include <cmath>
+#include <cstdlib>
 #include <chrono>
 #include <iomanip>
 
@@ -162,6 +163,9 @@ int main() {
     rocblas_handle rb_handle;
     rocblas_create_handle(&rb_handle);
 
+    // Seed random number generator
+    srand(42);
+
     auto t_start = std::chrono::high_resolution_clock::now();
 
     // Initialize MPS
@@ -182,10 +186,12 @@ int main() {
 
         HIP_CHECK(hipMalloc(&mps[i], size * sizeof(Complex)));
 
-        std::vector<Complex> h_mps(size, make_complex(0.0, 0.0));
-        // Initialize to |0...0>
-        for (int a = 0; a < std::min(D_L, D_R); a++) {
-            h_mps[a * d * D_R + 0 * D_R + a] = make_complex(1.0, 0.0);
+        // Initialize with RANDOM state (not product state!)
+        std::vector<Complex> h_mps(size);
+        for (int idx = 0; idx < size; idx++) {
+            double r = (double)rand() / RAND_MAX - 0.5;
+            double im = (double)rand() / RAND_MAX - 0.5;
+            h_mps[idx] = make_complex(r, im);
         }
         HIP_CHECK(hipMemcpy(mps[i], h_mps.data(), size * sizeof(Complex),
                            hipMemcpyHostToDevice));
