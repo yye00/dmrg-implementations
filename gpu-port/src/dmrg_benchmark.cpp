@@ -12,11 +12,12 @@
 #include <sstream>
 
 #include "gpu_memory.hpp"
-#include "lanczos_eigensolver.hpp"
-#include "block_davidson.hpp"
+#include "lanczos_eigensolver_gpu_native.hpp"
+#include "block_davidson_gpu_native.hpp"
 #include "svd_solver.hpp"
 #include "dmrg_types.hpp"
 #include "heisenberg_mpo.hpp"
+#include "tensor_contractions.hpp"
 
 using Complex = hipDoubleComplex;
 using Clock = std::chrono::high_resolution_clock;
@@ -46,10 +47,11 @@ private:
     bool use_davidson;  // false = Lanczos (PDMRG), true = Davidson (PDMRG2)
     int n_streams;
 
-    LanczosEigensolver* lanczos;
-    BlockDavidson* davidson;
+    LanczosEigensolverGPU* lanczos;
+    BlockDavidsonGPU* davidson;
     StandardSVD* svd_solver;
     StreamManager* stream_mgr;
+    TensorContractions* tensor_ops;
 
     double energy;
     std::vector<int> bond_dims;
@@ -61,12 +63,12 @@ public:
           use_davidson(use_block_davidson), n_streams(num_streams),
           energy(0.0) {
 
-        // Initialize eigensolvers
+        // Initialize eigensolvers (GPU-native versions)
         if (use_davidson) {
-            davidson = new BlockDavidson(4, 30, 1e-12);
+            davidson = new BlockDavidsonGPU(4, 30, 1e-12);
             lanczos = nullptr;
         } else {
-            lanczos = new LanczosEigensolver(50, 1e-12);
+            lanczos = new LanczosEigensolverGPU(50, 1e-12);
             davidson = nullptr;
         }
 
@@ -75,6 +77,9 @@ public:
 
         // Stream manager
         stream_mgr = new StreamManager(num_streams);
+
+        // Tensor operations for exact H_eff
+        tensor_ops = new TensorContractions();
 
         // Initialize bond dimensions
         bond_dims.resize(L + 1);
@@ -90,6 +95,7 @@ public:
         if (davidson) delete davidson;
         delete svd_solver;
         delete stream_mgr;
+        delete tensor_ops;
     }
 
     double run(const Tensor5D<Complex>& mpo) {
@@ -119,20 +125,14 @@ public:
                 }
                 d_vec.copy_from_host(h_vec, stream);
 
-                // Apply H_eff callback (simplified Heisenberg)
+                // Apply H_eff callback (EXACT Heisenberg)
                 auto apply_H = [&](const Complex* d_x, Complex* d_y, hipStream_t s) {
-                    // Copy and apply approximate Heisenberg operator
-                    HIP_CHECK(hipMemcpyAsync(d_y, d_x, dim * sizeof(Complex),
-                                            hipMemcpyDeviceToDevice, s));
-
-                    rocblas_handle h;
-                    ROCBLAS_CHECK(rocblas_create_handle(&h));
-                    ROCBLAS_CHECK(rocblas_set_stream(h, s));
-
-                    Complex factor = make_complex(-1.5, 0.0);
-                    ROCBLAS_CHECK(rocblas_zscal(h, dim, &factor, d_y, 1));
-
-                    rocblas_destroy_handle(h);
+                    // Use exact 2-site Heisenberg Hamiltonian
+                    // H = S·S = Sx⊗Sx + Sy⊗Sy + Sz⊗Sz
+                    int D_L = bond_dims[site];
+                    int d_phys = 2;  // Spin-1/2
+                    int D_R = bond_dims[site + 2];
+                    tensor_ops->apply_H_eff_heisenberg_exact(d_x, d_y, D_L, d_phys, D_R, s);
                 };
 
                 // Call eigensolver (ACTUAL COMPUTATION!)

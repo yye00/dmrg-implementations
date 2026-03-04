@@ -15,6 +15,7 @@
 #include "svd_solver.hpp"
 #include "dmrg_types.hpp"
 #include "heisenberg_mpo.hpp"
+#include "tensor_contractions.hpp"
 
 using Complex = hipDoubleComplex;
 using Clock = std::chrono::high_resolution_clock;
@@ -31,6 +32,7 @@ private:
     BlockDavidsonGPU* davidson_gpu;
     StandardSVD* svd_solver;
     StreamManager* stream_mgr;
+    TensorContractions* tensor_ops;
 
     // ALL MPS/MPO data on GPU - NO CPU copies during computation
     std::vector<GPUBuffer<Complex>> d_mps;  // MPS tensors on GPU
@@ -69,6 +71,7 @@ public:
         // Exact SVD always
         svd_solver = new StandardSVD();
         stream_mgr = new StreamManager(num_streams);
+        tensor_ops = new TensorContractions();
 
         // Initialize bond dimensions
         bond_dims.resize(L + 1);
@@ -97,6 +100,7 @@ public:
         if (davidson_gpu) delete davidson_gpu;
         delete svd_solver;
         delete stream_mgr;
+        delete tensor_ops;
     }
 
     // STEP 1: Upload initial state CPU → GPU (ONCE)
@@ -302,16 +306,12 @@ private:
                                      &beta,
                                      d_theta.data(), n));
 
-        // Apply H_eff using eigensolver callback
+        // Apply H_eff using eigensolver callback (EXACT Heisenberg)
         auto apply_H_callback = [&](const Complex* d_x, Complex* d_y, hipStream_t s) {
-            // Simplified H_eff application
-            // In production: full tensor network contraction
-            HIP_CHECK(hipMemcpyAsync(d_y, d_x, dim * sizeof(Complex),
-                                    hipMemcpyDeviceToDevice, s));
-
-            // Apply approximate Heisenberg Hamiltonian
-            Complex factor = make_complex(-1.5, 0.0);
-            ROCBLAS_CHECK(rocblas_zscal(rb_handle, dim, &factor, d_y, 1));
+            // Use exact 2-site Heisenberg Hamiltonian
+            // H = S·S = Sx⊗Sx + Sy⊗Sy + Sz⊗Sz
+            // This applies the EXACT 4×4 Hamiltonian matrix to each (D_L, D_R) slice
+            tensor_ops->apply_H_eff_heisenberg_exact(d_x, d_y, D_L, d, D_R, s);
         };
 
         // Solve eigenvalue problem
