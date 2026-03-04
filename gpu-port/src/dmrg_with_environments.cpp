@@ -179,14 +179,16 @@ public:
             std::vector<Complex> h_mpo(mpo_size, make_complex(0.0, 0.0));
 
             if (site == 0) {
-                // Left boundary: W[0] = [Sx, Sy, Sz, I, 0] (row vector D_L=1, D_R=5)
+                // Left boundary: W[0] = [0, Sx, Sy, Sz, I] (row vector D_L=1, D_R=5)
+                // This is row 4 of the bulk transfer matrix (the Hamiltonian row)
                 for (int s = 0; s < d; s++) {
                     for (int sp = 0; sp < d; sp++) {
                         int base = s * d * D_R + sp * D_R;
-                        h_mpo[base + 0] = Sx[s*d + sp];
-                        h_mpo[base + 1] = Sy[s*d + sp];
-                        h_mpo[base + 2] = Sz[s*d + sp];
-                        h_mpo[base + 3] = eye[s*d + sp];
+                        // wr=0: zero (no contribution)
+                        h_mpo[base + 1] = Sx[s*d + sp];
+                        h_mpo[base + 2] = Sy[s*d + sp];
+                        h_mpo[base + 3] = Sz[s*d + sp];
+                        h_mpo[base + 4] = eye[s*d + sp];
                     }
                 }
             } else if (site == L-1) {
