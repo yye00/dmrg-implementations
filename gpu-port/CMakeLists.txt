@@ -211,4 +211,5 @@ target_link_libraries(dmrg_with_environments
     hip::device
     roc::rocblas
     roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
 )
