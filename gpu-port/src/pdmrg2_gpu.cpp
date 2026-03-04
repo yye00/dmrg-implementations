@@ -5,13 +5,21 @@
 // Architecture: PDMRG2 (BLAS-3 based, GPU-optimized)
 // - Full environment tensors with hipTensor GPU contractions
 // - Multi-stream parallelization mimicking MPI domain decomposition
-// - BLAS-3 batched GEMM for H_eff application (GPU-native)
+// - BLAS-3 GPU-native H_eff application via hipTensor (all 4 steps on GPU)
 // - Lanczos eigensolver with full reorthogonalization
 // - Exact SVD via rocsolver_zgesvd (no randomized approximations)
 // - Supports both Heisenberg (d=2) and Josephson junction (d=5, complex128)
+// - Convergence-based early stopping
+// - Detailed timing instrumentation
 //
-// Key difference from PDMRG: H_eff application uses rocblas_zgemm for
-// each contraction step rather than CPU loops, enabling BLAS-3 throughput.
+// Key difference from PDMRG: H_eff application uses hipTensor for all 4
+// contraction steps entirely on GPU, enabling BLAS-3 throughput without
+// GPU-to-CPU transfers during the Lanczos iteration.
+//
+// Data layout: All tensors stored in C row-major order
+// MPS[site]: shape (D_left, d, D_right), stored as D_left * d * D_right
+// MPO[site]: shape (D_mpo_left, d, d, D_mpo_right)
+// Env[site]: shape (D_mps, D_mpo, D_mps)
 
 #include <hip/hip_runtime.h>
 #include <hip/hip_complex.h>
@@ -58,6 +66,18 @@ inline Complex make_complex(double re, double im) {
 inline double get_real(const rocblas_double_complex& z) {
     return reinterpret_cast<const hipDoubleComplex*>(&z)->x;
 }
+
+// ============================================================================
+// Timer utility
+// ============================================================================
+struct Timer {
+    std::chrono::high_resolution_clock::time_point start;
+    void tic() { start = std::chrono::high_resolution_clock::now(); }
+    double toc() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration<double>(end - start).count();
+    }
+};
 
 // ============================================================================
 // hipTensor Contraction Helper
@@ -814,15 +834,26 @@ private:
     double current_energy;
     std::string model_name;
 
+    // Timing instrumentation
+    double time_init, time_sweeps, time_energy_eval;
+    double time_heff_gpu, time_heff_cpu, time_svd, time_env_update;
+    int heff_gpu_calls, heff_cpu_calls;
+    std::vector<double> sweep_times;
+
 public:
     PDMRG2_GPU(MPOBase* mpo_in, int max_bond, int sweeps, int num_streams,
                const std::string& model)
         : mpo(mpo_in), max_D(max_bond), n_sweeps(sweeps),
           n_streams(num_streams), envs(nullptr), current_energy(0.0),
-          model_name(model)
+          model_name(model), time_init(0), time_sweeps(0), time_energy_eval(0),
+          time_heff_gpu(0), time_heff_cpu(0), time_svd(0), time_env_update(0),
+          heff_gpu_calls(0), heff_cpu_calls(0)
     {
         L = mpo->get_length();
         d = mpo->get_phys_dim();
+
+        Timer t_init_timer;
+        t_init_timer.tic();
 
         std::cout << "\n========================================\n";
         std::cout << "PDMRG2 GPU - GPU-Optimized DMRG\n";
@@ -868,7 +899,9 @@ public:
         envs = new Environments(L, d, bond_dims, rb_handle);
         envs->initialize(d_mps, *mpo);
 
-        std::cout << "Initialization complete.\n\n";
+        time_init = t_init_timer.toc();
+        std::cout << "Initialization complete (" << std::fixed << std::setprecision(3)
+                  << time_init << "s).\n\n";
     }
 
     ~PDMRG2_GPU() {
@@ -960,11 +993,18 @@ public:
     }
 
     double run() {
-        auto t_start = std::chrono::high_resolution_clock::now();
+        Timer t_total;
+        t_total.tic();
 
         std::cout << "Running PDMRG2 sweeps (streams=" << n_streams << ")...\n\n";
 
+        double E_prev = 0.0;
+        double conv_tol = 1e-12;  // convergence tolerance
+
         for (int sweep = 0; sweep < n_sweeps; sweep++) {
+            Timer t_sweep;
+            t_sweep.tic();
+
             bool left_to_right = (sweep % 2 == 0);
 
             if (left_to_right) {
@@ -972,7 +1012,10 @@ public:
                     optimize_site(site, true);
                     envs->update_bond_dims(bond_dims);
                     if (site < L - 2) {
+                        Timer t_env;
+                        t_env.tic();
                         envs->update_left_env(site, d_mps, *mpo);
+                        time_env_update += t_env.toc();
                     }
                 }
             } else {
@@ -980,28 +1023,58 @@ public:
                     optimize_site(site, false);
                     envs->update_bond_dims(bond_dims);
                     if (site > 0) {
+                        Timer t_env;
+                        t_env.tic();
                         envs->update_right_env(site + 1, d_mps, *mpo);
+                        time_env_update += t_env.toc();
                     }
                 }
             }
 
+            Timer t_energy;
+            t_energy.tic();
             current_energy = compute_energy_from_environments();
+            double energy_time = t_energy.toc();
+            time_energy_eval += energy_time;
 
+            double sweep_time = t_sweep.toc();
+            sweep_times.push_back(sweep_time);
+
+            double dE = std::abs(current_energy - E_prev);
             std::cout << "Sweep " << std::setw(2) << sweep
                       << " | E = " << std::fixed << std::setprecision(10) << current_energy
-                      << " | E/site = " << (current_energy / L)
+                      << " | dE = " << std::scientific << std::setprecision(2) << dE
+                      << " | time = " << std::fixed << std::setprecision(3) << sweep_time << "s"
+                      << " | H_eff: GPU=" << heff_gpu_calls << " CPU=" << heff_cpu_calls
                       << "\n";
+
+            if (sweep > 0 && dE < conv_tol) {
+                std::cout << "Converged at sweep " << sweep << " (dE=" << std::scientific
+                          << dE << " < " << conv_tol << ")\n";
+                break;
+            }
+            E_prev = current_energy;
         }
 
-        auto t_end = std::chrono::high_resolution_clock::now();
-        double time_sec = std::chrono::duration<double>(t_end - t_start).count();
+        time_sweeps = t_total.toc();
 
+        // Print detailed timing summary
         std::cout << "\n========================================\n";
         std::cout << "PDMRG2 GPU Completed\n";
         std::cout << "========================================\n";
         std::cout << "Model: " << model_name << "\n";
         std::cout << "Streams: " << n_streams << "\n";
-        std::cout << "Time: " << std::fixed << std::setprecision(4) << time_sec << " seconds\n";
+        std::cout << "Init time:      " << std::fixed << std::setprecision(4) << time_init << "s\n";
+        std::cout << "Sweep time:     " << time_sweeps << "s\n";
+        std::cout << "Energy eval:    " << time_energy_eval << "s\n";
+        std::cout << "H_eff GPU time: " << time_heff_gpu << "s (" << heff_gpu_calls << " calls)\n";
+        std::cout << "H_eff CPU time: " << time_heff_cpu << "s (" << heff_cpu_calls << " calls)\n";
+        std::cout << "SVD time:       " << time_svd << "s\n";
+        std::cout << "Env update:     " << time_env_update << "s\n";
+        if (!sweep_times.empty()) {
+            double avg = std::accumulate(sweep_times.begin(), sweep_times.end(), 0.0) / sweep_times.size();
+            std::cout << "Avg sweep:      " << avg << "s (" << sweep_times.size() << " sweeps)\n";
+        }
         std::cout << "Final E: " << std::fixed << std::setprecision(12) << current_energy << "\n";
         std::cout << "========================================\n";
 
@@ -1127,7 +1200,10 @@ private:
         LanczosEigensolver solver(rb_handle, 30, 1e-10);
         double energy = solver.solve(apply_H_eff, psi_size, d_theta);
 
+        Timer t_svd_timer;
+        t_svd_timer.tic();
         update_mps_with_svd(site, d_theta, move_right);
+        time_svd += t_svd_timer.toc();
 
         HIP_CHECK(hipFree(d_theta));
         return energy;
@@ -1158,9 +1234,16 @@ private:
 
         if (!use_gpu) {
             // Fall back to CPU contraction for small problems
+            Timer t_cpu;
+            t_cpu.tic();
             apply_H_eff_cpu(d_theta_in, d_theta_out, site);
+            time_heff_cpu += t_cpu.toc();
+            heff_cpu_calls++;
             return;
         }
+
+        Timer t_gpu;
+        t_gpu.tic();
 
         // GPU contraction path using hipTensor
         // Step 1: T1[w,ap,s1,s2,b] = sum_a L[a,w,ap] * theta[a,s1,s2,b]
@@ -1253,9 +1336,12 @@ private:
         }
 
         HIP_CHECK(hipFree(d_T3));
+
+        time_heff_gpu += t_gpu.toc();
+        heff_gpu_calls++;
     }
 
-    // CPU fallback for H_eff (small systems)
+    // CPU fallback for H_eff (small systems where hipTensor overhead dominates)
     void apply_H_eff_cpu(const Complex* d_theta_in, Complex* d_theta_out, int site) {
         int D_L = bond_dims[site];
         int D_R = bond_dims[site + 2];
@@ -1501,7 +1587,12 @@ int main(int argc, char** argv) {
     hipDeviceProp_t prop;
     HIP_CHECK(hipGetDeviceProperties(&prop, 0));
     std::cout << "GPU: " << prop.name << "\n";
-    std::cout << "Memory: " << (prop.totalGlobalMem / 1024.0 / 1024.0 / 1024.0) << " GB\n\n";
+    std::cout << "Memory: " << (prop.totalGlobalMem / 1024.0 / 1024.0 / 1024.0) << " GB\n";
+    std::cout << "Compute Units: " << prop.multiProcessorCount << "\n\n";
+
+    // Track results for summary
+    std::vector<double> energies;
+    std::vector<double> wall_times;
 
     for (int ns : stream_counts) {
         MPOBase* mpo_ptr = nullptr;
@@ -1515,11 +1606,14 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        auto t_start = std::chrono::high_resolution_clock::now();
+        Timer t_wall;
+        t_wall.tic();
         PDMRG2_GPU dmrg(mpo_ptr, max_D, n_sweeps, ns, model);
         double energy = dmrg.run();
-        auto t_end = std::chrono::high_resolution_clock::now();
-        double wall_time = std::chrono::duration<double>(t_end - t_start).count();
+        double wall_time = t_wall.toc();
+
+        energies.push_back(energy);
+        wall_times.push_back(wall_time);
 
         std::cout << "\n>> PDMRG2_GPU | model=" << model
                   << " | L=" << L << " | D=" << max_D
@@ -1528,6 +1622,24 @@ int main(int argc, char** argv) {
                   << " | time=" << std::setprecision(4) << wall_time << "s\n\n";
 
         delete mpo_ptr;
+    }
+
+    // Print scaling summary if multiple stream counts
+    if (stream_counts.size() > 1) {
+        std::cout << "\n====================================================\n";
+        std::cout << "Stream Scaling Summary\n";
+        std::cout << "====================================================\n";
+        std::cout << std::setw(10) << "Streams" << std::setw(20) << "Energy"
+                  << std::setw(15) << "Wall Time" << std::setw(15) << "Speedup" << "\n";
+        std::cout << std::string(60, '-') << "\n";
+        for (size_t i = 0; i < stream_counts.size(); i++) {
+            double speedup = (i == 0) ? 1.0 : wall_times[0] / wall_times[i];
+            std::cout << std::setw(10) << stream_counts[i]
+                      << std::setw(20) << std::fixed << std::setprecision(10) << energies[i]
+                      << std::setw(15) << std::setprecision(4) << wall_times[i] << "s"
+                      << std::setw(15) << std::setprecision(2) << speedup << "x\n";
+        }
+        std::cout << "====================================================\n";
     }
 
     return 0;
