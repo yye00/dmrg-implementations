@@ -670,10 +670,10 @@ public:
 
         HIP_CHECK(hipFree(d_w));
 
-        // Solve tridiagonal eigenvalue problem on CPU
-        // Uses implicit QL iteration with Wilkinson shifts (LAPACK dsteqr approach)
-        // This correctly finds ALL eigenvalues and eigenvectors of the symmetric
-        // tridiagonal matrix, then selects the algebraically smallest eigenvalue.
+        // Solve tridiagonal eigenvalue problem on CPU using bisection + inverse iteration.
+        // Bisection (Sturm sequence) finds the smallest eigenvalue to machine precision.
+        // Inverse iteration then finds the corresponding eigenvector.
+        // This is numerically robust for all spectra including mixed positive/negative.
         int nk = actual_krylov;
         double lowest_eval = 0.0;
         std::vector<double> evec(nk, 0.0);
@@ -682,91 +682,92 @@ public:
             lowest_eval = alpha_k[0];
             evec[0] = 1.0;
         } else {
-            // Diagonal and sub-diagonal arrays (will be modified in-place)
-            std::vector<double> diag(nk), subdiag(nk);
-            for (int i = 0; i < nk; i++) diag[i] = alpha_k[i];
-            for (int i = 1; i < nk; i++) subdiag[i - 1] = beta_k[i];
-            subdiag[nk - 1] = 0.0;
-
-            // Eigenvector matrix (nk x nk), stored row-major, initialized to identity
-            std::vector<double> Z(nk * nk, 0.0);
-            for (int i = 0; i < nk; i++) Z[i * nk + i] = 1.0;
-
-            // Implicit QL iteration with shifts
-            const int max_iter = 30 * nk;
-            const double eps = 1e-15;
-            int iter_count = 0;
-
-            for (int l = 0; l < nk; l++) {
-                int iter = 0;
-                int m;
-                do {
-                    // Find small sub-diagonal element
-                    for (m = l; m < nk - 1; m++) {
-                        double dd = std::abs(diag[m]) + std::abs(diag[m + 1]);
-                        if (std::abs(subdiag[m]) <= eps * dd) break;
-                    }
-
-                    if (m != l) {
-                        if (iter_count++ >= max_iter) break;
-                        iter++;
-
-                        // Wilkinson shift
-                        double g = (diag[l + 1] - diag[l]) / (2.0 * subdiag[l]);
-                        double r = std::sqrt(g * g + 1.0);
-                        double shift = (g >= 0) ? (g + r) : (g - r);
-                        g = diag[m] - diag[l] + subdiag[l] / shift;
-
-                        double s = 1.0, c = 1.0, p = 0.0;
-
-                        for (int i = m - 1; i >= l; i--) {
-                            double f = s * subdiag[i];
-                            double b = c * subdiag[i];
-
-                            // Givens rotation
-                            if (std::abs(f) >= std::abs(g)) {
-                                c = g / f;
-                                r = std::sqrt(c * c + 1.0);
-                                subdiag[i + 1] = f * r;
-                                s = 1.0 / r;
-                                c *= s;
-                            } else {
-                                s = f / g;
-                                r = std::sqrt(s * s + 1.0);
-                                subdiag[i + 1] = g * r;
-                                c = 1.0 / r;
-                                s *= c;
-                            }
-
-                            g = diag[i + 1] - p;
-                            r = (diag[i] - g) * s + 2.0 * c * b;
-                            p = s * r;
-                            diag[i + 1] = g + p;
-                            g = c * r - b;
-
-                            // Accumulate eigenvectors
-                            for (int k = 0; k < nk; k++) {
-                                double t = Z[k * nk + i + 1];
-                                Z[k * nk + i + 1] = s * Z[k * nk + i] + c * t;
-                                Z[k * nk + i] = c * Z[k * nk + i] - s * t;
-                            }
-                        }
-                        diag[l] -= p;
-                        subdiag[l] = g;
-                        subdiag[m] = 0.0;
-                    }
-                } while (m != l);
-            }
-
-            // Find the index of the algebraically smallest eigenvalue
-            int min_idx = 0;
+            // Tridiagonal matrix: diagonal = alpha_k, sub-diagonal = beta_k[1..nk-1]
+            // Gershgorin bounds for eigenvalue range
+            double lb = alpha_k[0] - std::abs(beta_k[1]);
+            double ub = alpha_k[0] + std::abs(beta_k[1]);
             for (int i = 1; i < nk; i++) {
-                if (diag[i] < diag[min_idx]) min_idx = i;
+                double ri = std::abs(beta_k[i]) + (i + 1 < nk ? std::abs(beta_k[i + 1]) : 0.0);
+                lb = std::min(lb, alpha_k[i] - ri);
+                ub = std::max(ub, alpha_k[i] + ri);
+            }
+            lb -= 1.0;
+            ub += 1.0;
+
+            // Sturm sequence: count eigenvalues strictly less than x
+            auto sturm_count = [&](double x) -> int {
+                int count = 0;
+                double q = alpha_k[0] - x;
+                if (q < 0.0) count++;
+                for (int i = 1; i < nk; i++) {
+                    if (std::abs(q) < 1e-300)
+                        q = alpha_k[i] - x - std::abs(beta_k[i]) * 1e300;
+                    else
+                        q = (alpha_k[i] - x) - beta_k[i] * beta_k[i] / q;
+                    if (q < 0.0) count++;
+                }
+                return count;
+            };
+
+            // Bisection for smallest eigenvalue
+            double lo = lb, hi = ub;
+            for (int iter = 0; iter < 200; iter++) {
+                double mid = lo + 0.5 * (hi - lo);
+                if (hi - lo < 2e-15 * std::max(std::abs(lo), std::abs(hi))) break;
+                if (sturm_count(mid) >= 1)
+                    hi = mid;
+                else
+                    lo = mid;
+            }
+            lowest_eval = 0.5 * (lo + hi);
+
+            // Inverse iteration for eigenvector
+            // Solve (T - sigma*I)*x = b repeatedly, starting with b = ones
+            double sigma = lowest_eval - 1e-14 * (1.0 + std::abs(lowest_eval));
+            // Shifted diagonal
+            std::vector<double> sd(nk);
+            for (int i = 0; i < nk; i++) sd[i] = alpha_k[i] - sigma;
+
+            // LU factorization of tridiagonal without pivoting
+            // L has multipliers l[i], U has diagonal u[i] and super-diagonal beta_k[i+1]
+            std::vector<double> u_diag(nk), l_mult(nk, 0.0);
+            u_diag[0] = sd[0];
+            for (int i = 1; i < nk; i++) {
+                if (std::abs(u_diag[i - 1]) < 1e-300)
+                    l_mult[i] = 0.0;
+                else
+                    l_mult[i] = beta_k[i] / u_diag[i - 1];
+                u_diag[i] = sd[i] - l_mult[i] * beta_k[i];
             }
 
-            lowest_eval = diag[min_idx];
-            // Extract the corresponding eigenvector (column min_idx of Z)
-            for (int i = 0; i < nk; i++) evec[i] = Z[i * nk + min_idx];
+            // Inverse iteration: 5 steps
+            std::vector<double> x(nk, 1.0);
+            for (int inv_it = 0; inv_it < 5; inv_it++) {
+                // Forward solve: L*y = x
+                std::vector<double> y(nk);
+                y[0] = x[0];
+                for (int i = 1; i < nk; i++)
+                    y[i] = x[i] - l_mult[i] * y[i - 1];
+                // Back solve: U*x_new = y
+                if (std::abs(u_diag[nk - 1]) < 1e-300)
+                    x[nk - 1] = 1e15;
+                else
+                    x[nk - 1] = y[nk - 1] / u_diag[nk - 1];
+                for (int i = nk - 2; i >= 0; i--) {
+                    double rhs = y[i] - beta_k[i + 1] * x[i + 1];
+                    if (std::abs(u_diag[i]) < 1e-300)
+                        x[i] = (rhs >= 0 ? 1e15 : -1e15);
+                    else
+                        x[i] = rhs / u_diag[i];
+                }
+                // Normalize
+                double nrm = 0.0;
+                for (int i = 0; i < nk; i++) nrm += x[i] * x[i];
+                nrm = std::sqrt(nrm);
+                if (nrm > 1e-30)
+                    for (int i = 0; i < nk; i++) x[i] /= nrm;
+            }
+            evec = x;
         }
 
         HIP_CHECK(hipMemset(d_psi_inout, 0, dim * sizeof(Complex)));

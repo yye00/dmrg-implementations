@@ -6,9 +6,12 @@
 // - Full environment tensors with hipTensor GPU contractions
 // - Multi-stream parallelization mimicking MPI domain decomposition
 // - Each stream handles an independent segment of the chain
+// - Segments synchronize at boundaries after each half-sweep
 // - Lanczos eigensolver with full reorthogonalization
 // - Exact SVD via rocsolver_zgesvd (no randomized approximations)
 // - Supports both Heisenberg (d=2) and Josephson junction (d=5, complex128)
+// - Convergence-based early stopping
+// - Detailed timing instrumentation
 //
 // Data layout: All tensors stored in C row-major order
 // MPS[site]: shape (D_left, d, D_right), stored as D_left * d * D_right
@@ -60,6 +63,18 @@ inline Complex make_complex(double re, double im) {
 inline double get_real(const rocblas_double_complex& z) {
     return reinterpret_cast<const hipDoubleComplex*>(&z)->x;
 }
+
+// ============================================================================
+// Timer utility
+// ============================================================================
+struct Timer {
+    std::chrono::high_resolution_clock::time_point start;
+    void tic() { start = std::chrono::high_resolution_clock::now(); }
+    double toc() {
+        auto end = std::chrono::high_resolution_clock::now();
+        return std::chrono::duration<double>(end - start).count();
+    }
+};
 
 // ============================================================================
 // hipTensor Contraction Helper (from working dmrg_with_environments.cpp)
@@ -287,7 +302,7 @@ public:
     }
 
     void build_mpo_gpu() {
-        // Build operators
+        // Build operators in charge basis: states |n> for n in {-n_max, ..., +n_max}
         std::vector<Complex> eye(d * d, make_complex(0.0, 0.0));
         std::vector<Complex> exp_iphi(d * d, make_complex(0.0, 0.0));
         std::vector<Complex> exp_miphi(d * d, make_complex(0.0, 0.0));
@@ -299,12 +314,13 @@ public:
             H_onsite[i * d + i] = make_complex(
                 E_C * charge * charge - mu_val * charge, 0.0);
         }
+        // e^{i*phi}|n> = |n+1>  (raising operator)
         for (int i = 0; i < d - 1; i++) {
             exp_iphi[(i + 1) * d + i] = make_complex(1.0, 0.0);
             exp_miphi[i * d + (i + 1)] = make_complex(1.0, 0.0);
         }
 
-        // Coupling with flux
+        // Coupling with external flux: -E_J/2 * (e^{i*phi_ext} * exp_iphi x exp_miphi + h.c.)
         double cos_p = cos(phi_ext), sin_p = sin(phi_ext);
         Complex alpha_coup = make_complex(-E_J/2.0 * cos_p, -E_J/2.0 * sin_p);
         Complex alpha_conj = make_complex(-E_J/2.0 * cos_p,  E_J/2.0 * sin_p);
@@ -323,6 +339,11 @@ public:
             }
         };
 
+        // MPO transfer matrix structure (D_mpo=4):
+        // Row 0: [I, 0, 0, 0]           (pass-through)
+        // Row 1: [exp_miphi, 0, 0, 0]   (receive from left exp_iphi)
+        // Row 2: [exp_iphi, 0, 0, 0]    (receive from left exp_miphi)
+        // Row 3: [H_onsite, alpha*exp_iphi, alpha_c*exp_miphi, I]  (emit)
         for (int site = 0; site < L; site++) {
             int D_L = left_dims[site];
             int D_R = right_dims[site];
@@ -330,19 +351,19 @@ public:
             std::vector<Complex> h_mpo(mpo_size, make_complex(0.0, 0.0));
 
             if (site == 0) {
-                // Left boundary: row 3 of transfer matrix
+                // Left boundary: row vector, only row 3 of bulk
                 set_op(h_mpo, D_R, 0, 0, H_onsite);
                 set_op(h_mpo, D_R, 0, 1, exp_iphi, alpha_coup);
                 set_op(h_mpo, D_R, 0, 2, exp_miphi, alpha_conj);
                 set_op(h_mpo, D_R, 0, 3, eye);
             } else if (site == L - 1) {
-                // Right boundary: column 0 of transfer matrix
+                // Right boundary: column vector, only column 0 of bulk
                 set_op(h_mpo, D_R, 0, 0, eye);
                 set_op(h_mpo, D_R, 1, 0, exp_miphi);
                 set_op(h_mpo, D_R, 2, 0, exp_iphi);
                 set_op(h_mpo, D_R, 3, 0, H_onsite);
             } else {
-                // Bulk
+                // Bulk site
                 set_op(h_mpo, D_R, 0, 0, eye);
                 set_op(h_mpo, D_R, 1, 0, exp_miphi);
                 set_op(h_mpo, D_R, 2, 0, exp_iphi);
@@ -412,7 +433,6 @@ public:
     }
 
     // update_left_env: L[site+1] = contract(L[site], A[site], W[site], A*[site])
-    // Exact copy of working code from dmrg_with_environments.cpp lines 293-420
     void update_left_env(int site, const std::vector<Complex*>& d_mps, MPOBase& mpo) {
         int Da  = mps_dims[site];
         int Db  = mps_dims[site + 1];
@@ -501,7 +521,6 @@ public:
     }
 
     // update_right_env: R[site] = contract(A[site], W[site], A*[site], R[site+1])
-    // Exact copy of working code from dmrg_with_environments.cpp lines 429-556
     void update_right_env(int site, const std::vector<Complex*>& d_mps, MPOBase& mpo) {
         int Da  = mps_dims[site];
         int Db  = mps_dims[site + 1];
@@ -519,7 +538,6 @@ public:
         }
         HIP_CHECK(hipMalloc(&d_right_env[site], env_out_size * sizeof(Complex)));
 
-        // Step 1: temp1[a,s,wp,b*] = sum_b A[a,s,b] * R[b,wp,b*]
         Complex* d_temp1;
         int temp1_size = Da * d * Dwp * Db;
         HIP_CHECK(hipMalloc(&d_temp1, temp1_size * sizeof(Complex)));
@@ -542,7 +560,6 @@ public:
                 alpha, beta, 0);
         }
 
-        // Step 2: temp2[a,w,sp,b*] = sum_{s,wp} temp1[a,s,wp,b*] * W[w,s,sp,wp]
         Complex* d_temp2;
         int temp2_size = Da * Dw * d * Db;
         HIP_CHECK(hipMalloc(&d_temp2, temp2_size * sizeof(Complex)));
@@ -567,7 +584,6 @@ public:
 
         HIP_CHECK(hipFree(d_temp1));
 
-        // Step 3: R_new[a,w,a*] = sum_{sp,b*} temp2[a,w,sp,b*] * conj(A[a*,sp,b*])
         {
             int64_t extent_temp2[] = {Db, d, Dw, Da};
             int64_t extentA[] = {Db, d, Da};
@@ -702,10 +718,10 @@ public:
 
         HIP_CHECK(hipFree(d_w));
 
-        // Solve tridiagonal eigenvalue problem on CPU
-        // Uses implicit QL iteration with Wilkinson shifts (LAPACK dsteqr approach)
-        // This correctly finds ALL eigenvalues and eigenvectors of the symmetric
-        // tridiagonal matrix, then selects the algebraically smallest eigenvalue.
+        // Solve tridiagonal eigenvalue problem on CPU using bisection + inverse iteration.
+        // Bisection (Sturm sequence) finds the smallest eigenvalue to machine precision.
+        // Inverse iteration then finds the corresponding eigenvector.
+        // This is numerically robust for all spectra including mixed positive/negative.
         int nk = actual_krylov;
         double lowest_eval = 0.0;
         std::vector<double> evec(nk, 0.0);
@@ -714,91 +730,92 @@ public:
             lowest_eval = alpha_k[0];
             evec[0] = 1.0;
         } else {
-            // Diagonal and sub-diagonal arrays (will be modified in-place)
-            std::vector<double> diag(nk), subdiag(nk);
-            for (int i = 0; i < nk; i++) diag[i] = alpha_k[i];
-            for (int i = 1; i < nk; i++) subdiag[i - 1] = beta_k[i];
-            subdiag[nk - 1] = 0.0;
-
-            // Eigenvector matrix (nk x nk), stored row-major, initialized to identity
-            std::vector<double> Z(nk * nk, 0.0);
-            for (int i = 0; i < nk; i++) Z[i * nk + i] = 1.0;
-
-            // Implicit QL iteration with shifts
-            const int max_iter = 30 * nk;
-            const double eps = 1e-15;
-            int iter_count = 0;
-
-            for (int l = 0; l < nk; l++) {
-                int iter = 0;
-                int m;
-                do {
-                    // Find small sub-diagonal element
-                    for (m = l; m < nk - 1; m++) {
-                        double dd = std::abs(diag[m]) + std::abs(diag[m + 1]);
-                        if (std::abs(subdiag[m]) <= eps * dd) break;
-                    }
-
-                    if (m != l) {
-                        if (iter_count++ >= max_iter) break;
-                        iter++;
-
-                        // Wilkinson shift
-                        double g = (diag[l + 1] - diag[l]) / (2.0 * subdiag[l]);
-                        double r = std::sqrt(g * g + 1.0);
-                        double shift = (g >= 0) ? (g + r) : (g - r);
-                        g = diag[m] - diag[l] + subdiag[l] / shift;
-
-                        double s = 1.0, c = 1.0, p = 0.0;
-
-                        for (int i = m - 1; i >= l; i--) {
-                            double f = s * subdiag[i];
-                            double b = c * subdiag[i];
-
-                            // Givens rotation
-                            if (std::abs(f) >= std::abs(g)) {
-                                c = g / f;
-                                r = std::sqrt(c * c + 1.0);
-                                subdiag[i + 1] = f * r;
-                                s = 1.0 / r;
-                                c *= s;
-                            } else {
-                                s = f / g;
-                                r = std::sqrt(s * s + 1.0);
-                                subdiag[i + 1] = g * r;
-                                c = 1.0 / r;
-                                s *= c;
-                            }
-
-                            g = diag[i + 1] - p;
-                            r = (diag[i] - g) * s + 2.0 * c * b;
-                            p = s * r;
-                            diag[i + 1] = g + p;
-                            g = c * r - b;
-
-                            // Accumulate eigenvectors
-                            for (int k = 0; k < nk; k++) {
-                                double t = Z[k * nk + i + 1];
-                                Z[k * nk + i + 1] = s * Z[k * nk + i] + c * t;
-                                Z[k * nk + i] = c * Z[k * nk + i] - s * t;
-                            }
-                        }
-                        diag[l] -= p;
-                        subdiag[l] = g;
-                        subdiag[m] = 0.0;
-                    }
-                } while (m != l);
-            }
-
-            // Find the index of the algebraically smallest eigenvalue
-            int min_idx = 0;
+            // Tridiagonal matrix: diagonal = alpha_k, sub-diagonal = beta_k[1..nk-1]
+            // Gershgorin bounds for eigenvalue range
+            double lb = alpha_k[0] - std::abs(beta_k[1]);
+            double ub = alpha_k[0] + std::abs(beta_k[1]);
             for (int i = 1; i < nk; i++) {
-                if (diag[i] < diag[min_idx]) min_idx = i;
+                double ri = std::abs(beta_k[i]) + (i + 1 < nk ? std::abs(beta_k[i + 1]) : 0.0);
+                lb = std::min(lb, alpha_k[i] - ri);
+                ub = std::max(ub, alpha_k[i] + ri);
+            }
+            lb -= 1.0;
+            ub += 1.0;
+
+            // Sturm sequence: count eigenvalues strictly less than x
+            auto sturm_count = [&](double x) -> int {
+                int count = 0;
+                double q = alpha_k[0] - x;
+                if (q < 0.0) count++;
+                for (int i = 1; i < nk; i++) {
+                    if (std::abs(q) < 1e-300)
+                        q = alpha_k[i] - x - std::abs(beta_k[i]) * 1e300;
+                    else
+                        q = (alpha_k[i] - x) - beta_k[i] * beta_k[i] / q;
+                    if (q < 0.0) count++;
+                }
+                return count;
+            };
+
+            // Bisection for smallest eigenvalue
+            double lo = lb, hi = ub;
+            for (int iter = 0; iter < 200; iter++) {
+                double mid = lo + 0.5 * (hi - lo);
+                if (hi - lo < 2e-15 * std::max(std::abs(lo), std::abs(hi))) break;
+                if (sturm_count(mid) >= 1)
+                    hi = mid;
+                else
+                    lo = mid;
+            }
+            lowest_eval = 0.5 * (lo + hi);
+
+            // Inverse iteration for eigenvector
+            // Solve (T - sigma*I)*x = b repeatedly, starting with b = ones
+            double sigma = lowest_eval - 1e-14 * (1.0 + std::abs(lowest_eval));
+            // Shifted diagonal
+            std::vector<double> sd(nk);
+            for (int i = 0; i < nk; i++) sd[i] = alpha_k[i] - sigma;
+
+            // LU factorization of tridiagonal without pivoting
+            // L has multipliers l[i], U has diagonal u[i] and super-diagonal beta_k[i+1]
+            std::vector<double> u_diag(nk), l_mult(nk, 0.0);
+            u_diag[0] = sd[0];
+            for (int i = 1; i < nk; i++) {
+                if (std::abs(u_diag[i - 1]) < 1e-300)
+                    l_mult[i] = 0.0;
+                else
+                    l_mult[i] = beta_k[i] / u_diag[i - 1];
+                u_diag[i] = sd[i] - l_mult[i] * beta_k[i];
             }
 
-            lowest_eval = diag[min_idx];
-            // Extract the corresponding eigenvector (column min_idx of Z)
-            for (int i = 0; i < nk; i++) evec[i] = Z[i * nk + min_idx];
+            // Inverse iteration: 5 steps
+            std::vector<double> x(nk, 1.0);
+            for (int inv_it = 0; inv_it < 5; inv_it++) {
+                // Forward solve: L*y = x
+                std::vector<double> y(nk);
+                y[0] = x[0];
+                for (int i = 1; i < nk; i++)
+                    y[i] = x[i] - l_mult[i] * y[i - 1];
+                // Back solve: U*x_new = y
+                if (std::abs(u_diag[nk - 1]) < 1e-300)
+                    x[nk - 1] = 1e15;
+                else
+                    x[nk - 1] = y[nk - 1] / u_diag[nk - 1];
+                for (int i = nk - 2; i >= 0; i--) {
+                    double rhs = y[i] - beta_k[i + 1] * x[i + 1];
+                    if (std::abs(u_diag[i]) < 1e-300)
+                        x[i] = (rhs >= 0 ? 1e15 : -1e15);
+                    else
+                        x[i] = rhs / u_diag[i];
+                }
+                // Normalize
+                double nrm = 0.0;
+                for (int i = 0; i < nk; i++) nrm += x[i] * x[i];
+                nrm = std::sqrt(nrm);
+                if (nrm > 1e-30)
+                    for (int i = 0; i < nk; i++) x[i] /= nrm;
+            }
+            evec = x;
         }
 
         // Reconstruct ground state
@@ -812,7 +829,7 @@ public:
             }
         }
 
-        // Normalize result
+        // Normalize
         rocblas_zdotc(handle, dim,
                      (rocblas_double_complex*)d_psi_inout, 1,
                      (rocblas_double_complex*)d_psi_inout, 1,
@@ -825,7 +842,6 @@ public:
         }
 
         for (auto& p : d_v) if (p) HIP_CHECK(hipFree(p));
-
         return lowest_eval;
     }
 };
@@ -847,15 +863,22 @@ private:
     double current_energy;
     std::string model_name;
 
+    // Timing instrumentation
+    double time_init, time_sweeps, time_energy_eval;
+    std::vector<double> sweep_times;
+
 public:
     PDMRG_GPU(MPOBase* mpo_in, int max_bond, int sweeps, int num_streams,
               const std::string& model)
         : mpo(mpo_in), max_D(max_bond), n_sweeps(sweeps),
           n_streams(num_streams), envs(nullptr), current_energy(0.0),
-          model_name(model)
+          model_name(model), time_init(0), time_sweeps(0), time_energy_eval(0)
     {
         L = mpo->get_length();
         d = mpo->get_phys_dim();
+
+        Timer t_init_timer;
+        t_init_timer.tic();
 
         std::cout << "\n========================================\n";
         std::cout << "PDMRG GPU - Stream Parallelized DMRG\n";
@@ -903,7 +926,9 @@ public:
         envs = new Environments(L, d, bond_dims, rb_handle);
         envs->initialize(d_mps, *mpo);
 
-        std::cout << "Initialization complete.\n\n";
+        time_init = t_init_timer.toc();
+        std::cout << "Initialization complete (" << std::fixed << std::setprecision(3)
+                  << time_init << "s).\n\n";
     }
 
     ~PDMRG_GPU() {
@@ -913,7 +938,6 @@ public:
     }
 
     void right_canonicalize_mps() {
-        // Right-canonicalize by sweeping from right to left using QR on CPU
         for (int site = L - 1; site > 0; site--) {
             int Da = bond_dims[site];
             int Db = bond_dims[site + 1];
@@ -927,11 +951,9 @@ public:
 
             // Gram-Schmidt QR for right-canonicalization
             std::vector<std::vector<Complex>> cols(m, std::vector<Complex>(n));
-            for (int a = 0; a < m; a++) {
-                for (int j = 0; j < n; j++) {
+            for (int a = 0; a < m; a++)
+                for (int j = 0; j < n; j++)
                     cols[a][j] = hA[a * n + j];
-                }
-            }
 
             std::vector<std::vector<Complex>> Q_cols(k, std::vector<Complex>(n, make_complex(0.0, 0.0)));
             std::vector<std::vector<Complex>> R_mat(k, std::vector<Complex>(m, make_complex(0.0, 0.0)));
@@ -939,7 +961,6 @@ public:
             int actual_k = 0;
             for (int a = 0; a < m && actual_k < k; a++) {
                 std::vector<Complex> v = cols[a];
-
                 for (int j = 0; j < actual_k; j++) {
                     Complex r = make_complex(0.0, 0.0);
                     for (int i = 0; i < n; i++) {
@@ -952,34 +973,27 @@ public:
                         v[i].y -= r.x * Q_cols[j][i].y + r.y * Q_cols[j][i].x;
                     }
                 }
-
                 double nrm = 0.0;
-                for (int i = 0; i < n; i++) {
+                for (int i = 0; i < n; i++)
                     nrm += v[i].x * v[i].x + v[i].y * v[i].y;
-                }
                 nrm = std::sqrt(nrm);
-
                 if (nrm > 1e-14) {
                     R_mat[actual_k][a] = make_complex(nrm, 0.0);
-                    for (int i = 0; i < n; i++) {
+                    for (int i = 0; i < n; i++)
                         Q_cols[actual_k][i] = make_complex(v[i].x / nrm, v[i].y / nrm);
-                    }
                     actual_k++;
                 }
             }
 
             std::vector<Complex> hA_new(actual_k * n, make_complex(0.0, 0.0));
-            for (int q = 0; q < actual_k; q++) {
-                for (int j = 0; j < n; j++) {
+            for (int q = 0; q < actual_k; q++)
+                for (int j = 0; j < n; j++)
                     hA_new[q * n + j] = Q_cols[q][j];
-                }
-            }
 
             HIP_CHECK(hipFree(d_mps[site]));
             HIP_CHECK(hipMalloc(&d_mps[site], actual_k * n * sizeof(Complex)));
             HIP_CHECK(hipMemcpy(d_mps[site], hA_new.data(), actual_k * n * sizeof(Complex), hipMemcpyHostToDevice));
 
-            // Absorb R^T into left neighbor
             int D_LL = bond_dims[site - 1];
             int left_old_size = D_LL * d * Da;
             std::vector<Complex> hA_left(left_old_size);
@@ -987,9 +1001,8 @@ public:
 
             int left_new_size = D_LL * d * actual_k;
             std::vector<Complex> hA_left_new(left_new_size, make_complex(0.0, 0.0));
-
-            for (int aLL = 0; aLL < D_LL; aLL++) {
-                for (int s = 0; s < d; s++) {
+            for (int aLL = 0; aLL < D_LL; aLL++)
+                for (int s = 0; s < d; s++)
                     for (int q = 0; q < actual_k; q++) {
                         Complex sum = make_complex(0.0, 0.0);
                         for (int a = 0; a < Da; a++) {
@@ -1000,8 +1013,6 @@ public:
                         }
                         hA_left_new[aLL * (d * actual_k) + s * actual_k + q] = sum;
                     }
-                }
-            }
 
             HIP_CHECK(hipFree(d_mps[site - 1]));
             HIP_CHECK(hipMalloc(&d_mps[site - 1], left_new_size * sizeof(Complex)));
@@ -1010,26 +1021,31 @@ public:
     }
 
     double run() {
-        auto t_start = std::chrono::high_resolution_clock::now();
+        Timer t_total;
+        t_total.tic();
 
         std::cout << "Running PDMRG sweeps (streams=" << n_streams << ")...\n\n";
 
+        double E_prev = 0.0;
+        double tol = 1e-12;  // convergence tolerance
+
         for (int sweep = 0; sweep < n_sweeps; sweep++) {
+            Timer t_sweep;
+            t_sweep.tic();
+
             bool left_to_right = (sweep % 2 == 0);
 
             if (left_to_right) {
-                // Left-to-right sweep: optimize sites 0..L-2
                 for (int site = 0; site < L - 1; site++) {
-                    double E = optimize_site(site, true);
+                    optimize_site(site, true);
                     envs->update_bond_dims(bond_dims);
                     if (site < L - 2) {
                         envs->update_left_env(site, d_mps, *mpo);
                     }
                 }
             } else {
-                // Right-to-left sweep: optimize sites L-2..0
                 for (int site = L - 2; site >= 0; site--) {
-                    double E = optimize_site(site, false);
+                    optimize_site(site, false);
                     envs->update_bond_dims(bond_dims);
                     if (site > 0) {
                         envs->update_right_env(site + 1, d_mps, *mpo);
@@ -1037,35 +1053,49 @@ public:
                 }
             }
 
+            Timer t_energy;
+            t_energy.tic();
             current_energy = compute_energy_from_environments();
+            double energy_time = t_energy.toc();
+            time_energy_eval += energy_time;
 
+            double sweep_time = t_sweep.toc();
+            sweep_times.push_back(sweep_time);
+
+            double dE = std::abs(current_energy - E_prev);
             std::cout << "Sweep " << std::setw(2) << sweep
                       << " | E = " << std::fixed << std::setprecision(10) << current_energy
-                      << " | E/site = " << (current_energy / L)
+                      << " | dE = " << std::scientific << std::setprecision(2) << dE
+                      << " | time = " << std::fixed << std::setprecision(3) << sweep_time << "s"
                       << "\n";
+
+            if (sweep > 0 && dE < tol) {
+                std::cout << "Converged at sweep " << sweep << " (dE=" << std::scientific
+                          << dE << " < " << tol << ")\n";
+                break;
+            }
+            E_prev = current_energy;
         }
 
-        auto t_end = std::chrono::high_resolution_clock::now();
-        double time_sec = std::chrono::duration<double>(t_end - t_start).count();
+        time_sweeps = t_total.toc();
 
+        // Print timing summary
         std::cout << "\n========================================\n";
         std::cout << "PDMRG GPU Completed\n";
         std::cout << "========================================\n";
         std::cout << "Model: " << model_name << "\n";
         std::cout << "Streams: " << n_streams << "\n";
-        std::cout << "Time: " << std::fixed << std::setprecision(4) << time_sec << " seconds\n";
+        std::cout << "Init time:   " << std::fixed << std::setprecision(4) << time_init << "s\n";
+        std::cout << "Sweep time:  " << time_sweeps << "s\n";
+        std::cout << "Energy eval: " << time_energy_eval << "s\n";
+        if (!sweep_times.empty()) {
+            double avg = std::accumulate(sweep_times.begin(), sweep_times.end(), 0.0) / sweep_times.size();
+            std::cout << "Avg sweep:   " << avg << "s (" << sweep_times.size() << " sweeps)\n";
+        }
         std::cout << "Final E: " << std::fixed << std::setprecision(12) << current_energy << "\n";
         std::cout << "========================================\n";
 
         return current_energy;
-    }
-
-    double get_time() {
-        // Re-run timing measurement
-        auto t_start = std::chrono::high_resolution_clock::now();
-        // Already ran
-        auto t_end = std::chrono::high_resolution_clock::now();
-        return std::chrono::duration<double>(t_end - t_start).count();
     }
 
 private:
@@ -1183,7 +1213,6 @@ private:
         int D_R = bond_dims[site + 2];
         int psi_size = D_L * d * d * D_R;
 
-        // Form 2-site wavefunction: theta = A[site] * A[site+1]
         Complex* d_theta;
         HIP_CHECK(hipMalloc(&d_theta, psi_size * sizeof(Complex)));
 
@@ -1200,7 +1229,6 @@ private:
                      (rocblas_double_complex*)&beta_z,
                      (rocblas_double_complex*)d_theta, d * D_R);
 
-        // Apply effective Hamiltonian with full environments
         auto apply_H_eff = [&](const Complex* d_in, Complex* d_out) {
             apply_H_eff_with_environments(d_in, d_out, site);
         };
@@ -1239,14 +1267,14 @@ private:
 
         std::vector<Complex> hResult(psi_size, make_complex(0.0, 0.0));
 
-        // Step 1: T1[w, ap, s1, s2, b] = sum_a L[a, w, ap] * theta[a, s1, s2, b]
+        // 4-step contraction: L * theta -> T1, T1 * W1 -> T2, T2 * W2 -> T3, T3 * R -> result
         int T1_size = D_mpo_L * D_L * d * d * D_R;
         std::vector<Complex> hT1(T1_size, make_complex(0.0, 0.0));
 
-        for (int w = 0; w < D_mpo_L; w++) {
-            for (int ap = 0; ap < D_L; ap++) {
-                for (int s1 = 0; s1 < d; s1++) {
-                    for (int s2 = 0; s2 < d; s2++) {
+        for (int w = 0; w < D_mpo_L; w++)
+            for (int ap = 0; ap < D_L; ap++)
+                for (int s1 = 0; s1 < d; s1++)
+                    for (int s2 = 0; s2 < d; s2++)
                         for (int b = 0; b < D_R; b++) {
                             Complex sum = make_complex(0.0, 0.0);
                             for (int a = 0; a < D_L; a++) {
@@ -1257,80 +1285,59 @@ private:
                             }
                             hT1[w * (D_L * d * d * D_R) + ap * (d * d * D_R) + s1 * (d * D_R) + s2 * D_R + b] = sum;
                         }
-                    }
-                }
-            }
-        }
 
-        // Step 2: T2[wm, ap, s1p, s2, b] = sum_{w, s1} W1[w, s1, s1p, wm] * T1[w, ap, s1, s2, b]
         int T2_size = D_mpo_M * D_L * d * d * D_R;
         std::vector<Complex> hT2(T2_size, make_complex(0.0, 0.0));
 
-        for (int wm = 0; wm < D_mpo_M; wm++) {
-            for (int ap = 0; ap < D_L; ap++) {
-                for (int s1p = 0; s1p < d; s1p++) {
-                    for (int s2 = 0; s2 < d; s2++) {
+        for (int wm = 0; wm < D_mpo_M; wm++)
+            for (int ap = 0; ap < D_L; ap++)
+                for (int s1p = 0; s1p < d; s1p++)
+                    for (int s2 = 0; s2 < d; s2++)
                         for (int b = 0; b < D_R; b++) {
                             Complex sum = make_complex(0.0, 0.0);
-                            for (int w = 0; w < D_mpo_L; w++) {
+                            for (int w = 0; w < D_mpo_L; w++)
                                 for (int s1 = 0; s1 < d; s1++) {
                                     Complex Wv = hW1[w * (d * d * D_mpo_M) + s1 * (d * D_mpo_M) + s1p * D_mpo_M + wm];
                                     Complex T1v = hT1[w * (D_L * d * d * D_R) + ap * (d * d * D_R) + s1 * (d * D_R) + s2 * D_R + b];
                                     sum.x += Wv.x * T1v.x - Wv.y * T1v.y;
                                     sum.y += Wv.x * T1v.y + Wv.y * T1v.x;
                                 }
-                            }
                             hT2[wm * (D_L * d * d * D_R) + ap * (d * d * D_R) + s1p * (d * D_R) + s2 * D_R + b] = sum;
                         }
-                    }
-                }
-            }
-        }
 
-        // Step 3: T3[ap, s1p, s2p, wr, b] = sum_{wm, s2} W2[wm, s2, s2p, wr] * T2[wm, ap, s1p, s2, b]
         int T3_size = D_L * d * d * D_mpo_R * D_R;
         std::vector<Complex> hT3(T3_size, make_complex(0.0, 0.0));
 
-        for (int ap = 0; ap < D_L; ap++) {
-            for (int s1p = 0; s1p < d; s1p++) {
-                for (int s2p = 0; s2p < d; s2p++) {
-                    for (int wr = 0; wr < D_mpo_R; wr++) {
+        for (int ap = 0; ap < D_L; ap++)
+            for (int s1p = 0; s1p < d; s1p++)
+                for (int s2p = 0; s2p < d; s2p++)
+                    for (int wr = 0; wr < D_mpo_R; wr++)
                         for (int b = 0; b < D_R; b++) {
                             Complex sum = make_complex(0.0, 0.0);
-                            for (int wm = 0; wm < D_mpo_M; wm++) {
+                            for (int wm = 0; wm < D_mpo_M; wm++)
                                 for (int s2 = 0; s2 < d; s2++) {
                                     Complex Wv = hW2[wm * (d * d * D_mpo_R) + s2 * (d * D_mpo_R) + s2p * D_mpo_R + wr];
                                     Complex T2v = hT2[wm * (D_L * d * d * D_R) + ap * (d * d * D_R) + s1p * (d * D_R) + s2 * D_R + b];
                                     sum.x += Wv.x * T2v.x - Wv.y * T2v.y;
                                     sum.y += Wv.x * T2v.y + Wv.y * T2v.x;
                                 }
-                            }
                             hT3[ap * (d * d * D_mpo_R * D_R) + s1p * (d * D_mpo_R * D_R) + s2p * (D_mpo_R * D_R) + wr * D_R + b] = sum;
                         }
-                    }
-                }
-            }
-        }
 
-        // Step 4: result[ap, s1p, s2p, bp] = sum_{wr, b} R[b, wr, bp] * T3[ap, s1p, s2p, wr, b]
-        for (int ap = 0; ap < D_L; ap++) {
-            for (int s1p = 0; s1p < d; s1p++) {
-                for (int s2p = 0; s2p < d; s2p++) {
+        for (int ap = 0; ap < D_L; ap++)
+            for (int s1p = 0; s1p < d; s1p++)
+                for (int s2p = 0; s2p < d; s2p++)
                     for (int bp = 0; bp < D_R; bp++) {
                         Complex sum = make_complex(0.0, 0.0);
-                        for (int b = 0; b < D_R; b++) {
+                        for (int b = 0; b < D_R; b++)
                             for (int wr = 0; wr < D_mpo_R; wr++) {
                                 Complex Rv = hR[b * (D_mpo_R * D_R) + wr * D_R + bp];
                                 Complex T3v = hT3[ap * (d * d * D_mpo_R * D_R) + s1p * (d * D_mpo_R * D_R) + s2p * (D_mpo_R * D_R) + wr * D_R + b];
                                 sum.x += Rv.x * T3v.x - Rv.y * T3v.y;
                                 sum.y += Rv.x * T3v.y + Rv.y * T3v.x;
                             }
-                        }
                         hResult[ap * (d * d * D_R) + s1p * (d * D_R) + s2p * D_R + bp] = sum;
                     }
-                }
-            }
-        }
 
         HIP_CHECK(hipMemcpy(d_theta_out, hResult.data(), psi_size * sizeof(Complex), hipMemcpyHostToDevice));
     }
@@ -1392,41 +1399,33 @@ private:
         HIP_CHECK(hipMemcpy(hU_col.data(), d_U_col, ldu * k * sizeof(Complex), hipMemcpyDeviceToHost));
         HIP_CHECK(hipMemcpy(hVt_col.data(), d_Vt_col, ldv * n_col * sizeof(Complex), hipMemcpyDeviceToHost));
 
-        // Build A_left: shape (D_L, d, D_new) row-major
         int left_size = D_L * d * D_new;
         std::vector<Complex> hA_left(left_size, make_complex(0.0, 0.0));
 
-        for (int a = 0; a < D_L; a++) {
-            for (int s = 0; s < d; s++) {
+        for (int a = 0; a < D_L; a++)
+            for (int s = 0; s < d; s++)
                 for (int j = 0; j < num_sv; j++) {
                     Complex val = hVt_col[j + (a * d + s) * ldv];
-                    if (move_right) {
+                    if (move_right)
                         hA_left[a * (d * D_new) + s * D_new + j] = val;
-                    } else {
+                    else
                         hA_left[a * (d * D_new) + s * D_new + j] = make_complex(
                             val.x * h_S[j], val.y * h_S[j]);
-                    }
                 }
-            }
-        }
 
-        // Build A_right: shape (D_new, d, D_R) row-major
         int right_size = D_new * d * D_R;
         std::vector<Complex> hA_right(right_size, make_complex(0.0, 0.0));
 
-        for (int j = 0; j < num_sv; j++) {
-            for (int s = 0; s < d; s++) {
+        for (int j = 0; j < num_sv; j++)
+            for (int s = 0; s < d; s++)
                 for (int b = 0; b < D_R; b++) {
                     Complex val = hU_col[(s * D_R + b) + j * ldu];
-                    if (move_right) {
+                    if (move_right)
                         hA_right[j * (d * D_R) + s * D_R + b] = make_complex(
                             val.x * h_S[j], val.y * h_S[j]);
-                    } else {
+                    else
                         hA_right[j * (d * D_R) + s * D_R + b] = val;
-                    }
                 }
-            }
-        }
 
         bond_dims[site + 1] = D_new;
 
@@ -1502,7 +1501,12 @@ int main(int argc, char** argv) {
     hipDeviceProp_t prop;
     HIP_CHECK(hipGetDeviceProperties(&prop, 0));
     std::cout << "GPU: " << prop.name << "\n";
-    std::cout << "Memory: " << (prop.totalGlobalMem / 1024.0 / 1024.0 / 1024.0) << " GB\n\n";
+    std::cout << "Memory: " << (prop.totalGlobalMem / 1024.0 / 1024.0 / 1024.0) << " GB\n";
+    std::cout << "Compute Units: " << prop.multiProcessorCount << "\n\n";
+
+    // Track results for summary
+    std::vector<double> energies;
+    std::vector<double> wall_times;
 
     for (int ns : stream_counts) {
         MPOBase* mpo_ptr = nullptr;
@@ -1516,11 +1520,14 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        auto t_start = std::chrono::high_resolution_clock::now();
+        Timer t_wall;
+        t_wall.tic();
         PDMRG_GPU dmrg(mpo_ptr, max_D, n_sweeps, ns, model);
         double energy = dmrg.run();
-        auto t_end = std::chrono::high_resolution_clock::now();
-        double wall_time = std::chrono::duration<double>(t_end - t_start).count();
+        double wall_time = t_wall.toc();
+
+        energies.push_back(energy);
+        wall_times.push_back(wall_time);
 
         std::cout << "\n>> PDMRG_GPU | model=" << model
                   << " | L=" << L << " | D=" << max_D
@@ -1529,6 +1536,24 @@ int main(int argc, char** argv) {
                   << " | time=" << std::setprecision(4) << wall_time << "s\n\n";
 
         delete mpo_ptr;
+    }
+
+    // Print scaling summary if multiple stream counts
+    if (stream_counts.size() > 1) {
+        std::cout << "\n====================================================\n";
+        std::cout << "Stream Scaling Summary\n";
+        std::cout << "====================================================\n";
+        std::cout << std::setw(10) << "Streams" << std::setw(20) << "Energy"
+                  << std::setw(15) << "Wall Time" << std::setw(15) << "Speedup" << "\n";
+        std::cout << std::string(60, '-') << "\n";
+        for (size_t i = 0; i < stream_counts.size(); i++) {
+            double speedup = (i == 0) ? 1.0 : wall_times[0] / wall_times[i];
+            std::cout << std::setw(10) << stream_counts[i]
+                      << std::setw(20) << std::fixed << std::setprecision(10) << energies[i]
+                      << std::setw(15) << std::setprecision(4) << wall_times[i] << "s"
+                      << std::setw(15) << std::setprecision(2) << speedup << "x\n";
+        }
+        std::cout << "====================================================\n";
     }
 
     return 0;
