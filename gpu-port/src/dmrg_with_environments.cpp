@@ -596,17 +596,25 @@ public:
             if (left_to_right) {
                 // Left to right sweep - optimize all bonds
                 for (int site = 0; site < L - 1; site++) {
+                    std::cout << "  [L→R] Site " << site << " optimize..." << std::flush;
                     optimize_site(site);
+                    std::cout << " done" << std::endl;
                     if (site < L - 2) {
+                        std::cout << "  [L→R] Site " << site << " update_left_env..." << std::flush;
                         envs->update_left_env(site, d_mps, mpo);
+                        std::cout << " done" << std::endl;
                     }
                 }
             } else {
                 // Right to left sweep - optimize all bonds
                 for (int site = L - 2; site >= 0; site--) {
+                    std::cout << "  [R→L] Site " << site << " optimize..." << std::flush;
                     optimize_site(site);
+                    std::cout << " done" << std::endl;
                     if (site > 0) {
+                        std::cout << "  [R→L] Site " << site << " update_right_env..." << std::flush;
                         envs->update_right_env(site, d_mps, mpo);
+                        std::cout << " done" << std::endl;
                     }
                 }
             }
