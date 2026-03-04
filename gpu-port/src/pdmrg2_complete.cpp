@@ -188,7 +188,7 @@ public:
             HIP_CHECK(hipMalloc(&d_evals, b * sizeof(double)));
             HIP_CHECK(hipMalloc(&d_info, sizeof(int)));
 
-            rocsolver_zheev(rs_handle, rocblas_evect_vec, rocblas_fill_upper,
+            rocsolver_zheev(rs_handle, rocblas_evect_original, rocblas_fill_upper,
                            b, (rocblas_double_complex*)d_S, b, d_evals,
                            d_info);
 
