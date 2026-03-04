@@ -386,28 +386,33 @@ public:
 
         for (int sweep = 0; sweep < n_sweeps; sweep++) {
             bool left_to_right = (sweep % 2 == 0);
+            double sweep_energy = 0.0;
 
             if (left_to_right) {
-                // Left to right sweep
+                // Left to right sweep - accumulate energy from all bonds
                 for (int site = 0; site < L - 1; site++) {
-                    current_energy = optimize_site(site);
+                    double bond_energy = optimize_site(site);
+                    sweep_energy += bond_energy;  // Sum all bond energies
                     if (site < L - 2) {
                         envs->update_left_env(site, d_mps, mpo);
                     }
                 }
             } else {
-                // Right to left sweep
+                // Right to left sweep - accumulate energy from all bonds
                 for (int site = L - 2; site >= 0; site--) {
-                    current_energy = optimize_site(site);
+                    double bond_energy = optimize_site(site);
+                    sweep_energy += bond_energy;  // Sum all bond energies
                     if (site > 0) {
                         envs->update_right_env(site, d_mps, mpo);
                     }
                 }
             }
 
+            current_energy = sweep_energy;
+
             std::cout << "Sweep " << std::setw(2) << sweep
-                      << " | E = " << std::fixed << std::setprecision(10) << current_energy
-                      << " | E/site = " << (current_energy / (L-1))
+                      << " | E_total = " << std::fixed << std::setprecision(10) << current_energy
+                      << " | E/bond = " << (current_energy / (L-1))
                       << "\n";
         }
 
