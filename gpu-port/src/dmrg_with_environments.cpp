@@ -724,8 +724,12 @@ private:
     }
 
     void update_mps_with_svd(int site, Complex* d_theta) {
+        // Proper SVD implementation with correct tensor reshaping
         int D_L = bond_dims[site];
+        int D_M = bond_dims[site + 1];  // Current bond dimension
         int D_R = bond_dims[site + 2];
+
+        // Reshape theta: (D_L, d, d, D_R) -> (D_L*d, d*D_R) for SVD
         int m = D_L * d;
         int n = d * D_R;
         int k = std::min(m, n);
@@ -736,54 +740,76 @@ private:
         double* d_E;
         int* d_info;
 
-        HIP_CHECK(hipMalloc(&d_U, m * m * sizeof(Complex)));
-        HIP_CHECK(hipMalloc(&d_Vt, n * n * sizeof(Complex)));
+        HIP_CHECK(hipMalloc(&d_U, m * k * sizeof(Complex)));      // Thin SVD: m x k
+        HIP_CHECK(hipMalloc(&d_Vt, k * n * sizeof(Complex)));     // Thin SVD: k x n
         HIP_CHECK(hipMalloc(&d_S, k * sizeof(double)));
         HIP_CHECK(hipMalloc(&d_E, k * sizeof(double)));
         HIP_CHECK(hipMalloc(&d_info, sizeof(int)));
 
-        rocsolver_zgesvd(rb_handle, rocblas_svect_singular, rocblas_svect_singular,
-                       m, n, (rocblas_double_complex*)d_theta, m, d_S,
+        // SVD: theta = U * S * Vt
+        rocsolver_zgesvd(rb_handle,
+                       rocblas_svect_singular,   // Compute U
+                       rocblas_svect_singular,   // Compute Vt
+                       m, n,
+                       (rocblas_double_complex*)d_theta, m,
+                       d_S,
                        (rocblas_double_complex*)d_U, m,
                        (rocblas_double_complex*)d_Vt, n,
                        d_E, rocblas_outofplace, d_info);
 
+        // Truncate to max_D
         int D_new = std::min(max_D, k);
 
-        // Update left MPS tensor
-        Complex* d_mps_new_left;
-        HIP_CHECK(hipMalloc(&d_mps_new_left, m * D_new * sizeof(Complex)));
-
+        // Get singular values
         std::vector<double> h_S(D_new);
         HIP_CHECK(hipMemcpy(h_S.data(), d_S, D_new * sizeof(double), hipMemcpyDeviceToHost));
 
+        // Create new left tensor: (D_L, d, D_new) = reshape(U[:, :D_new] * sqrt(S))
+        Complex* d_mps_new_left;
+        int left_size = D_L * d * D_new;
+        HIP_CHECK(hipMalloc(&d_mps_new_left, left_size * sizeof(Complex)));
+
+        // U is (m, k) = (D_L*d, k), need first D_new columns scaled by sqrt(S)
+        Complex alpha = make_complex(1.0, 0.0);
+        Complex beta = make_complex(0.0, 0.0);
+
+        // Copy U[:, :D_new] and scale each column by sqrt(S[col])
         for (int col = 0; col < D_new; col++) {
-            HIP_CHECK(hipMemcpy(d_mps_new_left + col * m, d_U + col * m,
-                               m * sizeof(Complex), hipMemcpyDeviceToDevice));
-            Complex scale = make_complex(std::sqrt(h_S[col]), 0.0);
+            double sqrt_s = std::sqrt(std::max(h_S[col], 0.0));  // Ensure non-negative
+            Complex scale = make_complex(sqrt_s, 0.0);
+            rocblas_zcopy(rb_handle, m,
+                         (rocblas_double_complex*)(d_U + col * m), 1,
+                         (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
             rocblas_zscal(rb_handle, m, (rocblas_double_complex*)&scale,
-                        (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
+                         (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
         }
 
-        // Update right MPS tensor
+        // Create new right tensor: (D_new, d, D_R) = reshape(sqrt(S) * Vt[:D_new, :])
         Complex* d_mps_new_right;
-        HIP_CHECK(hipMalloc(&d_mps_new_right, D_new * n * sizeof(Complex)));
+        int right_size = D_new * d * D_R;
+        HIP_CHECK(hipMalloc(&d_mps_new_right, right_size * sizeof(Complex)));
 
+        // Vt is (k, n) = (k, d*D_R), need first D_new rows scaled by sqrt(S)
         for (int row = 0; row < D_new; row++) {
-            HIP_CHECK(hipMemcpy(d_mps_new_right + row * n, d_Vt + row * n,
-                               n * sizeof(Complex), hipMemcpyDeviceToDevice));
-            Complex scale = make_complex(std::sqrt(h_S[row]), 0.0);
+            double sqrt_s = std::sqrt(std::max(h_S[row], 0.0));
+            Complex scale = make_complex(sqrt_s, 0.0);
+            rocblas_zcopy(rb_handle, n,
+                         (rocblas_double_complex*)(d_Vt + row * n), 1,
+                         (rocblas_double_complex*)(d_mps_new_right + row * n), 1);
             rocblas_zscal(rb_handle, n, (rocblas_double_complex*)&scale,
-                        (rocblas_double_complex*)(d_mps_new_right + row * n), 1);
+                         (rocblas_double_complex*)(d_mps_new_right + row * n), 1);
         }
 
+        // Update bond dimension
         bond_dims[site + 1] = D_new;
 
+        // Replace MPS tensors
         HIP_CHECK(hipFree(d_mps[site]));
         HIP_CHECK(hipFree(d_mps[site + 1]));
         d_mps[site] = d_mps_new_left;
         d_mps[site + 1] = d_mps_new_right;
 
+        // Cleanup
         HIP_CHECK(hipFree(d_U));
         HIP_CHECK(hipFree(d_Vt));
         HIP_CHECK(hipFree(d_S));
