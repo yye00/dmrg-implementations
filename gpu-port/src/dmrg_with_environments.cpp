@@ -453,33 +453,31 @@ public:
 
         for (int sweep = 0; sweep < n_sweeps; sweep++) {
             bool left_to_right = (sweep % 2 == 0);
-            double sweep_energy = 0.0;
 
             if (left_to_right) {
-                // Left to right sweep - accumulate energy from all bonds
+                // Left to right sweep - optimize all bonds
                 for (int site = 0; site < L - 1; site++) {
-                    double bond_energy = optimize_site(site);
-                    sweep_energy += bond_energy;  // Sum all bond energies
+                    optimize_site(site);
                     if (site < L - 2) {
                         envs->update_left_env(site, d_mps, mpo);
                     }
                 }
             } else {
-                // Right to left sweep - accumulate energy from all bonds
+                // Right to left sweep - optimize all bonds
                 for (int site = L - 2; site >= 0; site--) {
-                    double bond_energy = optimize_site(site);
-                    sweep_energy += bond_energy;  // Sum all bond energies
+                    optimize_site(site);
                     if (site > 0) {
                         envs->update_right_env(site, d_mps, mpo);
                     }
                 }
             }
 
-            current_energy = sweep_energy;
+            // Compute TOTAL energy ⟨MPS|H|MPS⟩ after sweep
+            current_energy = compute_total_energy();
 
             std::cout << "Sweep " << std::setw(2) << sweep
-                      << " | E_total = " << std::fixed << std::setprecision(10) << current_energy
-                      << " | E/bond = " << (current_energy / (L-1))
+                      << " | E = " << std::fixed << std::setprecision(10) << current_energy
+                      << " | E/site = " << (current_energy / L)
                       << "\n";
         }
 
@@ -499,6 +497,71 @@ public:
     }
 
 private:
+    double compute_total_energy() {
+        // Compute E = ⟨MPS|H|MPS⟩ by contracting full MPS-MPO-MPS
+        // Strategy: Contract bond-by-bond and accumulate local energy expectations
+
+        double total_energy = 0.0;
+
+        // For each nearest-neighbor bond, compute ⟨MPS|H_bond|MPS⟩
+        for (int bond = 0; bond < L - 1; bond++) {
+            // Form 2-site reduced density matrix by contracting MPS
+            // ρ_{s1,s2,s1',s2'} = Tr_{rest} |MPS⟩⟨MPS|
+
+            int D_L = bond_dims[bond];
+            int D_M = bond_dims[bond + 1];
+            int D_R = bond_dims[bond + 2];
+
+            // Contract MPS[bond] ⊗ MPS[bond+1] to form 2-site tensor
+            Complex* d_theta;
+            int theta_size = D_L * d * d * D_R;
+            HIP_CHECK(hipMalloc(&d_theta, theta_size * sizeof(Complex)));
+
+            Complex alpha = make_complex(1.0, 0.0);
+            Complex beta = make_complex(0.0, 0.0);
+
+            rocblas_zgemm(rb_handle, rocblas_operation_none, rocblas_operation_none,
+                         d * D_R, D_L * d, D_M,
+                         (rocblas_double_complex*)&alpha,
+                         (rocblas_double_complex*)d_mps[bond + 1], d * D_R,
+                         (rocblas_double_complex*)d_mps[bond], D_M,
+                         (rocblas_double_complex*)&beta,
+                         (rocblas_double_complex*)d_theta, d * D_R);
+
+            // Apply Hamiltonian to this 2-site wavefunction
+            Complex* d_H_theta;
+            HIP_CHECK(hipMalloc(&d_H_theta, theta_size * sizeof(Complex)));
+
+            apply_2site_heisenberg_mpo(d_theta, d_H_theta, D_L, D_R);
+
+            // Compute ⟨θ|H|θ⟩ for this bond
+            rocblas_double_complex bond_energy_z;
+            rocblas_zdotc(rb_handle, theta_size,
+                         (rocblas_double_complex*)d_theta, 1,
+                         (rocblas_double_complex*)d_H_theta, 1,
+                         &bond_energy_z);
+
+            double bond_energy = get_real(bond_energy_z);
+
+            // Normalize by ⟨θ|θ⟩
+            rocblas_double_complex norm_z;
+            rocblas_zdotc(rb_handle, theta_size,
+                         (rocblas_double_complex*)d_theta, 1,
+                         (rocblas_double_complex*)d_theta, 1,
+                         &norm_z);
+
+            double norm = get_real(norm_z);
+            bond_energy /= norm;
+
+            total_energy += bond_energy;
+
+            HIP_CHECK(hipFree(d_theta));
+            HIP_CHECK(hipFree(d_H_theta));
+        }
+
+        return total_energy;
+    }
+
     double optimize_site(int site) {
         int D_L = bond_dims[site];
         int D_M = bond_dims[site + 1];
