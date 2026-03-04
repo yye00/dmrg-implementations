@@ -155,7 +155,7 @@ double solve_ground_state(const Complex* d_psi_in, Complex* d_psi_out,
 
 void truncate_svd(Complex* d_theta, int m, int n, int max_bond,
                  Complex* d_A_out, Complex* d_B_out, int* new_bond_out,
-                 rocsolver_handle handle) {
+                 rocblas_handle handle) {
     int min_mn = std::min(m, n);
     int rank = std::min(min_mn, max_bond);
 
@@ -253,7 +253,7 @@ private:
     double tol;
 
     rocblas_handle rb_handle;
-    rocsolver_handle rs_handle;
+    // Note: In ROCm 7.2, rocsolver uses rocblas_handle
 
     vector<int> bond_dims;
     vector<Complex*> d_mps;
@@ -266,7 +266,6 @@ public:
           tol(tolerance), energy(0.0) {
 
         ROCBLAS_CHECK(rocblas_create_handle(&rb_handle));
-        rocsolver_create_handle(&rs_handle);
 
         // Initialize bond dimensions
         bond_dims.resize(L + 1);
@@ -296,7 +295,6 @@ public:
 
     ~ProductionDMRG() {
         rocblas_destroy_handle(rb_handle);
-        rocsolver_destroy_handle(rs_handle);
         for (auto p : d_mps) HIP_CHECK(hipFree(p));
     }
 
