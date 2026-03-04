@@ -228,3 +228,35 @@ target_link_libraries(dmrg_minimal_gpu
     roc::rocblas
     roc::rocsolver
 )
+
+# PDMRG GPU - Production with hipTensor environments + BLAS-2 (stream-parallelized)
+add_executable(pdmrg_gpu
+    src/pdmrg_gpu.cpp
+)
+set_source_files_properties(src/pdmrg_gpu.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(pdmrg_gpu PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(pdmrg_gpu
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+)
+
+# PDMRG2 GPU - Production with hipTensor environments + BLAS-3 H_eff (GPU-optimized)
+add_executable(pdmrg2_gpu
+    src/pdmrg2_gpu.cpp
+)
+set_source_files_properties(src/pdmrg2_gpu.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(pdmrg2_gpu PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(pdmrg2_gpu
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+)
