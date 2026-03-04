@@ -200,8 +200,8 @@ public:
 
         int D_L = mps_dims[site];
         int D_R = mps_dims[site + 1];
-        int D_mpo_in = (site == 0) ? 1 : mpo_dims[site];
-        int D_mpo_out = (site == L-1) ? 1 : mpo_dims[site];
+        int D_mpo_in = mpo.get_left_dim(site);
+        int D_mpo_out = mpo.get_right_dim(site);
 
         Complex* d_A = d_mps[site];        // Shape: (D_L, d, D_R)
         Complex* d_W = mpo.get_mpo(site);  // Shape: (D_mpo_in, d, d, D_mpo_out)
@@ -328,8 +328,8 @@ public:
 
         int D_L = mps_dims[site];
         int D_R = mps_dims[site + 1];
-        int D_mpo_in = (site == 0) ? 1 : mpo_dims[site];
-        int D_mpo_out = (site == L-1) ? 1 : mpo_dims[site];
+        int D_mpo_in = mpo.get_left_dim(site);
+        int D_mpo_out = mpo.get_right_dim(site);
 
         Complex* d_A = d_mps[site];           // Shape: (D_L, d, D_R)
         Complex* d_W = mpo.get_mpo(site);     // Shape: (D_mpo_in, d, d, D_mpo_out)
