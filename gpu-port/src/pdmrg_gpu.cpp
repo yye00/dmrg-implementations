@@ -908,15 +908,17 @@ public:
         for (int i = 0; i <= L; i++) std::cout << bond_dims[i] << " ";
         std::cout << "\n";
 
-        // Initialize MPS with random complex tensors
+        // Initialize MPS with random tensors (complex for Josephson, real for Heisenberg)
+        bool complex_model = (model_name != "heisenberg");
         srand(42);
         d_mps.resize(L);
         for (int i = 0; i < L; i++) {
             int size = bond_dims[i] * d * bond_dims[i + 1];
             std::vector<Complex> h_mps(size);
             for (int j = 0; j < size; j++) {
-                h_mps[j] = make_complex((double)rand() / RAND_MAX - 0.5,
-                                        (double)rand() / RAND_MAX - 0.5);
+                double re = (double)rand() / RAND_MAX - 0.5;
+                double im = complex_model ? ((double)rand() / RAND_MAX - 0.5) : 0.0;
+                h_mps[j] = make_complex(re, im);
             }
             HIP_CHECK(hipMalloc(&d_mps[i], size * sizeof(Complex)));
             HIP_CHECK(hipMemcpy(d_mps[i], h_mps.data(), size * sizeof(Complex),
