@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
              << mpo[i].size() << " x "
              << mpo[i][0].size() << " x "
              << mpo[i][0][0].size() << " x "
-             << mpo[i][0][0][0].size() << endl;
+             << "2 (Complex)" << endl;
     }
 
     cout << "\nRunning DMRG..." << endl;
