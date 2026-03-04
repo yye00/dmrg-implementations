@@ -152,9 +152,24 @@ target_link_libraries(benchmark_runner
     roc::rocsolver
 )
 
+# Production DMRG (complete implementation for paper)
+add_executable(dmrg_production
+    src/dmrg_production.cpp
+)
+set_source_files_properties(src/dmrg_production.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(dmrg_production PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(dmrg_production
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+)
+
 # Installation
 install(TARGETS heisenberg_gpu dmrg_benchmark dmrg_gpu_native heisenberg_complete
-        pdmrg_complete pdmrg2_complete benchmark_runner DESTINATION bin)
+        pdmrg_complete pdmrg2_complete benchmark_runner dmrg_production DESTINATION bin)
 
 # Configuration summary
 message(STATUS "==============================================")
