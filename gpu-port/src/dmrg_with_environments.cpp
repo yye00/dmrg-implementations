@@ -699,89 +699,142 @@ public:
 
     void right_canonicalize_mps() {
         // Right-canonicalize by sweeping from right to left with SVD
+        // All done on CPU to avoid row-major/col-major confusion with GPU BLAS
         for (int site = L - 1; site > 0; site--) {
-            int D_L = bond_dims[site];
-            int D_R = bond_dims[site + 1];
-            int m = D_L;
-            int n = d * D_R;
+            int Da = bond_dims[site];
+            int Db = bond_dims[site + 1];
+            int m = Da;          // rows of matrix to SVD
+            int n = d * Db;      // cols of matrix to SVD
             int k = std::min(m, n);
 
-            // Download, SVD, upload
-            int tensor_size = D_L * d * D_R;
+            int tensor_size = Da * d * Db;
             std::vector<Complex> hA(tensor_size);
             HIP_CHECK(hipMemcpy(hA.data(), d_mps[site], tensor_size * sizeof(Complex), hipMemcpyDeviceToHost));
 
-            Complex* d_A_temp;
-            HIP_CHECK(hipMalloc(&d_A_temp, m * n * sizeof(Complex)));
-            HIP_CHECK(hipMemcpy(d_A_temp, hA.data(), m * n * sizeof(Complex), hipMemcpyHostToDevice));
+            // hA is row-major (Da, d, Db) = row-major matrix (Da, d*Db)
+            // SVD: A = U * S * Vt where U(Da, k), S(k), Vt(k, d*Db)
+            // Do this on CPU using a simple approach
 
-            Complex* d_U;
-            double* d_S;
-            Complex* d_Vt;
-            double* d_E;
-            int* d_info;
+            // Compute A^T * A (k=n case) or A * A^T (k=m case) for eigendecomposition
+            // For right-canonicalization, we just need to normalize each site.
+            // Simple QR-like approach: for each site from right to left,
+            // decompose A[a, s, b] = sum_k R[a, k] * Q[k, s, b]
+            // where Q is right-isometric: sum_{s,b} Q[k,s,b] * conj(Q[k',s,b]) = delta_{k,k'}
 
-            int ldu = m;
-            int ldv = k;
+            // For simplicity, use Gram-Schmidt on the row vectors of M(Da, d*Db)
+            std::vector<Complex> hVt(k * n, make_complex(0.0, 0.0));  // Vt(k, n) row-major
+            std::vector<Complex> hR(m * k, make_complex(0.0, 0.0));   // R(m, k) row-major
+            std::vector<Complex> hU(m * k, make_complex(0.0, 0.0));
+            std::vector<double> hS(k, 0.0);
 
-            HIP_CHECK(hipMalloc(&d_U, ldu * k * sizeof(Complex)));
-            HIP_CHECK(hipMalloc(&d_S, k * sizeof(double)));
-            HIP_CHECK(hipMalloc(&d_Vt, ldv * n * sizeof(Complex)));
-            HIP_CHECK(hipMalloc(&d_E, k * sizeof(double)));
-            HIP_CHECK(hipMalloc(&d_info, sizeof(int)));
+            // Full CPU SVD via Jacobi one-sided (simple but correct)
+            // Actually, for canonicalization we just need QR, not full SVD.
+            // Use modified Gram-Schmidt: QR factorize M^T to get M = Q * R^T
+            // Actually simpler: just do regular QR of M^T
 
-            rocsolver_zgesvd(rb_handle,
-                           rocblas_svect_singular, rocblas_svect_singular,
-                           m, n,
-                           (rocblas_double_complex*)d_A_temp, m,
-                           d_S,
-                           (rocblas_double_complex*)d_U, ldu,
-                           (rocblas_double_complex*)d_Vt, ldv,
-                           d_E, rocblas_outofplace, d_info);
-            HIP_CHECK(hipDeviceSynchronize());
+            // M^T is (d*Db, Da) row-major = n rows, m cols
+            // QR of M^T: M^T = Q * R where Q(n, k), R(k, m)
+            // Then M = R^T * Q^T and A[site] = Q^T (right-isometric), absorbed R^T into left
 
-            // Replace site tensor with Vt (right-isometric)
-            HIP_CHECK(hipFree(d_mps[site]));
-            d_mps[site] = d_Vt;  // Transfer ownership
-
-            // Absorb U*S into left neighbor
-            std::vector<double> hS(k);
-            HIP_CHECK(hipMemcpy(hS.data(), d_S, k * sizeof(double), hipMemcpyDeviceToHost));
-
-            for (int col = 0; col < k; col++) {
-                Complex scale = make_complex(hS[col], 0.0);
-                rocblas_zscal(rb_handle, m, (rocblas_double_complex*)&scale,
-                             (rocblas_double_complex*)(d_U + col * ldu), 1);
+            // Gram-Schmidt on columns of M^T (= rows of M as column vectors)
+            std::vector<std::vector<Complex>> cols(m, std::vector<Complex>(n));
+            for (int a = 0; a < m; a++) {
+                for (int j = 0; j < n; j++) {
+                    cols[a][j] = hA[a * n + j];
+                }
             }
 
-            // A_new[site-1] = A[site-1] * (U * S)
-            // row-major: A[site-1] is (D_LL*d, D_L), U*S is (D_L, k)
-            // col-major: A[site-1] is (D_L, D_LL*d), U*S is (k, D_L)
-            // C = U*S^T * A^T -> (k, D_LL*d) col-major = (D_LL*d, k) row-major
+            std::vector<std::vector<Complex>> Q_cols(k, std::vector<Complex>(n, make_complex(0.0, 0.0)));
+            std::vector<std::vector<Complex>> R_mat(k, std::vector<Complex>(m, make_complex(0.0, 0.0)));
+
+            int actual_k = 0;
+            for (int a = 0; a < m && actual_k < k; a++) {
+                std::vector<Complex> v = cols[a];
+
+                // Orthogonalize against previous Q vectors
+                for (int j = 0; j < actual_k; j++) {
+                    // r = <Q_j, v>
+                    Complex r = make_complex(0.0, 0.0);
+                    for (int i = 0; i < n; i++) {
+                        r.x += Q_cols[j][i].x * v[i].x + Q_cols[j][i].y * v[i].y;
+                        r.y += Q_cols[j][i].x * v[i].y - Q_cols[j][i].y * v[i].x;
+                    }
+                    R_mat[j][a] = r;
+                    for (int i = 0; i < n; i++) {
+                        v[i].x -= r.x * Q_cols[j][i].x - r.y * Q_cols[j][i].y;
+                        v[i].y -= r.x * Q_cols[j][i].y + r.y * Q_cols[j][i].x;
+                    }
+                }
+
+                // Compute norm
+                double nrm = 0.0;
+                for (int i = 0; i < n; i++) {
+                    nrm += v[i].x * v[i].x + v[i].y * v[i].y;
+                }
+                nrm = std::sqrt(nrm);
+
+                if (nrm > 1e-14) {
+                    R_mat[actual_k][a] = make_complex(nrm, 0.0);
+                    for (int i = 0; i < n; i++) {
+                        Q_cols[actual_k][i] = make_complex(v[i].x / nrm, v[i].y / nrm);
+                    }
+                    actual_k++;
+                }
+            }
+
+            // Now M = R^T * Q where Q is (actual_k, n) and R is (actual_k, m)
+            // M[a, j] = sum_q R[q, a] * Q[q, j]
+            // A_site[site] = Q (shape: actual_k, d*Db -> actual_k, d, Db)
+            // A_site[site-1] = A_old[site-1] * R^T (absorb into left)
+
+            // Store Q as new site tensor (right-isometric)
+            // Note: actual_k should equal Da in normal cases
+            std::vector<Complex> hA_new(actual_k * n, make_complex(0.0, 0.0));
+            for (int q = 0; q < actual_k; q++) {
+                for (int j = 0; j < n; j++) {
+                    hA_new[q * n + j] = Q_cols[q][j];
+                }
+            }
+
+            HIP_CHECK(hipFree(d_mps[site]));
+            HIP_CHECK(hipMalloc(&d_mps[site], actual_k * n * sizeof(Complex)));
+            HIP_CHECK(hipMemcpy(d_mps[site], hA_new.data(), actual_k * n * sizeof(Complex), hipMemcpyHostToDevice));
+
+            // Absorb R^T into left neighbor
+            // A_new[site-1][a_LL, s, q] = sum_a A_old[site-1][a_LL, s, a] * R[q, a]^T
+            //                            = sum_a A_old[site-1][a_LL, s, a] * R_mat[q][a]
+            // Wait, R^T[a, q] = R[q, a], so:
+            // A_new[a_LL, s, q] = sum_a A_old[a_LL, s, a] * R^T[a, q]
+            //                   = sum_a A_old[a_LL, s, a] * R_mat[q][a]
+
             int D_LL = bond_dims[site - 1];
-            Complex* d_left_new;
-            int left_new_size = D_LL * d * k;
-            HIP_CHECK(hipMalloc(&d_left_new, left_new_size * sizeof(Complex)));
+            int left_old_size = D_LL * d * Da;
+            std::vector<Complex> hA_left(left_old_size);
+            HIP_CHECK(hipMemcpy(hA_left.data(), d_mps[site - 1], left_old_size * sizeof(Complex), hipMemcpyDeviceToHost));
 
-            Complex alpha = make_complex(1.0, 0.0);
-            Complex beta = make_complex(0.0, 0.0);
+            int left_new_size = D_LL * d * actual_k;
+            std::vector<Complex> hA_left_new(left_new_size, make_complex(0.0, 0.0));
 
-            rocblas_zgemm(rb_handle, rocblas_operation_none, rocblas_operation_none,
-                         k, D_LL * d, D_L,
-                         (rocblas_double_complex*)&alpha,
-                         (rocblas_double_complex*)d_U, k,
-                         (rocblas_double_complex*)d_mps[site - 1], D_L,
-                         (rocblas_double_complex*)&beta,
-                         (rocblas_double_complex*)d_left_new, k);
+            for (int aLL = 0; aLL < D_LL; aLL++) {
+                for (int s = 0; s < d; s++) {
+                    for (int q = 0; q < actual_k; q++) {
+                        Complex sum = make_complex(0.0, 0.0);
+                        for (int a = 0; a < Da; a++) {
+                            Complex Av = hA_left[aLL * (d * Da) + s * Da + a];
+                            Complex Rv = R_mat[q][a];
+                            sum.x += Av.x * Rv.x - Av.y * Rv.y;
+                            sum.y += Av.x * Rv.y + Av.y * Rv.x;
+                        }
+                        hA_left_new[aLL * (d * actual_k) + s * actual_k + q] = sum;
+                    }
+                }
+            }
 
             HIP_CHECK(hipFree(d_mps[site - 1]));
-            d_mps[site - 1] = d_left_new;
+            HIP_CHECK(hipMalloc(&d_mps[site - 1], left_new_size * sizeof(Complex)));
+            HIP_CHECK(hipMemcpy(d_mps[site - 1], hA_left_new.data(), left_new_size * sizeof(Complex), hipMemcpyHostToDevice));
 
-            HIP_CHECK(hipFree(d_U));
-            HIP_CHECK(hipFree(d_S));
-            HIP_CHECK(hipFree(d_E));
-            HIP_CHECK(hipFree(d_info));
-            HIP_CHECK(hipFree(d_A_temp));
+            // Bond dimension stays the same (actual_k should equal Da)
         }
     }
 
@@ -1116,43 +1169,55 @@ private:
     // -----------------------------------------------------------------------
     // SVD to split optimized 2-site wavefunction
     // theta[D_L, d, d, D_R] -> A_left[D_L, d, D_new] * A_right[D_new, d, D_R]
+    //
+    // Uses GPU rocsolver_zgesvd with correct col-major layout handling.
+    // Row-major theta (D_L*d, d*D_R) = col-major (d*D_R, D_L*d).
+    // We SVD the col-major version: M = U * S * Vt where M is (d*D_R, D_L*d).
+    // Then in row-major: M^T = Vt^H * S * U^H, so:
+    //   U_rowmaj = Vt^H (first D_new columns = conjugate of first D_new rows of Vt)
+    //   Vt_rowmaj = U^H (first D_new rows = conjugate of first D_new columns of U)
     // -----------------------------------------------------------------------
     void update_mps_with_svd(int site, Complex* d_theta, bool move_right) {
         int D_L = bond_dims[site];
         int D_M = bond_dims[site + 1];
         int D_R = bond_dims[site + 2];
 
-        int m = D_L * d;
-        int n = d * D_R;
-        int k = std::min(m, n);
+        int m_row = D_L * d;   // row-major rows
+        int n_row = d * D_R;   // row-major cols
 
-        Complex* d_U;
-        Complex* d_Vt;
+        // For col-major SVD: m_col = n_row = d*D_R, n_col = m_row = D_L*d
+        int m_col = n_row;
+        int n_col = m_row;
+        int k = std::min(m_col, n_col);
+
+        int ldu = m_col;
+        int ldv = k;
+
+        Complex* d_U_col;
+        Complex* d_Vt_col;
         double* d_S;
         double* d_E;
         int* d_info;
 
-        int ldu = m;
-        int ldv = k;  // CRITICAL FIX: ldv = k, not n
-
-        HIP_CHECK(hipMalloc(&d_U, ldu * k * sizeof(Complex)));
-        HIP_CHECK(hipMalloc(&d_Vt, ldv * n * sizeof(Complex)));
+        HIP_CHECK(hipMalloc(&d_U_col, ldu * k * sizeof(Complex)));
+        HIP_CHECK(hipMalloc(&d_Vt_col, ldv * n_col * sizeof(Complex)));
         HIP_CHECK(hipMalloc(&d_S, k * sizeof(double)));
         HIP_CHECK(hipMalloc(&d_E, k * sizeof(double)));
         HIP_CHECK(hipMalloc(&d_info, sizeof(int)));
 
-        // Copy theta because SVD overwrites it
+        // Copy theta (SVD overwrites input)
         Complex* d_theta_copy;
-        HIP_CHECK(hipMalloc(&d_theta_copy, m * n * sizeof(Complex)));
-        HIP_CHECK(hipMemcpy(d_theta_copy, d_theta, m * n * sizeof(Complex), hipMemcpyDeviceToDevice));
+        HIP_CHECK(hipMalloc(&d_theta_copy, m_col * n_col * sizeof(Complex)));
+        HIP_CHECK(hipMemcpy(d_theta_copy, d_theta, m_col * n_col * sizeof(Complex), hipMemcpyDeviceToDevice));
 
+        // SVD of col-major (m_col, n_col) matrix with lda = m_col
         rocsolver_zgesvd(rb_handle,
                         rocblas_svect_singular, rocblas_svect_singular,
-                        m, n,
-                        (rocblas_double_complex*)d_theta_copy, m,
+                        m_col, n_col,
+                        (rocblas_double_complex*)d_theta_copy, m_col,
                         d_S,
-                        (rocblas_double_complex*)d_U, ldu,
-                        (rocblas_double_complex*)d_Vt, ldv,
+                        (rocblas_double_complex*)d_U_col, ldu,
+                        (rocblas_double_complex*)d_Vt_col, ldv,
                         d_E, rocblas_outofplace, d_info);
         HIP_CHECK(hipDeviceSynchronize());
 
@@ -1162,87 +1227,97 @@ private:
             std::cerr << "SVD failed with info=" << h_info << " at site " << site << std::endl;
         }
 
-        // Truncate bond dimension
-        int D_new = std::min({D_M, k, max_D});
-
+        // Get singular values
         std::vector<double> h_S(k);
         HIP_CHECK(hipMemcpy(h_S.data(), d_S, k * sizeof(double), hipMemcpyDeviceToHost));
 
+        // Truncate
+        int D_new = std::min({D_M, k, max_D});
         int num_sv = std::min(D_new, k);
 
-        if (move_right) {
-            // Left-canonical: A_left = U[:, :D_new], A_right = diag(S) * Vt[:D_new, :]
-            int left_size = D_L * d * D_new;
-            Complex* d_mps_new_left;
-            HIP_CHECK(hipMalloc(&d_mps_new_left, left_size * sizeof(Complex)));
-            HIP_CHECK(hipMemset(d_mps_new_left, 0, left_size * sizeof(Complex)));
+        // Download SVD results to CPU for correct reconstruction
+        std::vector<Complex> hU_col(ldu * k), hVt_col(ldv * n_col);
+        HIP_CHECK(hipMemcpy(hU_col.data(), d_U_col, ldu * k * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hVt_col.data(), d_Vt_col, ldv * n_col * sizeof(Complex), hipMemcpyDeviceToHost));
 
-            for (int col = 0; col < num_sv; col++) {
-                rocblas_zcopy(rb_handle, m,
-                             (rocblas_double_complex*)(d_U + col * ldu), 1,
-                             (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
+        // Col-major SVD: M_col = U_col * S * Vt_col
+        // M_col is (m_col, n_col) = (d*D_R, D_L*d)
+        // U_col is (m_col, k) = (d*D_R, k), element [i,j] at hU_col[i + j*ldu]
+        // Vt_col is (k, n_col) = (k, D_L*d), element [i,j] at hVt_col[i + j*ldv]
+        //
+        // Our row-major matrix is M_row = M_col^T, so:
+        // M_row = (Vt_col^H * S * U_col^H)^T... no, simpler:
+        // M_row[a, b] = M_col[b, a] = sum_j U_col[b, j] * S[j] * Vt_col[j, a]
+        //
+        // So M_row[a, b] = sum_j conj(U_col[b, j])^* nope...
+        // Actually M_col[b, a] = sum_j U_col[b,j] * S[j] * Vt_col[j, a]
+        // This gives: M_row = Vt_col^T * S * U_col^T
+        // i.e., in row-major SVD: U_row = conj(Vt_col)^T and Vt_row = conj(U_col)^T
+        //
+        // Simpler: M_row = Vt_col^T * S * U_col^T
+        // where Vt_col^T is (n_col, k) = (D_L*d, k) <- this is U_row
+        // and U_col^T is (k, m_col) = (k, d*D_R) <- this is Vt_row
+        //
+        // A_left[a, s, j] = U_row[a*d+s, j] = Vt_col^T[a*d+s, j] = Vt_col[j, a*d+s]
+        // A_right[j, s, b] = S[j] * Vt_row[j, s*D_R+b] = S[j] * U_col^T[j, s*D_R+b] = S[j] * U_col[s*D_R+b, j]
+
+        // Build A_left: shape (D_L, d, D_new) row-major
+        int left_size = D_L * d * D_new;
+        std::vector<Complex> hA_left(left_size, make_complex(0.0, 0.0));
+
+        for (int a = 0; a < D_L; a++) {
+            for (int s = 0; s < d; s++) {
+                for (int j = 0; j < num_sv; j++) {
+                    // U_row[a*d+s, j] = Vt_col[j, a*d+s]
+                    // Vt_col element [j, a*d+s] is at hVt_col[j + (a*d+s)*ldv]
+                    Complex val = hVt_col[j + (a * d + s) * ldv];
+                    if (move_right) {
+                        // Left-canonical: A_left = U_row (no S)
+                        hA_left[a * (d * D_new) + s * D_new + j] = val;
+                    } else {
+                        // Right-canonical: A_left = U_row * S
+                        hA_left[a * (d * D_new) + s * D_new + j] = make_complex(
+                            val.x * h_S[j], val.y * h_S[j]);
+                    }
+                }
             }
-
-            int right_size = D_new * d * D_R;
-            Complex* d_mps_new_right;
-            HIP_CHECK(hipMalloc(&d_mps_new_right, right_size * sizeof(Complex)));
-            HIP_CHECK(hipMemset(d_mps_new_right, 0, right_size * sizeof(Complex)));
-
-            for (int row = 0; row < num_sv; row++) {
-                Complex scale = make_complex(h_S[row], 0.0);
-                rocblas_zcopy(rb_handle, n,
-                             (rocblas_double_complex*)(d_Vt + row), ldv,
-                             (rocblas_double_complex*)(d_mps_new_right + row), D_new);
-                rocblas_zscal(rb_handle, n, (rocblas_double_complex*)&scale,
-                             (rocblas_double_complex*)(d_mps_new_right + row), D_new);
-            }
-
-            bond_dims[site + 1] = D_new;
-
-            HIP_CHECK(hipDeviceSynchronize());
-            HIP_CHECK(hipFree(d_mps[site]));
-            HIP_CHECK(hipFree(d_mps[site + 1]));
-            d_mps[site] = d_mps_new_left;
-            d_mps[site + 1] = d_mps_new_right;
-
-        } else {
-            // Right-canonical: A_left = U[:, :D_new] * diag(S), A_right = Vt[:D_new, :]
-            int left_size = D_L * d * D_new;
-            Complex* d_mps_new_left;
-            HIP_CHECK(hipMalloc(&d_mps_new_left, left_size * sizeof(Complex)));
-            HIP_CHECK(hipMemset(d_mps_new_left, 0, left_size * sizeof(Complex)));
-
-            for (int col = 0; col < num_sv; col++) {
-                Complex scale = make_complex(h_S[col], 0.0);
-                rocblas_zcopy(rb_handle, m,
-                             (rocblas_double_complex*)(d_U + col * ldu), 1,
-                             (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
-                rocblas_zscal(rb_handle, m, (rocblas_double_complex*)&scale,
-                             (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
-            }
-
-            int right_size = D_new * d * D_R;
-            Complex* d_mps_new_right;
-            HIP_CHECK(hipMalloc(&d_mps_new_right, right_size * sizeof(Complex)));
-            HIP_CHECK(hipMemset(d_mps_new_right, 0, right_size * sizeof(Complex)));
-
-            for (int row = 0; row < num_sv; row++) {
-                rocblas_zcopy(rb_handle, n,
-                             (rocblas_double_complex*)(d_Vt + row), ldv,
-                             (rocblas_double_complex*)(d_mps_new_right + row), D_new);
-            }
-
-            bond_dims[site + 1] = D_new;
-
-            HIP_CHECK(hipDeviceSynchronize());
-            HIP_CHECK(hipFree(d_mps[site]));
-            HIP_CHECK(hipFree(d_mps[site + 1]));
-            d_mps[site] = d_mps_new_left;
-            d_mps[site + 1] = d_mps_new_right;
         }
 
-        HIP_CHECK(hipFree(d_U));
-        HIP_CHECK(hipFree(d_Vt));
+        // Build A_right: shape (D_new, d, D_R) row-major
+        int right_size = D_new * d * D_R;
+        std::vector<Complex> hA_right(right_size, make_complex(0.0, 0.0));
+
+        for (int j = 0; j < num_sv; j++) {
+            for (int s = 0; s < d; s++) {
+                for (int b = 0; b < D_R; b++) {
+                    // Vt_row[j, s*D_R+b] = U_col[s*D_R+b, j]
+                    // U_col element [s*D_R+b, j] is at hU_col[(s*D_R+b) + j*ldu]
+                    Complex val = hU_col[(s * D_R + b) + j * ldu];
+                    if (move_right) {
+                        // Left-canonical: A_right = S * Vt_row
+                        hA_right[j * (d * D_R) + s * D_R + b] = make_complex(
+                            val.x * h_S[j], val.y * h_S[j]);
+                    } else {
+                        // Right-canonical: A_right = Vt_row (no S)
+                        hA_right[j * (d * D_R) + s * D_R + b] = val;
+                    }
+                }
+            }
+        }
+
+        bond_dims[site + 1] = D_new;
+
+        // Upload new tensors
+        HIP_CHECK(hipFree(d_mps[site]));
+        HIP_CHECK(hipFree(d_mps[site + 1]));
+        HIP_CHECK(hipMalloc(&d_mps[site], left_size * sizeof(Complex)));
+        HIP_CHECK(hipMalloc(&d_mps[site + 1], right_size * sizeof(Complex)));
+        HIP_CHECK(hipMemcpy(d_mps[site], hA_left.data(), left_size * sizeof(Complex), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(d_mps[site + 1], hA_right.data(), right_size * sizeof(Complex), hipMemcpyHostToDevice));
+
+        // Cleanup
+        HIP_CHECK(hipFree(d_U_col));
+        HIP_CHECK(hipFree(d_Vt_col));
         HIP_CHECK(hipFree(d_S));
         HIP_CHECK(hipFree(d_E));
         HIP_CHECK(hipFree(d_info));
