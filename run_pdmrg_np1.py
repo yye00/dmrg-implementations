@@ -1,10 +1,13 @@
 #!/usr/bin/env python
 """Run PDMRG np=1 benchmark standalone."""
 import sys
+import os
 import time
 import numpy as np
 
-sys.path.insert(0, '/home/captain/clawd/work/dmrg-implementations/a2dmrg')
+# Add relative paths to sys.path
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(SCRIPT_DIR, 'a2dmrg'))
 from benchmarks.josephson_junction import build_josephson_mpo
 
 from mpi4py import MPI
@@ -22,7 +25,7 @@ print(f"Building Josephson Junction MPO (L={L}, n_max={n_max})...")
 mpo = build_josephson_mpo(L, E_J=1.0, E_C=0.5, n_max=n_max, with_flux=True)
 
 # Import and run PDMRG
-sys.path.insert(0, '/home/captain/clawd/work/dmrg-implementations/pdmrg')
+sys.path.insert(0, os.path.join(SCRIPT_DIR, 'pdmrg'))
 from pdmrg.dmrg import pdmrg_main
 
 print(f"Starting PDMRG (np={comm.Get_size()}, D={bond_dim})...")

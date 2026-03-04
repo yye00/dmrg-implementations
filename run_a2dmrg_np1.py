@@ -1,10 +1,13 @@
 #!/usr/bin/env python
 """Run A2DMRG np=1 benchmark standalone."""
 import sys
+import os
 import time
 import numpy as np
 
-sys.path.insert(0, '/home/captain/clawd/work/dmrg-implementations/a2dmrg')
+# Add relative path to sys.path
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(SCRIPT_DIR, 'a2dmrg'))
 from benchmarks.josephson_junction import build_josephson_mpo
 from a2dmrg.dmrg import a2dmrg_main
 

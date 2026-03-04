@@ -32,13 +32,8 @@ This document catalogs all benchmarking scripts and results for the PDMRG and A2
 **Status:** ⚠️ Incomplete, uses placeholder models
 
 ### 5. `a2dmrg/benchmarks/josephson_junction.py`
-**Purpose:** MPO builder for Josephson Junction model  
+**Purpose:** MPO builder for Josephson Junction model
 **Status:** ✅ Complete - core utility
-
-### 6. `pdmrg/benchmarks/run_all_benchmarks.py`
-**Purpose:** PDMRG benchmark suite  
-**Tests:** Multiple models, sizes, bond dimensions  
-**Status:** ⚠️ PDMRG only, no A2DMRG comparison
 
 ## Results Files
 

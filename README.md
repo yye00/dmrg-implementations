@@ -41,7 +41,7 @@ All implementations achieve machine precision agreement (ΔE < 1e-14) on correct
 
 ### Requirements
 
-- Python 3.10+
+- Python 3.13+ (tested with 3.13 and 3.14)
 - MPI (OpenMPI or MPICH)
 - NumPy, SciPy
 - quimb (tensor network library)
@@ -56,9 +56,11 @@ python benchmarks/heisenberg_benchmark.py
 # Long benchmark (L=48, 50 sweeps)
 python benchmarks/heisenberg_long_benchmark.py
 
-# Josephson junction correctness test
-python benchmarks/josephson_correctness_benchmark.py
+# Josephson junction correctness test (complex128)
+python a2dmrg/benchmarks/josephson_correctness_benchmark.py
 ```
+
+**Note:** A2DMRG speedup benefits appear at larger system sizes (L > 20). At L=12, cotengra contraction overhead may dominate, making it slower than PDMRG in wall time.
 
 ### Running DMRG Simulations
 
@@ -74,12 +76,12 @@ a2dmrg/venv/bin/python run_a2dmrg_np1.py
 
 ## Development
 
-See `pdmrg2_gpu.md` for details on the PDMRG2 GPU optimization roadmap.
+See `pdmrg2_gpu.md` for details on the PDMRG2 CPU optimization plan (GEMM-optimized implementation).
 
 ## License
 
-[Add your license here]
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## Contributors
 
-[Add contributors here]
+This project uses implementations and optimizations developed through various research efforts in quantum many-body physics.

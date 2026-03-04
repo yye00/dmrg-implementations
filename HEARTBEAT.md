@@ -38,7 +38,7 @@ All 10 tests PASS with machine precision accuracy
 
 ## Heisenberg Benchmark - Post-Approach-A Improvements ✅
 
-### Test Results (2026-02-22)
+### Test Results (2025-02-22)
 All 10 tests PASS with machine precision accuracy. Streaming decompositions
 and `coarse_reduction_tol` exposure confirmed to not regress accuracy.
 

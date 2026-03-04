@@ -1,7 +1,9 @@
 
 ---
 
-# Application Specification: GEMM-Optimized PDMRG (CPU Phase)
+# Application Specification: GEMM-Optimized PDMRG (CPU Optimization Phase)
+
+**Note:** This document describes CPU-level optimizations using GEMM-heavy algorithms. It is NOT a GPU implementation roadmap, but rather prepares the mathematical architecture for potential future GPU porting.
 
 ## 1. Objective
 

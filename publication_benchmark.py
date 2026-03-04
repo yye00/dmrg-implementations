@@ -39,8 +39,10 @@ CONFIG = {
 
 NP_LIST = [1, 2, 4, 8]
 
-PDMRG_VENV = '/home/captain/clawd/work/dmrg-implementations/pdmrg/venv/bin/python'
-A2DMRG_VENV = '/home/captain/clawd/work/dmrg-implementations/a2dmrg/venv/bin/python'
+# Get script directory and construct relative paths to virtual environments
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PDMRG_VENV = os.path.join(SCRIPT_DIR, 'pdmrg', 'venv', 'bin', 'python')
+A2DMRG_VENV = os.path.join(SCRIPT_DIR, 'a2dmrg', 'venv', 'bin', 'python')
 
 
 @dataclass
