@@ -213,3 +213,18 @@ target_link_libraries(dmrg_with_environments
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
 )
+
+# Minimal GPU-Only DMRG (Production - Zero CPU Transfers)
+add_executable(dmrg_minimal_gpu
+    src/dmrg_minimal_gpu.cpp
+)
+set_source_files_properties(src/dmrg_minimal_gpu.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(dmrg_minimal_gpu PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(dmrg_minimal_gpu
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+)
