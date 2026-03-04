@@ -93,7 +93,10 @@ double power_iteration(
                      (rocblas_double_complex*)d_psi, 1,
                      (rocblas_double_complex*)d_Hpsi, 1,
                      &energy_z);
-        energy = energy_z.x;
+
+        // Extract real part (use std::real for compatibility)
+        hipDoubleComplex* e_hip = reinterpret_cast<hipDoubleComplex*>(&energy_z);
+        energy = e_hip->x;
 
         // Normalize |psi> = |Hpsi> / ||Hpsi||
         rocblas_double_complex norm_z;
@@ -102,7 +105,9 @@ double power_iteration(
                      (rocblas_double_complex*)d_Hpsi, 1,
                      &norm_z);
 
-        double norm = std::sqrt(norm_z.x);
+        // Extract real part
+        hipDoubleComplex* n_hip = reinterpret_cast<hipDoubleComplex*>(&norm_z);
+        double norm = std::sqrt(n_hip->x);
         Complex inv_norm = make_complex(1.0 / norm, 0.0);
         rocblas_zscal(rb_handle, psi_size,
                      (rocblas_double_complex*)&inv_norm,
