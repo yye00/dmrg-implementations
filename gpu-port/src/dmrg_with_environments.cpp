@@ -868,16 +868,14 @@ private:
     }
 
     void update_mps_with_svd(int site, Complex* d_theta) {
-        // TEMPORARY: Disable SVD to debug memory access error
-        std::cout << "[DBG] SVD disabled - skipping MPS update" << std::endl;
-        return;
-
         // SVD to split optimized 2-site wavefunction back into MPS
         // Keep bond dimensions FIXED to maintain environment compatibility
 
         int D_L = bond_dims[site];
         int D_M = bond_dims[site + 1];  // Current bond dimension
         int D_R = bond_dims[site + 2];
+
+        std::cout << "[DBG SVD] site=" << site << " D_L=" << D_L << " D_M=" << D_M << " D_R=" << D_R << std::endl;
 
         // Reshape theta: (D_L, d, d, D_R) -> (D_L*d, d*D_R) for SVD
         int m = D_L * d;
@@ -965,11 +963,25 @@ private:
         // Keep bond dimension FIXED (don't update it - prevents environment mismatch)
         // bond_dims[site + 1] = D_new;  // DISABLED: causes environment size mismatch
 
+        std::cout << "[DBG SVD] Synchronizing..." << std::flush;
+        HIP_CHECK(hipDeviceSynchronize());  // Ensure all GPU ops complete
+        std::cout << " done" << std::endl;
+
         // Replace MPS tensors
-        HIP_CHECK(hipFree(d_mps[site]));
-        HIP_CHECK(hipFree(d_mps[site + 1]));
+        std::cout << "[DBG SVD] Freeing old MPS tensors..." << std::flush;
+        Complex* old_left = d_mps[site];
+        Complex* old_right = d_mps[site + 1];
+
         d_mps[site] = d_mps_new_left;
         d_mps[site + 1] = d_mps_new_right;
+
+        HIP_CHECK(hipFree(old_left));
+        HIP_CHECK(hipFree(old_right));
+        std::cout << " done" << std::endl;
+
+        std::cout << "[DBG SVD] Final sync..." << std::flush;
+        HIP_CHECK(hipDeviceSynchronize());  // Ensure pointers are valid
+        std::cout << " done" << std::endl;
 
         // Cleanup
         HIP_CHECK(hipFree(d_U));
