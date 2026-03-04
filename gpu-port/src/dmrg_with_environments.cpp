@@ -874,8 +874,23 @@ private:
         int D_L = bond_dims[site];
         int D_M = bond_dims[site + 1];  // Current bond dimension
         int D_R = bond_dims[site + 2];
+        int psi_size = D_L * d * d * D_R;
 
         std::cout << "[DBG SVD] site=" << site << " D_L=" << D_L << " D_M=" << D_M << " D_R=" << D_R << std::endl;
+
+        // Validate theta for NaN/Inf before SVD
+        std::vector<Complex> h_theta(psi_size);
+        HIP_CHECK(hipMemcpy(h_theta.data(), d_theta, psi_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        int num_nan = 0, num_inf = 0;
+        for (const auto& z : h_theta) {
+            if (std::isnan(z.x) || std::isnan(z.y)) num_nan++;
+            if (std::isinf(z.x) || std::isinf(z.y)) num_inf++;
+        }
+        std::cout << "[DBG SVD] theta validation: NaN=" << num_nan << " Inf=" << num_inf << " size=" << psi_size << std::endl;
+        if (num_nan > 0 || num_inf > 0) {
+            std::cerr << "ERROR: theta contains invalid values before SVD!" << std::endl;
+            exit(1);
+        }
 
         // Reshape theta: (D_L, d, d, D_R) -> (D_L*d, d*D_R) for SVD
         int m = D_L * d;
