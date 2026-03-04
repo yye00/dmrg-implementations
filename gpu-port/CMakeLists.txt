@@ -197,3 +197,18 @@ target_link_libraries(dmrg_working
     roc::rocblas
     roc::rocsolver
 )
+
+# DMRG with Full Environment Tensors (MPO-based)
+add_executable(dmrg_with_environments
+    src/dmrg_with_environments.cpp
+)
+set_source_files_properties(src/dmrg_with_environments.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(dmrg_with_environments PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(dmrg_with_environments
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+)
