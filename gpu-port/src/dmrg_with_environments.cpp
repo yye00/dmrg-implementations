@@ -882,19 +882,24 @@ private:
         int n = d * D_R;
         int k = std::min(m, n);
 
+        std::cout << "[DBG SVD] m=" << m << " n=" << n << " k=" << k << std::endl;
+
         Complex* d_U;
         Complex* d_Vt;
         double* d_S;
         double* d_E;
         int* d_info;
 
+        std::cout << "[DBG SVD] Allocating SVD workspace..." << std::flush;
         HIP_CHECK(hipMalloc(&d_U, m * k * sizeof(Complex)));      // Thin SVD: m x k
         HIP_CHECK(hipMalloc(&d_Vt, k * n * sizeof(Complex)));     // Thin SVD: k x n
         HIP_CHECK(hipMalloc(&d_S, k * sizeof(double)));
         HIP_CHECK(hipMalloc(&d_E, k * sizeof(double)));
         HIP_CHECK(hipMalloc(&d_info, sizeof(int)));
+        std::cout << " done" << std::endl;
 
         // SVD: theta = U * S * Vt
+        std::cout << "[DBG SVD] Calling rocsolver_zgesvd..." << std::flush;
         rocsolver_zgesvd(rb_handle,
                        rocblas_svect_singular,   // Compute U
                        rocblas_svect_singular,   // Compute Vt
@@ -904,20 +909,26 @@ private:
                        (rocblas_double_complex*)d_U, m,
                        (rocblas_double_complex*)d_Vt, n,
                        d_E, rocblas_outofplace, d_info);
+        std::cout << " done" << std::endl;
 
         // CRITICAL FIX: Keep bond dimension FIXED to avoid breaking environments
         // Use current bond dimension, don't change it
         int D_new = D_M;  // Keep same bond dimension (was: std::min(max_D, k))
+        std::cout << "[DBG SVD] D_new=" << D_new << std::endl;
 
         // Get singular values
+        std::cout << "[DBG SVD] Copying singular values..." << std::flush;
         std::vector<double> h_S(std::min(D_new, k));
         HIP_CHECK(hipMemcpy(h_S.data(), d_S, std::min(D_new, k) * sizeof(double), hipMemcpyDeviceToHost));
+        std::cout << " done" << std::endl;
 
         // Create new left tensor: (D_L, d, D_new) = reshape(U[:, :D_new] * sqrt(S))
+        std::cout << "[DBG SVD] Creating new left MPS..." << std::flush;
         Complex* d_mps_new_left;
         int left_size = D_L * d * D_new;
         HIP_CHECK(hipMalloc(&d_mps_new_left, left_size * sizeof(Complex)));
         HIP_CHECK(hipMemset(d_mps_new_left, 0, left_size * sizeof(Complex)));  // Initialize to zero
+        std::cout << " allocated" << std::endl;
 
         // U is (m, k) = (D_L*d, k), need first D_new columns scaled by sqrt(S)
         Complex alpha = make_complex(1.0, 0.0);
@@ -925,6 +936,7 @@ private:
 
         // Copy U[:, :min(D_new,k)] and scale each column by sqrt(S[col])
         int num_sv = std::min(D_new, k);
+        std::cout << "[DBG SVD] Extracting U columns (num_sv=" << num_sv << ")..." << std::flush;
         for (int col = 0; col < num_sv; col++) {
             double sqrt_s = std::sqrt(std::max(h_S[col], 0.0));
             Complex scale = make_complex(sqrt_s, 0.0);
@@ -934,19 +946,23 @@ private:
             rocblas_zscal(rb_handle, m, (rocblas_double_complex*)&scale,
                          (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
         }
+        std::cout << " done" << std::endl;
         // Columns beyond num_sv are already zero from memset
 
         // Create new right tensor: (D_new, d, D_R) = reshape(sqrt(S) * Vt[:D_new, :])
+        std::cout << "[DBG SVD] Creating new right MPS..." << std::flush;
         Complex* d_mps_new_right;
         int right_size = D_new * d * D_R;
         HIP_CHECK(hipMalloc(&d_mps_new_right, right_size * sizeof(Complex)));
         HIP_CHECK(hipMemset(d_mps_new_right, 0, right_size * sizeof(Complex)));  // Initialize to zero
+        std::cout << " allocated" << std::endl;
 
         // Vt is (k, n) = (k, d*D_R), need first D_new rows scaled by sqrt(S)
         // Note: rocsolver stores Vt in row-major within column-major, so row i starts at Vt + i
         // But actually Vt is (k, n) in column-major, so element Vt[i,j] is at Vt[i + j*k]
         // We need row i, which means Vt[i, :] = Vt[i::k] with stride k
 
+        std::cout << "[DBG SVD] Extracting Vt rows (num_sv=" << num_sv << ", n=" << n << ", k=" << k << ")..." << std::flush;
         for (int row = 0; row < num_sv; row++) {
             double sqrt_s = std::sqrt(std::max(h_S[row], 0.0));
             Complex scale = make_complex(sqrt_s, 0.0);
@@ -958,6 +974,7 @@ private:
             rocblas_zscal(rb_handle, n, (rocblas_double_complex*)&scale,
                          (rocblas_double_complex*)(d_mps_new_right + row), D_new);  // Stride D_new
         }
+        std::cout << " done" << std::endl;
         // Rows beyond num_sv are already zero from memset
 
         // Keep bond dimension FIXED (don't update it - prevents environment mismatch)
