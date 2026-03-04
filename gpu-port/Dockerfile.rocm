@@ -1,0 +1,74 @@
+# PDMRG GPU Port - ROCm Docker Environment
+# Base: Official ROCm development image with all libraries
+
+FROM rocm/dev-ubuntu-22.04:6.0
+
+LABEL description="PDMRG GPU development environment for AMD MI300X"
+LABEL maintainer="dmrg-implementations"
+
+# Avoid interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    cmake \
+    git \
+    wget \
+    curl \
+    vim \
+    python3 \
+    python3-pip \
+    libeigen3-dev \
+    libopenmpi-dev \
+    openmpi-bin \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install ROCm development libraries
+# (Many are pre-installed in rocm/dev image, but explicitly list for clarity)
+RUN apt-get update && apt-get install -y \
+    rocm-dev \
+    rocm-libs \
+    hip-dev \
+    hipblas \
+    hipblas-dev \
+    rocsolver \
+    rocsolver-dev \
+    rocblas \
+    rocblas-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install hipTensor (may need to check availability in ROCm 6.0 repos)
+# If not available via apt, will need to build from source or use different ROCm version
+RUN apt-get update && apt-get install -y hiptensor || \
+    echo "WARNING: hipTensor not available via apt - may need manual installation"
+
+# Set environment variables
+ENV ROCM_PATH=/opt/rocm
+ENV PATH="${ROCM_PATH}/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${ROCM_PATH}/lib:${ROCM_PATH}/lib64:${LD_LIBRARY_PATH}"
+ENV HIP_PLATFORM=amd
+ENV HIP_VISIBLE_DEVICES=0
+
+# Verify installation
+RUN rocminfo && \
+    hipcc --version && \
+    mpirun --version
+
+# Create workspace
+WORKDIR /workspace
+
+# Copy diagnostic script
+COPY gpu-port/diagnostic.sh /workspace/diagnostic.sh
+RUN chmod +x /workspace/diagnostic.sh
+
+# Copy project files (when building with context)
+# COPY . /workspace/pdmrg-gpu
+
+# Default command
+CMD ["/bin/bash"]
+
+# Usage:
+# Build: docker build -f gpu-port/Dockerfile.rocm -t pdmrg-gpu:rocm6 .
+# Run:   docker run -it --device=/dev/kfd --device=/dev/dri --group-add video \
+#        -v $(pwd):/workspace pdmrg-gpu:rocm6
