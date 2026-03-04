@@ -24,7 +24,10 @@ inline Complex from_hip_complex(const hipDoubleComplex& c) {
 }
 #endif  // __HIP_PLATFORM_AMD__
 
-// Tensor type (CPU)
+// Tensor types (CPU)
+template<typename T>
+using Tensor5D = std::vector<std::vector<std::vector<std::vector<std::vector<T>>>>>;
+
 template<typename T>
 using Tensor4D = std::vector<std::vector<std::vector<std::vector<T>>>>;
 

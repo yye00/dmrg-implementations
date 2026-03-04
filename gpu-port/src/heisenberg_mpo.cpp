@@ -2,13 +2,13 @@
 #include <cmath>
 #include <iostream>
 
-Tensor4D<Complex> build_heisenberg_mpo(int L) {
-    // MPO tensor dimensions: [left_bond, phys_in, phys_out, right_bond]
+Tensor5D<Complex> build_heisenberg_mpo(int L) {
+    // MPO tensor dimensions: [site][left_bond][phys_in][phys_out][right_bond]
     // Bond dimension = 5 for Heisenberg nearest-neighbor
     const int d = 2;  // physical dimension (spin-1/2)
     const int D_mpo = 5;  // MPO bond dimension
 
-    Tensor4D<Complex> mpo(L);
+    Tensor5D<Complex> mpo(L);
 
     // Pauli matrices
     Tensor2D<Complex> sx = {{0, 1}, {1, 0}};
