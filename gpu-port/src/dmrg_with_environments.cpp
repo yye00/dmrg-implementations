@@ -313,20 +313,31 @@ public:
         }
         HIP_CHECK(hipMalloc(&d_left_env[site + 1], env_out_size * sizeof(Complex)));
 
-        // Step 1: temp1 = einsum("awa,asb->wasb", L, A)
-        // L[a,w,a*] with modes [0,1,2], A[a,s,b] with modes [0,3,4]
-        // Result: temp1[w,a*,s,b] with modes [1,2,3,4]
+        // Step 1: temp1[w,a*,s,b] = sum_a L[a,w,a*] * A[a,s,b]  (contract over a)
+        //
+        // hipTensor uses col-major convention: extents listed fastest-stride first.
+        // C row-major L[a,w,a*]: strides a*=1, w=Da, a=Dw*Da -> col-major extents {Da,Dw,Da}
+        // C row-major A[a,s,b]:  strides b=1, s=Db, a=d*Db   -> col-major extents {Db,d,Da}
+        // C row-major temp1[w,a*,s,b]: strides b=1, s=Db, a*=d*Db, w=Da*d*Db
+        //   -> col-major extents {Db, d, Da, Dw}
+        //
+        // Mode labels: a=0, w=1, astar=2, s=3, b=4
+        // L  col-major order (a*,w,a):      modes {2, 1, 0}
+        // A  col-major order (b,s,a):        modes {4, 3, 0}
+        // temp1 col-major order (b,s,a*,w):  modes {4, 3, 2, 1}
+        // Contract over mode 0 (a).
+
         Complex* d_temp1;
         int temp1_size = Dw * Da * d * Db;
         HIP_CHECK(hipMalloc(&d_temp1, temp1_size * sizeof(Complex)));
 
         {
             int64_t extentL[] = {Da, Dw, Da};
-            int64_t extentA[] = {Da, d, Db};
-            int64_t extent_temp1[] = {Dw, Da, d, Db};
-            int32_t modesL[] = {0, 1, 2};
-            int32_t modesA[] = {0, 3, 4};
-            int32_t modes_temp1[] = {1, 2, 3, 4};
+            int64_t extentA[] = {Db, d, Da};
+            int64_t extent_temp1[] = {Db, d, Da, Dw};
+            int32_t modesL[] = {2, 1, 0};
+            int32_t modesA[] = {4, 3, 0};
+            int32_t modes_temp1[] = {4, 3, 2, 1};
 
             hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
             hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
@@ -338,20 +349,30 @@ public:
                 alpha, beta, 0);
         }
 
-        // Step 2: temp2 = einsum("wasb,wsxw->axbw", temp1, W)
-        // temp1[w,a*,s,b] with modes [0,1,2,3], W[w,s,x,w'] with modes [0,2,4,5]
-        // Result: temp2[a*,x,b,w'] with modes [1,4,3,5]  (reorder to [a*,s',b,w'])
+        // Step 2: temp2[a*,s',b,w'] = sum_{w,s} temp1[w,a*,s,b] * W[w,s,s',w']
+        //
+        // C row-major W[w,s,sp,wp]: strides wp=1, sp=Dwp, s=d*Dwp, w=d*d*Dwp
+        //   -> col-major extents {Dwp, d, d, Dw}
+        // C row-major temp2[a*,sp,b,wp]: strides wp=1, b=Dwp, sp=Db*Dwp, a*=d*Db*Dwp
+        //   -> col-major extents {Dwp, Db, d, Da}
+        //
+        // Mode labels: (reusing 0-4 from step 1) sp=5, wp=6
+        // temp1 col-major (b,s,a*,w):       modes {4, 3, 2, 1}
+        // W     col-major (wp,sp,s,w):       modes {6, 5, 3, 1}
+        // temp2 col-major (wp,b,sp,a*):      modes {6, 4, 5, 2}
+        // Contract over modes 1(w) and 3(s).
+
         Complex* d_temp2;
         int temp2_size = Da * d * Db * Dwp;
         HIP_CHECK(hipMalloc(&d_temp2, temp2_size * sizeof(Complex)));
 
         {
-            int64_t extent_temp1[] = {Dw, Da, d, Db};
-            int64_t extentW[] = {Dw, d, d, Dwp};
-            int64_t extent_temp2[] = {Da, d, Db, Dwp};
-            int32_t modes_temp1[] = {0, 1, 2, 3};
-            int32_t modesW[] = {0, 2, 4, 5};
-            int32_t modes_temp2[] = {1, 4, 3, 5};
+            int64_t extent_temp1[] = {Db, d, Da, Dw};
+            int64_t extentW[] = {Dwp, d, d, Dw};
+            int64_t extent_temp2[] = {Dwp, Db, d, Da};
+            int32_t modes_temp1[] = {4, 3, 2, 1};
+            int32_t modesW[] = {6, 5, 3, 1};
+            int32_t modes_temp2[] = {6, 4, 5, 2};
 
             hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
             hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
@@ -365,16 +386,25 @@ public:
 
         HIP_CHECK(hipFree(d_temp1));
 
-        // Step 3: L_new = einsum("axbw,axc->bwc", temp2, conj(A))
-        // temp2[a*,s',b,w'] with modes [0,1,2,3], conj(A[a*,s',b*]) with modes [0,1,4]
-        // Result: L_new[b,w',b*] with modes [2,3,4]
+        // Step 3: L_new[b,wp,b*] = sum_{a*,s'} temp2[a*,s',b,w'] * conj(A[a*,s',b*])
+        //
+        // C row-major L_new[b,wp,b*]: strides b*=1, wp=Db, b=Dwp*Db
+        //   -> col-major extents {Db, Dwp, Db}
+        // conj(A[a*,sp,b*]): same layout as A -> col-major extents {Db, d, Da}
+        //
+        // Mode labels: bstar=7
+        // temp2 col-major (wp,b,sp,a*):      modes {6, 4, 5, 2}
+        // conjA col-major (b*,sp,a*):         modes {7, 5, 2}
+        // L_new col-major (b*,wp,b):          modes {7, 6, 4}
+        // Contract over modes 2(a*) and 5(sp).
+
         {
-            int64_t extent_temp2[] = {Da, d, Db, Dwp};
-            int64_t extentA[] = {Da, d, Db};
+            int64_t extent_temp2[] = {Dwp, Db, d, Da};
+            int64_t extentA[] = {Db, d, Da};
             int64_t extent_Lnew[] = {Db, Dwp, Db};
-            int32_t modes_temp2[] = {0, 1, 2, 3};
-            int32_t modesA_conj[] = {0, 1, 4};
-            int32_t modes_Lnew[] = {2, 3, 4};
+            int32_t modes_temp2[] = {6, 4, 5, 2};
+            int32_t modesA_conj[] = {7, 5, 2};
+            int32_t modes_Lnew[] = {7, 6, 4};
 
             hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
             hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
@@ -419,20 +449,31 @@ public:
         }
         HIP_CHECK(hipMalloc(&d_right_env[site], env_out_size * sizeof(Complex)));
 
-        // Step 1: temp1 = einsum("asb,bwd->aswd", A, R)
-        // A[a,s,b] with modes [0,1,2], R[b,w',d] with modes [2,3,4]
-        // Result: temp1[a,s,w',d] with modes [0,1,3,4]
+        // Step 1: temp1[a,s,wp,b*] = sum_b A[a,s,b] * R[b,wp,b*]  (contract over b)
+        //
+        // hipTensor col-major convention: extents listed fastest-stride first.
+        // C row-major A[a,s,b]: strides b=1, s=Db, a=d*Db -> col-major extents {Db,d,Da}
+        // C row-major R[b,wp,b*]: strides b*=1, wp=Db, b=Dwp*Db -> col-major extents {Db,Dwp,Db}
+        // C row-major temp1[a,s,wp,b*]: strides b*=1, wp=Db, s=Dwp*Db, a=d*Dwp*Db
+        //   -> col-major extents {Db, Dwp, d, Da}
+        //
+        // Mode labels: a=0, s=1, b=2, wp=3, bstar=4
+        // A     col-major (b,s,a):          modes {2, 1, 0}
+        // R     col-major (b*,wp,b):        modes {4, 3, 2}
+        // temp1 col-major (b*,wp,s,a):      modes {4, 3, 1, 0}
+        // Contract over mode 2 (b).
+
         Complex* d_temp1;
         int temp1_size = Da * d * Dwp * Db;
         HIP_CHECK(hipMalloc(&d_temp1, temp1_size * sizeof(Complex)));
 
         {
-            int64_t extentA[] = {Da, d, Db};
+            int64_t extentA[] = {Db, d, Da};
             int64_t extentR[] = {Db, Dwp, Db};
-            int64_t extent_temp1[] = {Da, d, Dwp, Db};
-            int32_t modesA[] = {0, 1, 2};
-            int32_t modesR[] = {2, 3, 4};
-            int32_t modes_temp1[] = {0, 1, 3, 4};
+            int64_t extent_temp1[] = {Db, Dwp, d, Da};
+            int32_t modesA[] = {2, 1, 0};
+            int32_t modesR[] = {4, 3, 2};
+            int32_t modes_temp1[] = {4, 3, 1, 0};
 
             hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
             hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
@@ -444,20 +485,30 @@ public:
                 alpha, beta, 0);
         }
 
-        // Step 2: temp2 = einsum("aswd,wsxw->awxd", temp1, W)
-        // temp1[a,s,w',d] with modes [0,1,2,3], W[w,s,s',w'] with modes [4,1,5,2]
-        // Result: temp2[a,w,s',d] with modes [0,4,5,3]
+        // Step 2: temp2[a,w,sp,b*] = sum_{s,wp} temp1[a,s,wp,b*] * W[w,s,sp,wp]
+        //
+        // C row-major W[w,s,sp,wp]: strides wp=1, sp=Dwp, s=d*Dwp, w=d*d*Dwp
+        //   -> col-major extents {Dwp, d, d, Dw}
+        // C row-major temp2[a,w,sp,b*]: strides b*=1, sp=Db, w=d*Db, a=Dw*d*Db
+        //   -> col-major extents {Db, d, Dw, Da}
+        //
+        // Mode labels: (reusing 0-4) w=5, sp=6
+        // temp1 col-major (b*,wp,s,a):      modes {4, 3, 1, 0}
+        // W     col-major (wp,sp,s,w):       modes {3, 6, 1, 5}
+        // temp2 col-major (b*,sp,w,a):       modes {4, 6, 5, 0}
+        // Contract over modes 1(s) and 3(wp).
+
         Complex* d_temp2;
         int temp2_size = Da * Dw * d * Db;
         HIP_CHECK(hipMalloc(&d_temp2, temp2_size * sizeof(Complex)));
 
         {
-            int64_t extent_temp1[] = {Da, d, Dwp, Db};
-            int64_t extentW[] = {Dw, d, d, Dwp};
-            int64_t extent_temp2[] = {Da, Dw, d, Db};
-            int32_t modes_temp1[] = {0, 1, 2, 3};
-            int32_t modesW[] = {4, 1, 5, 2};
-            int32_t modes_temp2[] = {0, 4, 5, 3};
+            int64_t extent_temp1[] = {Db, Dwp, d, Da};
+            int64_t extentW[] = {Dwp, d, d, Dw};
+            int64_t extent_temp2[] = {Db, d, Dw, Da};
+            int32_t modes_temp1[] = {4, 3, 1, 0};
+            int32_t modesW[] = {3, 6, 1, 5};
+            int32_t modes_temp2[] = {4, 6, 5, 0};
 
             hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
             hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
@@ -471,16 +522,25 @@ public:
 
         HIP_CHECK(hipFree(d_temp1));
 
-        // Step 3: R_new = einsum("awxd,cxd->awc", temp2, conj(A))
-        // temp2[a,w,s',d] with modes [0,1,2,3], conj(A[c,s',d]) with modes [4,2,3]
-        // Result: R_new[a,w,c] with modes [0,1,4]
+        // Step 3: R_new[a,w,a*] = sum_{sp,b*} temp2[a,w,sp,b*] * conj(A[a*,sp,b*])
+        //
+        // C row-major R_new[a,w,a*]: strides a*=1, w=Da, a=Dw*Da
+        //   -> col-major extents {Da, Dw, Da}
+        // conj(A[a*,sp,b*]): same layout as A -> col-major extents {Db, d, Da}
+        //
+        // Mode labels: astar=7
+        // temp2 col-major (b*,sp,w,a):       modes {4, 6, 5, 0}
+        // conjA col-major (b*,sp,a*):         modes {4, 6, 7}
+        // R_new col-major (a*,w,a):           modes {7, 5, 0}
+        // Contract over modes 4(b*) and 6(sp).
+
         {
-            int64_t extent_temp2[] = {Da, Dw, d, Db};
-            int64_t extentA[] = {Da, d, Db};
+            int64_t extent_temp2[] = {Db, d, Dw, Da};
+            int64_t extentA[] = {Db, d, Da};
             int64_t extent_Rnew[] = {Da, Dw, Da};
-            int32_t modes_temp2[] = {0, 1, 2, 3};
-            int32_t modesA_conj[] = {4, 2, 3};
-            int32_t modes_Rnew[] = {0, 1, 4};
+            int32_t modes_temp2[] = {4, 6, 5, 0};
+            int32_t modesA_conj[] = {4, 6, 7};
+            int32_t modes_Rnew[] = {7, 5, 0};
 
             hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
             hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
