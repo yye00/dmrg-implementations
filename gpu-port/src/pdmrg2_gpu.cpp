@@ -378,7 +378,103 @@ public:
 };
 
 // ============================================================================
-// Environment Tensors on GPU (hipTensor contractions)
+// GPU Kernels for Environment Tensor Contractions
+// ============================================================================
+
+// Left env update: L_new[b, wp, bstar] = sum_{a,astar,w,s,sp}
+//   L[a,w,astar] * A[a,s,b] * W[w,s,sp,wp] * conj(A[astar,sp,bstar])
+__global__ void kernel_update_left_env(
+    const Complex* __restrict__ L_in,
+    const Complex* __restrict__ A,
+    const Complex* __restrict__ W,
+    Complex* __restrict__ L_out,
+    int Da, int Db, int Dw, int Dwp, int d)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = Db * Dwp * Db;
+    if (idx >= total) return;
+
+    int bstar = idx % Db;
+    int wp    = (idx / Db) % Dwp;
+    int b     = idx / (Dwp * Db);
+
+    double sum_re = 0.0, sum_im = 0.0;
+
+    for (int a = 0; a < Da; a++) {
+        for (int s = 0; s < d; s++) {
+            Complex Av = A[a * (d * Db) + s * Db + b];
+            for (int w = 0; w < Dw; w++) {
+                for (int sp = 0; sp < d; sp++) {
+                    Complex Wv = W[w * (d * d * Dwp) + s * (d * Dwp) + sp * Dwp + wp];
+                    double aw_re = Av.x * Wv.x - Av.y * Wv.y;
+                    double aw_im = Av.x * Wv.y + Av.y * Wv.x;
+
+                    for (int astar = 0; astar < Da; astar++) {
+                        Complex Lv = L_in[a * (Dw * Da) + w * Da + astar];
+                        Complex Ac = A[astar * (d * Db) + sp * Db + bstar];
+
+                        double law_re = Lv.x * aw_re - Lv.y * aw_im;
+                        double law_im = Lv.x * aw_im + Lv.y * aw_re;
+
+                        sum_re += law_re * Ac.x + law_im * Ac.y;
+                        sum_im += law_im * Ac.x - law_re * Ac.y;
+                    }
+                }
+            }
+        }
+    }
+
+    L_out[b * (Dwp * Db) + wp * Db + bstar] = make_complex(sum_re, sum_im);
+}
+
+// Right env update: R_new[a, w, astar] = sum_{b,bstar,wp,s,sp}
+//   A[a,s,b] * W[w,s,sp,wp] * R[b,wp,bstar] * conj(A[astar,sp,bstar])
+__global__ void kernel_update_right_env(
+    const Complex* __restrict__ R_in,
+    const Complex* __restrict__ A,
+    const Complex* __restrict__ W,
+    Complex* __restrict__ R_out,
+    int Da, int Db, int Dw, int Dwp, int d)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = Da * Dw * Da;
+    if (idx >= total) return;
+
+    int astar = idx % Da;
+    int w     = (idx / Da) % Dw;
+    int a     = idx / (Dw * Da);
+
+    double sum_re = 0.0, sum_im = 0.0;
+
+    for (int b = 0; b < Db; b++) {
+        for (int s = 0; s < d; s++) {
+            Complex Av = A[a * (d * Db) + s * Db + b];
+            for (int sp = 0; sp < d; sp++) {
+                for (int wp = 0; wp < Dwp; wp++) {
+                    Complex Wv = W[w * (d * d * Dwp) + s * (d * Dwp) + sp * Dwp + wp];
+                    double aw_re = Av.x * Wv.x - Av.y * Wv.y;
+                    double aw_im = Av.x * Wv.y + Av.y * Wv.x;
+
+                    for (int bstar = 0; bstar < Db; bstar++) {
+                        Complex Rv = R_in[b * (Dwp * Db) + wp * Db + bstar];
+                        Complex Ac = A[astar * (d * Db) + sp * Db + bstar];
+
+                        double awr_re = aw_re * Rv.x - aw_im * Rv.y;
+                        double awr_im = aw_re * Rv.y + aw_im * Rv.x;
+
+                        sum_re += awr_re * Ac.x + awr_im * Ac.y;
+                        sum_im += awr_im * Ac.x - awr_re * Ac.y;
+                    }
+                }
+            }
+        }
+    }
+
+    R_out[a * (Dw * Da) + w * Da + astar] = make_complex(sum_re, sum_im);
+}
+
+// ============================================================================
+// Environment Tensors on GPU
 // ============================================================================
 
 class Environments {
@@ -423,7 +519,7 @@ public:
         }
     }
 
-    // CPU-based left environment update for correctness with complex models
+    // GPU kernel-based left environment update (no CPU transfers)
     void update_left_env(int site, const std::vector<Complex*>& d_mps, MPOBase& mpo) {
         int Da  = mps_dims[site];
         int Db  = mps_dims[site + 1];
@@ -436,53 +532,19 @@ public:
             d_left_env[site + 1] = nullptr;
         }
 
-        int L_size = Da * Dw * Da;
-        int A_size = Da * d * Db;
-        int W_size = Dw * d * d * Dwp;
-
-        std::vector<Complex> hL(L_size), hA(A_size), hW(W_size);
-        HIP_CHECK(hipMemcpy(hL.data(), d_left_env[site], L_size * sizeof(Complex), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(hA.data(), d_mps[site], A_size * sizeof(Complex), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(hW.data(), mpo.get_mpo(site), W_size * sizeof(Complex), hipMemcpyDeviceToHost));
-
-        std::vector<Complex> hL_new(env_out_size, make_complex(0.0, 0.0));
-
-        for (int b = 0; b < Db; b++)
-            for (int wp = 0; wp < Dwp; wp++)
-                for (int bstar = 0; bstar < Db; bstar++) {
-                    Complex sum = make_complex(0.0, 0.0);
-                    for (int a = 0; a < Da; a++)
-                        for (int astar = 0; astar < Da; astar++)
-                            for (int w = 0; w < Dw; w++)
-                                for (int s = 0; s < d; s++)
-                                    for (int sp = 0; sp < d; sp++) {
-                                        Complex Lv = hL[a * (Dw * Da) + w * Da + astar];
-                                        Complex Av = hA[a * (d * Db) + s * Db + b];
-                                        Complex Wv = hW[w * (d * d * Dwp) + s * (d * Dwp) + sp * Dwp + wp];
-                                        Complex Ac = hA[astar * (d * Db) + sp * Db + bstar];
-                                        Ac.y = -Ac.y;
-
-                                        Complex p;
-                                        p.x = Lv.x * Av.x - Lv.y * Av.y;
-                                        p.y = Lv.x * Av.y + Lv.y * Av.x;
-                                        Complex q;
-                                        q.x = p.x * Wv.x - p.y * Wv.y;
-                                        q.y = p.x * Wv.y + p.y * Wv.x;
-                                        Complex r;
-                                        r.x = q.x * Ac.x - q.y * Ac.y;
-                                        r.y = q.x * Ac.y + q.y * Ac.x;
-
-                                        sum.x += r.x;
-                                        sum.y += r.y;
-                                    }
-                    hL_new[b * (Dwp * Db) + wp * Db + bstar] = sum;
-                }
-
         HIP_CHECK(hipMalloc(&d_left_env[site + 1], env_out_size * sizeof(Complex)));
-        HIP_CHECK(hipMemcpy(d_left_env[site + 1], hL_new.data(), env_out_size * sizeof(Complex), hipMemcpyHostToDevice));
+
+        int block_size = 256;
+        int grid_size = (env_out_size + block_size - 1) / block_size;
+        hipLaunchKernelGGL(kernel_update_left_env, dim3(grid_size), dim3(block_size), 0, 0,
+            d_left_env[site], d_mps[site], mpo.get_mpo(site),
+            d_left_env[site + 1],
+            Da, Db, Dw, Dwp, d);
+        HIP_CHECK(hipGetLastError());
+        HIP_CHECK(hipDeviceSynchronize());
     }
 
-    // CPU-based right environment update for correctness with complex models
+    // GPU kernel-based right environment update (no CPU transfers)
     void update_right_env(int site, const std::vector<Complex*>& d_mps, MPOBase& mpo) {
         int Da  = mps_dims[site];
         int Db  = mps_dims[site + 1];
@@ -495,50 +557,16 @@ public:
             d_right_env[site] = nullptr;
         }
 
-        int R_size = Db * Dwp * Db;
-        int A_size = Da * d * Db;
-        int W_size = Dw * d * d * Dwp;
-
-        std::vector<Complex> hR(R_size), hA(A_size), hW(W_size);
-        HIP_CHECK(hipMemcpy(hR.data(), d_right_env[site + 1], R_size * sizeof(Complex), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(hA.data(), d_mps[site], A_size * sizeof(Complex), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(hW.data(), mpo.get_mpo(site), W_size * sizeof(Complex), hipMemcpyDeviceToHost));
-
-        std::vector<Complex> hR_new(env_out_size, make_complex(0.0, 0.0));
-
-        for (int a = 0; a < Da; a++)
-            for (int w = 0; w < Dw; w++)
-                for (int astar = 0; astar < Da; astar++) {
-                    Complex sum = make_complex(0.0, 0.0);
-                    for (int b = 0; b < Db; b++)
-                        for (int bstar = 0; bstar < Db; bstar++)
-                            for (int wp = 0; wp < Dwp; wp++)
-                                for (int s = 0; s < d; s++)
-                                    for (int sp = 0; sp < d; sp++) {
-                                        Complex Av = hA[a * (d * Db) + s * Db + b];
-                                        Complex Wv = hW[w * (d * d * Dwp) + s * (d * Dwp) + sp * Dwp + wp];
-                                        Complex Rv = hR[b * (Dwp * Db) + wp * Db + bstar];
-                                        Complex Ac = hA[astar * (d * Db) + sp * Db + bstar];
-                                        Ac.y = -Ac.y;
-
-                                        Complex p;
-                                        p.x = Av.x * Wv.x - Av.y * Wv.y;
-                                        p.y = Av.x * Wv.y + Av.y * Wv.x;
-                                        Complex q;
-                                        q.x = p.x * Rv.x - p.y * Rv.y;
-                                        q.y = p.x * Rv.y + p.y * Rv.x;
-                                        Complex r;
-                                        r.x = q.x * Ac.x - q.y * Ac.y;
-                                        r.y = q.x * Ac.y + q.y * Ac.x;
-
-                                        sum.x += r.x;
-                                        sum.y += r.y;
-                                    }
-                    hR_new[a * (Dw * Da) + w * Da + astar] = sum;
-                }
-
         HIP_CHECK(hipMalloc(&d_right_env[site], env_out_size * sizeof(Complex)));
-        HIP_CHECK(hipMemcpy(d_right_env[site], hR_new.data(), env_out_size * sizeof(Complex), hipMemcpyHostToDevice));
+
+        int block_size = 256;
+        int grid_size = (env_out_size + block_size - 1) / block_size;
+        hipLaunchKernelGGL(kernel_update_right_env, dim3(grid_size), dim3(block_size), 0, 0,
+            d_right_env[site + 1], d_mps[site], mpo.get_mpo(site),
+            d_right_env[site],
+            Da, Db, Dw, Dwp, d);
+        HIP_CHECK(hipGetLastError());
+        HIP_CHECK(hipDeviceSynchronize());
     }
 
     Complex* get_left(int site) { return d_left_env[site]; }
