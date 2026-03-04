@@ -4,9 +4,9 @@
 
 Tensor4D<Complex> build_heisenberg_mpo(int L) {
     // MPO tensor dimensions: [left_bond, phys_in, phys_out, right_bond]
-    // Bond dimension = 3 for Heisenberg
+    // Bond dimension = 5 for Heisenberg nearest-neighbor
     const int d = 2;  // physical dimension (spin-1/2)
-    const int D_mpo = 3;  // MPO bond dimension
+    const int D_mpo = 5;  // MPO bond dimension
 
     Tensor4D<Complex> mpo(L);
 
@@ -33,33 +33,46 @@ Tensor4D<Complex> build_heisenberg_mpo(int L) {
 
         // Fill MPO tensors (Heisenberg Hamiltonian: H = sum_i (X_i X_{i+1} + Y_i Y_{i+1} + Z_i Z_{i+1}))
         if (site == 0) {
-            // Left boundary: [1, d, d, 3]
+            // Left boundary: [1, d, d, 5]
+            // W[0] = [Sx, Sy, Sz, I, 0]
             for (int i = 0; i < d; i++) {
                 for (int j = 0; j < d; j++) {
-                    mpo[site][0][i][j][0] = sx[i][j];  // X term
-                    mpo[site][0][i][j][1] = sy[i][j];  // Y term
-                    mpo[site][0][i][j][2] = sz[i][j];  // Z term
+                    mpo[site][0][i][j][0] = sx[i][j];  // Send X
+                    mpo[site][0][i][j][1] = sy[i][j];  // Send Y
+                    mpo[site][0][i][j][2] = sz[i][j];  // Send Z
+                    mpo[site][0][i][j][3] = eye[i][j]; // Send I
+                    mpo[site][0][i][j][4] = Complex(0.0);
                 }
             }
         } else if (site == L-1) {
-            // Right boundary: [3, d, d, 1]
+            // Right boundary: [5, d, d, 1]
+            // W[L-1] = [I; Sx; Sy; Sz; 0]^T
             for (int i = 0; i < d; i++) {
                 for (int j = 0; j < d; j++) {
-                    mpo[site][0][i][j][0] = sx[i][j];  // Receive X
-                    mpo[site][1][i][j][0] = sy[i][j];  // Receive Y
-                    mpo[site][2][i][j][0] = sz[i][j];  // Receive Z
+                    mpo[site][0][i][j][0] = eye[i][j];  // Receive I
+                    mpo[site][1][i][j][0] = sx[i][j];   // Receive X
+                    mpo[site][2][i][j][0] = sy[i][j];   // Receive Y
+                    mpo[site][3][i][j][0] = sz[i][j];   // Receive Z
+                    mpo[site][4][i][j][0] = Complex(0.0);
                 }
             }
         } else {
-            // Bulk sites: [3, d, d, 3]
+            // Bulk sites: [5, d, d, 5]
+            // W = [[I,  0,  0,  0,  0 ],
+            //      [Sx, 0,  0,  0,  0 ],
+            //      [Sy, 0,  0,  0,  0 ],
+            //      [Sz, 0,  0,  0,  0 ],
+            //      [0,  Sx, Sy, Sz, I ]]
             for (int i = 0; i < d; i++) {
                 for (int j = 0; j < d; j++) {
-                    mpo[site][0][i][j][0] = eye[i][j];  // Identity
-                    mpo[site][0][i][j][1] = sx[i][j];   // Create X
-                    mpo[site][0][i][j][2] = sy[i][j];   // Create Y
-                    mpo[site][1][i][j][0] = sz[i][j];   // Create Z
-                    mpo[site][2][i][j][1] = sx[i][j];   // Receive X
-                    mpo[site][2][i][j][2] = sy[i][j];   // Receive Y
+                    mpo[site][0][i][j][0] = eye[i][j];  // (0,0): I
+                    mpo[site][1][i][j][0] = sx[i][j];   // (1,0): Sx
+                    mpo[site][2][i][j][0] = sy[i][j];   // (2,0): Sy
+                    mpo[site][3][i][j][0] = sz[i][j];   // (3,0): Sz
+                    mpo[site][4][i][j][1] = sx[i][j];   // (4,1): Sx
+                    mpo[site][4][i][j][2] = sy[i][j];   // (4,2): Sy
+                    mpo[site][4][i][j][3] = sz[i][j];   // (4,3): Sz
+                    mpo[site][4][i][j][4] = eye[i][j];  // (4,4): I
                 }
             }
         }
