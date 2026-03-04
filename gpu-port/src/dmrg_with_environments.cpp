@@ -868,6 +868,10 @@ private:
     }
 
     void update_mps_with_svd(int site, Complex* d_theta) {
+        // TEMPORARY: Disable SVD to debug memory access error
+        std::cout << "[DBG] SVD disabled - skipping MPS update" << std::endl;
+        return;
+
         // SVD to split optimized 2-site wavefunction back into MPS
         // Keep bond dimensions FIXED to maintain environment compatibility
 
