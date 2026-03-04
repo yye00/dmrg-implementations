@@ -394,7 +394,98 @@ private:
 
         double energy = solver.solve(apply_H, psi_size, d_theta);
 
+        // ============================================================
+        // SVD to update MPS: theta = U * S * V†
+        // ============================================================
+
+        // Reshape theta: (D_L, d, d, D_R) -> (D_L*d, d*D_R)
+        int m = D_L * d;
+        int n = d * D_R;
+        int k = std::min(m, n);
+
+        Complex* d_U;
+        Complex* d_Vt;
+        double* d_S;
+        double* d_E;  // Superdiagonal for ROCm 7.2
+        int* d_info;
+
+        HIP_CHECK(hipMalloc(&d_U, m * m * sizeof(Complex)));
+        HIP_CHECK(hipMalloc(&d_Vt, n * n * sizeof(Complex)));
+        HIP_CHECK(hipMalloc(&d_S, k * sizeof(double)));
+        HIP_CHECK(hipMalloc(&d_E, k * sizeof(double)));
+        HIP_CHECK(hipMalloc(&d_info, sizeof(int)));
+
+        // Perform SVD
+        rocsolver_zgesvd(rb_handle,
+                       rocblas_svect_singular,
+                       rocblas_svect_singular,
+                       m, n,
+                       (rocblas_double_complex*)d_theta, m,
+                       d_S,
+                       (rocblas_double_complex*)d_U, m,
+                       (rocblas_double_complex*)d_Vt, n,
+                       d_E,
+                       rocblas_outofplace,
+                       d_info);
+
+        // Truncate to bond dimension max_D
+        int D_new = std::min(max_D, k);
+
+        // Update MPS[site]: A[site] = U[:, :D_new] * sqrt(S[:D_new])
+        Complex* d_mps_new_left;
+        HIP_CHECK(hipMalloc(&d_mps_new_left, m * D_new * sizeof(Complex)));
+
+        // Copy U[:, :D_new] and multiply columns by sqrt(S)
+        std::vector<double> h_S(D_new);
+        HIP_CHECK(hipMemcpy(h_S.data(), d_S, D_new * sizeof(double), hipMemcpyDeviceToHost));
+
+        for (int col = 0; col < D_new; col++) {
+            HIP_CHECK(hipMemcpy(d_mps_new_left + col * m,
+                               d_U + col * m,
+                               m * sizeof(Complex),
+                               hipMemcpyDeviceToDevice));
+
+            double sqrt_s = std::sqrt(h_S[col]);
+            Complex scale = make_complex(sqrt_s, 0.0);
+            rocblas_zscal(rb_handle, m,
+                        (rocblas_double_complex*)&scale,
+                        (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
+        }
+
+        // Update MPS[site+1]: A[site+1] = sqrt(S[:D_new]) * V†[:D_new, :]
+        Complex* d_mps_new_right;
+        HIP_CHECK(hipMalloc(&d_mps_new_right, D_new * n * sizeof(Complex)));
+
+        for (int row = 0; row < D_new; row++) {
+            HIP_CHECK(hipMemcpy(d_mps_new_right + row * n,
+                               d_Vt + row * n,
+                               n * sizeof(Complex),
+                               hipMemcpyDeviceToDevice));
+
+            double sqrt_s = std::sqrt(h_S[row]);
+            Complex scale = make_complex(sqrt_s, 0.0);
+            rocblas_zscal(rb_handle, n,
+                        (rocblas_double_complex*)&scale,
+                        (rocblas_double_complex*)(d_mps_new_right + row * n), 1);
+        }
+
+        // Update bond dimension
+        bond_dims[site + 1] = D_new;
+
+        // Replace MPS tensors
+        HIP_CHECK(hipFree(d_mps[site]));
+        HIP_CHECK(hipFree(d_mps[site + 1]));
+        d_mps[site] = d_mps_new_left;
+        d_mps[site + 1] = d_mps_new_right;
+
+        // Cleanup
         HIP_CHECK(hipFree(d_theta));
+        HIP_CHECK(hipFree(d_U));
+        HIP_CHECK(hipFree(d_Vt));
+        HIP_CHECK(hipFree(d_S));
+        HIP_CHECK(hipFree(d_E));
+        HIP_CHECK(hipFree(d_info));
+
         return energy;
     }
 };
