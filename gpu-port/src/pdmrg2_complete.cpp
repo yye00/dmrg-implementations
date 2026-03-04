@@ -194,12 +194,14 @@ public:
                             b, (rocblas_double_complex*)d_S, b, d_evals,
                             d_E_heevd, d_info);
 
-            // Get lowest eigenvalue
+            // Get lowest eigenvalue of original H
+            // zheevd returns eigenvalues in ascending order
+            // We flipped H→-H, so largest eigenvalue of S corresponds to smallest of H
             double evals[b];
             HIP_CHECK(hipMemcpy(evals, d_evals, b * sizeof(double), hipMemcpyDeviceToHost));
-            energy = -evals[0];  // Flip sign back
+            energy = -evals[b-1];  // Largest eigenvalue of -H = minimum eigenvalue of H
 
-            // Update X with eigenvector: X = X * S[:,0]
+            // Update X with eigenvector corresponding to largest eigenvalue: X = X * S[:,b-1]
             Complex* d_X_new;
             HIP_CHECK(hipMalloc(&d_X_new, dim * sizeof(Complex)));
 
@@ -207,7 +209,7 @@ public:
                          dim, b,
                          (rocblas_double_complex*)&alpha,
                          (rocblas_double_complex*)d_X, dim,
-                         (rocblas_double_complex*)d_S, 1,
+                         (rocblas_double_complex*)(d_S + (b-1)*b), 1,  // Extract column b-1
                          (rocblas_double_complex*)&beta,
                          (rocblas_double_complex*)d_X_new, 1);
 
