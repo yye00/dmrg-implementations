@@ -291,6 +291,12 @@ public:
     //       L[a, w, astar] * A[a, s, b] * W[w, s, sp, wp] * conj(A[astar, sp, bstar])
     // -----------------------------------------------------------------------
     void update_left_env(int site, const std::vector<Complex*>& d_mps, HeisenbergMPO& mpo) {
+        // Full GPU contraction using hipTensor: L_new = L ⊗ A ⊗ W ⊗ conj(A)
+        // Decomposed into 3 sequential contractions:
+        // 1. temp1[w,a*,s,b] = L[a,w,a*] * A[a,s,b]  (contract over a)
+        // 2. temp2[a*,s',b,w'] = temp1[w,a*,s,b] * W[w,s,s',w']  (contract over w,s)
+        // 3. L_new[b,w',b*] = temp2[a*,s',b,w'] * conj(A[a*,s',b*])  (contract over a*,s')
+
         int Da  = mps_dims[site];
         int Db  = mps_dims[site + 1];
         int Dw  = mpo.get_left_dim(site);
@@ -306,59 +312,81 @@ public:
             d_left_env[site + 1] = nullptr;
         }
         HIP_CHECK(hipMalloc(&d_left_env[site + 1], env_out_size * sizeof(Complex)));
-        HIP_CHECK(hipMemset(d_left_env[site + 1], 0, env_out_size * sizeof(Complex)));
 
-        // Download all inputs to host for exact contraction
-        int L_size = Da * Dw * Da;
-        int A_size = Da * d * Db;
-        int W_size = Dw * d * d * Dwp;
+        // Step 1: temp1 = einsum("awa,asb->wasb", L, A)
+        // L[a,w,a*] with modes [0,1,2], A[a,s,b] with modes [0,3,4]
+        // Result: temp1[w,a*,s,b] with modes [1,2,3,4]
+        Complex* d_temp1;
+        int temp1_size = Dw * Da * d * Db;
+        HIP_CHECK(hipMalloc(&d_temp1, temp1_size * sizeof(Complex)));
 
-        std::vector<Complex> hL(L_size), hA(A_size), hW(W_size);
-        HIP_CHECK(hipMemcpy(hL.data(), d_L_in, L_size * sizeof(Complex), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(hA.data(), d_A, A_size * sizeof(Complex), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(hW.data(), d_W, W_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        {
+            int64_t extentL[] = {Da, Dw, Da};
+            int64_t extentA[] = {Da, d, Db};
+            int64_t extent_temp1[] = {Dw, Da, d, Db};
+            int32_t modesL[] = {0, 1, 2};
+            int32_t modesA[] = {0, 3, 4};
+            int32_t modes_temp1[] = {1, 2, 3, 4};
 
-        std::vector<Complex> hL_new(env_out_size, make_complex(0.0, 0.0));
+            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
+            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
 
-        for (int b = 0; b < Db; b++) {
-            for (int wp = 0; wp < Dwp; wp++) {
-                for (int bstar = 0; bstar < Db; bstar++) {
-                    Complex sum = make_complex(0.0, 0.0);
-                    for (int a = 0; a < Da; a++) {
-                        for (int astar = 0; astar < Da; astar++) {
-                            for (int w = 0; w < Dw; w++) {
-                                for (int s = 0; s < d; s++) {
-                                    for (int sp = 0; sp < d; sp++) {
-                                        Complex Lval = hL[a * (Dw * Da) + w * Da + astar];
-                                        Complex Aval = hA[a * (d * Db) + s * Db + b];
-                                        Complex Wval = hW[w * (d * d * Dwp) + s * (d * Dwp) + sp * Dwp + wp];
-                                        Complex Aconj = hA[astar * (d * Db) + sp * Db + bstar];
-                                        Aconj.y = -Aconj.y;
-
-                                        Complex p;
-                                        p.x = Lval.x * Aval.x - Lval.y * Aval.y;
-                                        p.y = Lval.x * Aval.y + Lval.y * Aval.x;
-                                        Complex q;
-                                        q.x = p.x * Wval.x - p.y * Wval.y;
-                                        q.y = p.x * Wval.y + p.y * Wval.x;
-                                        Complex r;
-                                        r.x = q.x * Aconj.x - q.y * Aconj.y;
-                                        r.y = q.x * Aconj.y + q.y * Aconj.x;
-
-                                        sum.x += r.x;
-                                        sum.y += r.y;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    hL_new[b * (Dwp * Db) + wp * Db + bstar] = sum;
-                }
-            }
+            ht_contractor->contract(
+                d_L_in, 3, extentL, modesL, HIPTENSOR_OP_IDENTITY,
+                d_A, 3, extentA, modesA, HIPTENSOR_OP_IDENTITY,
+                d_temp1, 4, extent_temp1, modes_temp1,
+                alpha, beta, 0);
         }
 
-        HIP_CHECK(hipMemcpy(d_left_env[site + 1], hL_new.data(),
-                            env_out_size * sizeof(Complex), hipMemcpyHostToDevice));
+        // Step 2: temp2 = einsum("wasb,wsxw->axbw", temp1, W)
+        // temp1[w,a*,s,b] with modes [0,1,2,3], W[w,s,x,w'] with modes [0,2,4,5]
+        // Result: temp2[a*,x,b,w'] with modes [1,4,3,5]  (reorder to [a*,s',b,w'])
+        Complex* d_temp2;
+        int temp2_size = Da * d * Db * Dwp;
+        HIP_CHECK(hipMalloc(&d_temp2, temp2_size * sizeof(Complex)));
+
+        {
+            int64_t extent_temp1[] = {Dw, Da, d, Db};
+            int64_t extentW[] = {Dw, d, d, Dwp};
+            int64_t extent_temp2[] = {Da, d, Db, Dwp};
+            int32_t modes_temp1[] = {0, 1, 2, 3};
+            int32_t modesW[] = {0, 2, 4, 5};
+            int32_t modes_temp2[] = {1, 4, 3, 5};
+
+            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
+            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
+
+            ht_contractor->contract(
+                d_temp1, 4, extent_temp1, modes_temp1, HIPTENSOR_OP_IDENTITY,
+                d_W, 4, extentW, modesW, HIPTENSOR_OP_IDENTITY,
+                d_temp2, 4, extent_temp2, modes_temp2,
+                alpha, beta, 0);
+        }
+
+        HIP_CHECK(hipFree(d_temp1));
+
+        // Step 3: L_new = einsum("axbw,axc->bwc", temp2, conj(A))
+        // temp2[a*,s',b,w'] with modes [0,1,2,3], conj(A[a*,s',b*]) with modes [0,1,4]
+        // Result: L_new[b,w',b*] with modes [2,3,4]
+        {
+            int64_t extent_temp2[] = {Da, d, Db, Dwp};
+            int64_t extentA[] = {Da, d, Db};
+            int64_t extent_Lnew[] = {Db, Dwp, Db};
+            int32_t modes_temp2[] = {0, 1, 2, 3};
+            int32_t modesA_conj[] = {0, 1, 4};
+            int32_t modes_Lnew[] = {2, 3, 4};
+
+            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
+            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
+
+            ht_contractor->contract(
+                d_temp2, 4, extent_temp2, modes_temp2, HIPTENSOR_OP_IDENTITY,
+                d_A, 3, extentA, modesA_conj, HIPTENSOR_OP_CONJ,
+                d_left_env[site + 1], 3, extent_Lnew, modes_Lnew,
+                alpha, beta, 0);
+        }
+
+        HIP_CHECK(hipFree(d_temp2));
     }
 
     // -----------------------------------------------------------------------
@@ -369,6 +397,12 @@ public:
     //       A[a, s, b] * W[w, s, sp, wp] * conj(A[astar, sp, bstar]) * R[b, wp, bstar]
     // -----------------------------------------------------------------------
     void update_right_env(int site, const std::vector<Complex*>& d_mps, HeisenbergMPO& mpo) {
+        // Full GPU contraction using hipTensor: R_new = A ⊗ W ⊗ conj(A) ⊗ R
+        // Decomposed into 3 sequential contractions:
+        // 1. temp1[a,s,w',d] = A[a,s,b] * R[b,w',d]  (contract over b)
+        // 2. temp2[a,w,s',d] = temp1[a,s,w',d] * W[w,s,s',w']  (contract over s,w')
+        // 3. R_new[a,w,c] = temp2[a,w,s',d] * conj(A[c,s',d])  (contract over s',d)
+
         int Da  = mps_dims[site];
         int Db  = mps_dims[site + 1];
         int Dw  = mpo.get_left_dim(site);
@@ -384,58 +418,81 @@ public:
             d_right_env[site] = nullptr;
         }
         HIP_CHECK(hipMalloc(&d_right_env[site], env_out_size * sizeof(Complex)));
-        HIP_CHECK(hipMemset(d_right_env[site], 0, env_out_size * sizeof(Complex)));
 
-        int R_size = Db * Dwp * Db;
-        int A_size = Da * d * Db;
-        int W_size = Dw * d * d * Dwp;
+        // Step 1: temp1 = einsum("asb,bwd->aswd", A, R)
+        // A[a,s,b] with modes [0,1,2], R[b,w',d] with modes [2,3,4]
+        // Result: temp1[a,s,w',d] with modes [0,1,3,4]
+        Complex* d_temp1;
+        int temp1_size = Da * d * Dwp * Db;
+        HIP_CHECK(hipMalloc(&d_temp1, temp1_size * sizeof(Complex)));
 
-        std::vector<Complex> hR(R_size), hA(A_size), hW(W_size);
-        HIP_CHECK(hipMemcpy(hR.data(), d_R_in, R_size * sizeof(Complex), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(hA.data(), d_A, A_size * sizeof(Complex), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(hW.data(), d_W, W_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        {
+            int64_t extentA[] = {Da, d, Db};
+            int64_t extentR[] = {Db, Dwp, Db};
+            int64_t extent_temp1[] = {Da, d, Dwp, Db};
+            int32_t modesA[] = {0, 1, 2};
+            int32_t modesR[] = {2, 3, 4};
+            int32_t modes_temp1[] = {0, 1, 3, 4};
 
-        std::vector<Complex> hR_new(env_out_size, make_complex(0.0, 0.0));
+            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
+            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
 
-        for (int a = 0; a < Da; a++) {
-            for (int w = 0; w < Dw; w++) {
-                for (int astar = 0; astar < Da; astar++) {
-                    Complex sum = make_complex(0.0, 0.0);
-                    for (int b = 0; b < Db; b++) {
-                        for (int bstar = 0; bstar < Db; bstar++) {
-                            for (int wp = 0; wp < Dwp; wp++) {
-                                for (int s = 0; s < d; s++) {
-                                    for (int sp = 0; sp < d; sp++) {
-                                        Complex Aval = hA[a * (d * Db) + s * Db + b];
-                                        Complex Wval = hW[w * (d * d * Dwp) + s * (d * Dwp) + sp * Dwp + wp];
-                                        Complex Aconj = hA[astar * (d * Db) + sp * Db + bstar];
-                                        Aconj.y = -Aconj.y;
-                                        Complex Rval = hR[b * (Dwp * Db) + wp * Db + bstar];
-
-                                        Complex p;
-                                        p.x = Aval.x * Wval.x - Aval.y * Wval.y;
-                                        p.y = Aval.x * Wval.y + Aval.y * Wval.x;
-                                        Complex q;
-                                        q.x = p.x * Aconj.x - p.y * Aconj.y;
-                                        q.y = p.x * Aconj.y + p.y * Aconj.x;
-                                        Complex r;
-                                        r.x = q.x * Rval.x - q.y * Rval.y;
-                                        r.y = q.x * Rval.y + q.y * Rval.x;
-
-                                        sum.x += r.x;
-                                        sum.y += r.y;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    hR_new[a * (Dw * Da) + w * Da + astar] = sum;
-                }
-            }
+            ht_contractor->contract(
+                d_A, 3, extentA, modesA, HIPTENSOR_OP_IDENTITY,
+                d_R_in, 3, extentR, modesR, HIPTENSOR_OP_IDENTITY,
+                d_temp1, 4, extent_temp1, modes_temp1,
+                alpha, beta, 0);
         }
 
-        HIP_CHECK(hipMemcpy(d_right_env[site], hR_new.data(),
-                            env_out_size * sizeof(Complex), hipMemcpyHostToDevice));
+        // Step 2: temp2 = einsum("aswd,wsxw->awxd", temp1, W)
+        // temp1[a,s,w',d] with modes [0,1,2,3], W[w,s,s',w'] with modes [4,1,5,2]
+        // Result: temp2[a,w,s',d] with modes [0,4,5,3]
+        Complex* d_temp2;
+        int temp2_size = Da * Dw * d * Db;
+        HIP_CHECK(hipMalloc(&d_temp2, temp2_size * sizeof(Complex)));
+
+        {
+            int64_t extent_temp1[] = {Da, d, Dwp, Db};
+            int64_t extentW[] = {Dw, d, d, Dwp};
+            int64_t extent_temp2[] = {Da, Dw, d, Db};
+            int32_t modes_temp1[] = {0, 1, 2, 3};
+            int32_t modesW[] = {4, 1, 5, 2};
+            int32_t modes_temp2[] = {0, 4, 5, 3};
+
+            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
+            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
+
+            ht_contractor->contract(
+                d_temp1, 4, extent_temp1, modes_temp1, HIPTENSOR_OP_IDENTITY,
+                d_W, 4, extentW, modesW, HIPTENSOR_OP_IDENTITY,
+                d_temp2, 4, extent_temp2, modes_temp2,
+                alpha, beta, 0);
+        }
+
+        HIP_CHECK(hipFree(d_temp1));
+
+        // Step 3: R_new = einsum("awxd,cxd->awc", temp2, conj(A))
+        // temp2[a,w,s',d] with modes [0,1,2,3], conj(A[c,s',d]) with modes [4,2,3]
+        // Result: R_new[a,w,c] with modes [0,1,4]
+        {
+            int64_t extent_temp2[] = {Da, Dw, d, Db};
+            int64_t extentA[] = {Da, d, Db};
+            int64_t extent_Rnew[] = {Da, Dw, Da};
+            int32_t modes_temp2[] = {0, 1, 2, 3};
+            int32_t modesA_conj[] = {4, 2, 3};
+            int32_t modes_Rnew[] = {0, 1, 4};
+
+            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
+            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
+
+            ht_contractor->contract(
+                d_temp2, 4, extent_temp2, modes_temp2, HIPTENSOR_OP_IDENTITY,
+                d_A, 3, extentA, modesA_conj, HIPTENSOR_OP_CONJ,
+                d_right_env[site], 3, extent_Rnew, modes_Rnew,
+                alpha, beta, 0);
+        }
+
+        HIP_CHECK(hipFree(d_temp2));
     }
 
     Complex* get_left(int site) { return d_left_env[site]; }
