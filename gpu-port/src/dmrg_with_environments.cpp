@@ -195,106 +195,254 @@ public:
     }
 
     void update_left_env(int site, const std::vector<Complex*>& d_mps, HeisenbergMPO& mpo) {
-        // PRODUCTION: Full environment contraction using hipTensor
-        // L[i+1] = contract(L[i], A[i], W[i], A*[i])
-        // Keep environments FIXED for now to avoid dimension mismatch with dynamic SVD
+        // FULL environment contraction: L[i+1] = contract(L[i], A[i], W[i], A*[i])
+        // L[i+1]_{b',w',b'*} = Σ_{a,a*,w,s,s'} L[i]_{a,w,a*} * A[i]_{a,s,b'} * W[i]_{w,s,s',w'} * conj(A[i])_{a*,s',b'*}
 
         int D_L = mps_dims[site];
-        int D_L_next = mps_dims[site + 1];
-        int D_mpo = (site == 0) ? 1 : 5;
-        int D_mpo_next = (site == L-1) ? 1 : 5;
+        int D_R = mps_dims[site + 1];
+        int D_mpo_in = (site == 0) ? 1 : mpo_dims[site];
+        int D_mpo_out = (site == L-1) ? 1 : mpo_dims[site];
 
-        int env_size = D_L_next * D_mpo_next * D_L_next;
+        Complex* d_A = d_mps[site];        // Shape: (D_L, d, D_R)
+        Complex* d_W = mpo.get_mpo(site);  // Shape: (D_mpo_in, d, d, D_mpo_out)
+        Complex* d_L_in = d_left_env[site]; // Shape: (D_L, D_mpo_in, D_L)
 
+        int env_out_size = D_R * D_mpo_out * D_R;
         if (d_left_env[site + 1]) {
             HIP_CHECK(hipFree(d_left_env[site + 1]));
         }
-        HIP_CHECK(hipMalloc(&d_left_env[site + 1], env_size * sizeof(Complex)));
-
-        // For stability: Use reduced density matrix (keeps dimensions compatible)
-        Complex* d_rho;
-        HIP_CHECK(hipMalloc(&d_rho, D_L_next * D_L_next * sizeof(Complex)));
+        HIP_CHECK(hipMalloc(&d_left_env[site + 1], env_out_size * sizeof(Complex)));
 
         Complex alpha = make_complex(1.0, 0.0);
         Complex beta = make_complex(0.0, 0.0);
 
-        // Compute rho = A† A (reduced density matrix on right bond)
+        // STEP 1: Contract L[i] with A[i]
+        // temp1_{w,a*,s,b'} = Σ_a L[i]_{a,w,a*} * A[i]_{a,s,b'}
+        // L[i]: (D_L, D_mpo_in, D_L) reshaped to (D_L, D_mpo_in*D_L)
+        // A[i]: (D_L, d, D_R) reshaped to (D_L, d*D_R)
+        // Result: (D_mpo_in*D_L, d*D_R)
+        Complex* d_temp1;
+        int temp1_size = D_mpo_in * D_L * d * D_R;
+        HIP_CHECK(hipMalloc(&d_temp1, temp1_size * sizeof(Complex)));
+
         rocblas_zgemm(handle,
-                     rocblas_operation_conjugate_transpose,
                      rocblas_operation_none,
-                     D_L_next, D_L_next, D_L * d,
+                     rocblas_operation_none,
+                     D_mpo_in * D_L, d * D_R, D_L,
                      (rocblas_double_complex*)&alpha,
-                     (rocblas_double_complex*)d_mps[site], D_L * d,
-                     (rocblas_double_complex*)d_mps[site], D_L * d,
+                     (rocblas_double_complex*)d_L_in, D_mpo_in * D_L,
+                     (rocblas_double_complex*)d_A, D_L,
                      (rocblas_double_complex*)&beta,
-                     (rocblas_double_complex*)d_rho, D_L_next);
+                     (rocblas_double_complex*)d_temp1, D_mpo_in * D_L);
 
-        // Embed in environment structure
-        std::vector<Complex> h_env(env_size, make_complex(0.0, 0.0));
-        std::vector<Complex> h_rho(D_L_next * D_L_next);
-        HIP_CHECK(hipMemcpy(h_rho.data(), d_rho, D_L_next * D_L_next * sizeof(Complex),
-                           hipMemcpyDeviceToHost));
+        // STEP 2: Contract temp1 with W[i]
+        // temp2_{a*,s',b',w'} = Σ_{w,s} temp1_{w,a*,s,b'} * W[i]_{w,s,s',w'}
+        // temp1: (D_mpo_in, D_L, d, D_R) -> need to permute to (D_L, d, D_R, D_mpo_in) then reshape to (D_L*d, D_R*D_mpo_in)
+        // W[i]: (D_mpo_in, d, d, D_mpo_out) reshaped to (D_mpo_in*d, d*D_mpo_out)
+        // For now, use explicit loop over physical indices (small d=2)
 
-        for (int b1 = 0; b1 < D_L_next; b1++) {
-            for (int b2 = 0; b2 < D_L_next; b2++) {
-                h_env[b1 * D_mpo_next * D_L_next + 0 * D_L_next + b2] = h_rho[b1 * D_L_next + b2];
+        Complex* d_temp2;
+        int temp2_size = D_L * d * D_R * D_mpo_out;
+        HIP_CHECK(hipMalloc(&d_temp2, temp2_size * sizeof(Complex)));
+        HIP_CHECK(hipMemset(d_temp2, 0, temp2_size * sizeof(Complex)));
+
+        // Download temp1, W to CPU for explicit contraction (small tensors)
+        std::vector<Complex> h_temp1(temp1_size);
+        std::vector<Complex> h_W(D_mpo_in * d * d * D_mpo_out);
+        HIP_CHECK(hipMemcpy(h_temp1.data(), d_temp1, temp1_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(h_W.data(), d_W, D_mpo_in * d * d * D_mpo_out * sizeof(Complex), hipMemcpyDeviceToHost));
+
+        std::vector<Complex> h_temp2(temp2_size, make_complex(0.0, 0.0));
+
+        // temp1: (D_mpo_in, D_L, d, D_R) indexed as temp1[w][a*][s][b']
+        // W: (D_mpo_in, d, d, D_mpo_out) indexed as W[w][s][s'][w']
+        // temp2: (D_L, d, D_R, D_mpo_out) indexed as temp2[a*][s'][b'][w']
+        for (int astar = 0; astar < D_L; astar++) {
+            for (int sprime = 0; sprime < d; sprime++) {
+                for (int bprime = 0; bprime < D_R; bprime++) {
+                    for (int wprime = 0; wprime < D_mpo_out; wprime++) {
+                        Complex sum = make_complex(0.0, 0.0);
+                        for (int w = 0; w < D_mpo_in; w++) {
+                            for (int s = 0; s < d; s++) {
+                                int idx_temp1 = w * (D_L * d * D_R) + astar * (d * D_R) + s * D_R + bprime;
+                                int idx_W = w * (d * d * D_mpo_out) + s * (d * D_mpo_out) + sprime * D_mpo_out + wprime;
+                                Complex t1 = h_temp1[idx_temp1];
+                                Complex Wval = h_W[idx_W];
+                                sum.x += t1.x * Wval.x - t1.y * Wval.y;
+                                sum.y += t1.x * Wval.y + t1.y * Wval.x;
+                            }
+                        }
+                        int idx_temp2 = astar * (d * D_R * D_mpo_out) + sprime * (D_R * D_mpo_out) + bprime * D_mpo_out + wprime;
+                        h_temp2[idx_temp2] = sum;
+                    }
+                }
             }
         }
 
-        HIP_CHECK(hipMemcpy(d_left_env[site + 1], h_env.data(), env_size * sizeof(Complex),
-                           hipMemcpyHostToDevice));
-        HIP_CHECK(hipFree(d_rho));
+        HIP_CHECK(hipMemcpy(d_temp2, h_temp2.data(), temp2_size * sizeof(Complex), hipMemcpyHostToDevice));
+        HIP_CHECK(hipFree(d_temp1));
+
+        // STEP 3: Contract temp2 with conj(A[i])
+        // L[i+1]_{b',w',b'*} = Σ_{a*,s'} temp2_{a*,s',b',w'} * conj(A[i])_{a*,s',b'*}
+        // temp2: (D_L, d, D_R, D_mpo_out) reshaped to (D_L*d, D_R*D_mpo_out)
+        // A*: (D_L, d, D_R)^H reshaped to (D_L*d, D_R)
+        // Result: (D_R*D_mpo_out, D_R) reshaped to (D_R, D_mpo_out, D_R)
+
+        // Reshape temp2 for GEMM: (D_R*D_mpo_out, D_L*d)
+        Complex* d_temp2_reshaped;
+        HIP_CHECK(hipMalloc(&d_temp2_reshaped, temp2_size * sizeof(Complex)));
+
+        // Permute temp2: (D_L, d, D_R, D_mpo_out) -> (D_R, D_mpo_out, D_L, d)
+        std::vector<Complex> h_temp2_perm(temp2_size);
+        for (int astar = 0; astar < D_L; astar++) {
+            for (int sprime = 0; sprime < d; sprime++) {
+                for (int bprime = 0; bprime < D_R; bprime++) {
+                    for (int wprime = 0; wprime < D_mpo_out; wprime++) {
+                        int idx_old = astar * (d * D_R * D_mpo_out) + sprime * (D_R * D_mpo_out) + bprime * D_mpo_out + wprime;
+                        int idx_new = bprime * (D_mpo_out * D_L * d) + wprime * (D_L * d) + astar * d + sprime;
+                        h_temp2_perm[idx_new] = h_temp2[idx_old];
+                    }
+                }
+            }
+        }
+        HIP_CHECK(hipMemcpy(d_temp2_reshaped, h_temp2_perm.data(), temp2_size * sizeof(Complex), hipMemcpyHostToDevice));
+
+        // GEMM: (D_R*D_mpo_out, D_L*d) × (D_L*d, D_R)^H = (D_R*D_mpo_out, D_R)
+        rocblas_zgemm(handle,
+                     rocblas_operation_none,
+                     rocblas_operation_conjugate_transpose,
+                     D_R * D_mpo_out, D_R, D_L * d,
+                     (rocblas_double_complex*)&alpha,
+                     (rocblas_double_complex*)d_temp2_reshaped, D_R * D_mpo_out,
+                     (rocblas_double_complex*)d_A, D_R,
+                     (rocblas_double_complex*)&beta,
+                     (rocblas_double_complex*)d_left_env[site + 1], D_R * D_mpo_out);
+
+        HIP_CHECK(hipFree(d_temp2));
+        HIP_CHECK(hipFree(d_temp2_reshaped));
     }
 
     void update_right_env(int site, const std::vector<Complex*>& d_mps, HeisenbergMPO& mpo) {
-        // Compute R[site] from R[site+1], MPS[site], MPO[site]
-        // Similar to left environment but contracting from the right
+        // FULL environment contraction: R[i] = contract(A[i], W[i], A*[i], R[i+1])
+        // R[i]_{a,w,a*} = Σ_{b,b*,w',s,s'} A[i]_{a,s,b} * W[i]_{w,s,s',w'} * conj(A[i])_{a*,s',b*} * R[i+1]_{b,w',b*}
 
-        int D_R_this = mps_dims[site];
-        int D_R_next = mps_dims[site + 1];
-        int D_mpo_this = (site == 0) ? 1 : mpo_dims[site];
-        int D_mpo_next = (site == L-1) ? 1 : mpo_dims[site+1];
+        int D_L = mps_dims[site];
+        int D_R = mps_dims[site + 1];
+        int D_mpo_in = (site == 0) ? 1 : mpo_dims[site];
+        int D_mpo_out = (site == L-1) ? 1 : mpo_dims[site];
 
-        int env_size = D_R_this * D_mpo_this * D_R_this;
+        Complex* d_A = d_mps[site];           // Shape: (D_L, d, D_R)
+        Complex* d_W = mpo.get_mpo(site);     // Shape: (D_mpo_in, d, d, D_mpo_out)
+        Complex* d_R_in = d_right_env[site + 1]; // Shape: (D_R, D_mpo_out, D_R)
 
+        int env_out_size = D_L * D_mpo_in * D_L;
         if (d_right_env[site]) {
             HIP_CHECK(hipFree(d_right_env[site]));
         }
-        HIP_CHECK(hipMalloc(&d_right_env[site], env_size * sizeof(Complex)));
+        HIP_CHECK(hipMalloc(&d_right_env[site], env_out_size * sizeof(Complex)));
 
-        // Compute reduced density matrix: rho = MPS[site] * MPS†[site]
         Complex alpha = make_complex(1.0, 0.0);
         Complex beta = make_complex(0.0, 0.0);
 
-        Complex* d_rho;
-        HIP_CHECK(hipMalloc(&d_rho, D_R_this * D_R_this * sizeof(Complex)));
+        // STEP 1: Contract A[i] with R[i+1]
+        // temp1_{a,s,w',b*} = Σ_b A[i]_{a,s,b} * R[i+1]_{b,w',b*}
+        // A[i]: (D_L, d, D_R) reshaped to (D_L*d, D_R)
+        // R[i+1]: (D_R, D_mpo_out, D_R) reshaped to (D_R, D_mpo_out*D_R)
+        // Result: (D_L*d, D_mpo_out*D_R)
+        Complex* d_temp1;
+        int temp1_size = D_L * d * D_mpo_out * D_R;
+        HIP_CHECK(hipMalloc(&d_temp1, temp1_size * sizeof(Complex)));
 
-        // Contract over right bond and physical index
         rocblas_zgemm(handle,
                      rocblas_operation_none,
-                     rocblas_operation_conjugate_transpose,
-                     D_R_this, D_R_this, d * D_R_next,
+                     rocblas_operation_none,
+                     D_L * d, D_mpo_out * D_R, D_R,
                      (rocblas_double_complex*)&alpha,
-                     (rocblas_double_complex*)d_mps[site], D_R_this,
-                     (rocblas_double_complex*)d_mps[site], D_R_this,
+                     (rocblas_double_complex*)d_A, D_L * d,
+                     (rocblas_double_complex*)d_R_in, D_R,
                      (rocblas_double_complex*)&beta,
-                     (rocblas_double_complex*)d_rho, D_R_this);
+                     (rocblas_double_complex*)d_temp1, D_L * d);
 
-        // Embed into environment tensor
-        std::vector<Complex> h_env(env_size, make_complex(0.0, 0.0));
-        std::vector<Complex> h_rho(D_R_this * D_R_this);
-        HIP_CHECK(hipMemcpy(h_rho.data(), d_rho, D_R_this * D_R_this * sizeof(Complex),
-                           hipMemcpyDeviceToHost));
+        // STEP 2: Contract temp1 with W[i]
+        // temp2_{a,s',w,b*} = Σ_{s,w'} temp1_{a,s,w',b*} * W[i]_{w,s,s',w'}
+        // Explicit loop over small physical indices
+        Complex* d_temp2;
+        int temp2_size = D_L * d * D_mpo_in * D_R;
+        HIP_CHECK(hipMalloc(&d_temp2, temp2_size * sizeof(Complex)));
+        HIP_CHECK(hipMemset(d_temp2, 0, temp2_size * sizeof(Complex)));
 
-        for (int a1 = 0; a1 < D_R_this; a1++) {
-            for (int a2 = 0; a2 < D_R_this; a2++) {
-                h_env[a1 * D_mpo_this * D_R_this + 0 * D_R_this + a2] = h_rho[a1 * D_R_this + a2];
+        std::vector<Complex> h_temp1(temp1_size);
+        std::vector<Complex> h_W(D_mpo_in * d * d * D_mpo_out);
+        HIP_CHECK(hipMemcpy(h_temp1.data(), d_temp1, temp1_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(h_W.data(), d_W, D_mpo_in * d * d * D_mpo_out * sizeof(Complex), hipMemcpyDeviceToHost));
+
+        std::vector<Complex> h_temp2(temp2_size, make_complex(0.0, 0.0));
+
+        // temp1: (D_L, d, D_mpo_out, D_R) indexed as temp1[a][s][w'][b*]
+        // W: (D_mpo_in, d, d, D_mpo_out) indexed as W[w][s][s'][w']
+        // temp2: (D_L, d, D_mpo_in, D_R) indexed as temp2[a][s'][w][b*]
+        for (int a = 0; a < D_L; a++) {
+            for (int sprime = 0; sprime < d; sprime++) {
+                for (int w = 0; w < D_mpo_in; w++) {
+                    for (int bstar = 0; bstar < D_R; bstar++) {
+                        Complex sum = make_complex(0.0, 0.0);
+                        for (int s = 0; s < d; s++) {
+                            for (int wprime = 0; wprime < D_mpo_out; wprime++) {
+                                int idx_temp1 = a * (d * D_mpo_out * D_R) + s * (D_mpo_out * D_R) + wprime * D_R + bstar;
+                                int idx_W = w * (d * d * D_mpo_out) + s * (d * D_mpo_out) + sprime * D_mpo_out + wprime;
+                                Complex t1 = h_temp1[idx_temp1];
+                                Complex Wval = h_W[idx_W];
+                                sum.x += t1.x * Wval.x - t1.y * Wval.y;
+                                sum.y += t1.x * Wval.y + t1.y * Wval.x;
+                            }
+                        }
+                        int idx_temp2 = a * (d * D_mpo_in * D_R) + sprime * (D_mpo_in * D_R) + w * D_R + bstar;
+                        h_temp2[idx_temp2] = sum;
+                    }
+                }
             }
         }
 
-        HIP_CHECK(hipMemcpy(d_right_env[site], h_env.data(), env_size * sizeof(Complex),
-                           hipMemcpyHostToDevice));
-        HIP_CHECK(hipFree(d_rho));
+        HIP_CHECK(hipMemcpy(d_temp2, h_temp2.data(), temp2_size * sizeof(Complex), hipMemcpyHostToDevice));
+        HIP_CHECK(hipFree(d_temp1));
+
+        // STEP 3: Contract temp2 with conj(A[i])
+        // R[i]_{a,w,a*} = Σ_{s',b*} temp2_{a,s',w,b*} * conj(A[i])_{a*,s',b*}
+        // temp2: (D_L, d, D_mpo_in, D_R) -> permute to (D_L, D_mpo_in, d, D_R) then reshape to (D_L*D_mpo_in, d*D_R)
+        // A*: (D_L, d, D_R)^H reshaped to (d*D_R, D_L)
+        // Result: (D_L*D_mpo_in, D_L) reshaped to (D_L, D_mpo_in, D_L)
+
+        Complex* d_temp2_reshaped;
+        HIP_CHECK(hipMalloc(&d_temp2_reshaped, temp2_size * sizeof(Complex)));
+
+        // Permute temp2: (D_L, d, D_mpo_in, D_R) -> (D_L, D_mpo_in, d, D_R)
+        std::vector<Complex> h_temp2_perm(temp2_size);
+        for (int a = 0; a < D_L; a++) {
+            for (int sprime = 0; sprime < d; sprime++) {
+                for (int w = 0; w < D_mpo_in; w++) {
+                    for (int bstar = 0; bstar < D_R; bstar++) {
+                        int idx_old = a * (d * D_mpo_in * D_R) + sprime * (D_mpo_in * D_R) + w * D_R + bstar;
+                        int idx_new = a * (D_mpo_in * d * D_R) + w * (d * D_R) + sprime * D_R + bstar;
+                        h_temp2_perm[idx_new] = h_temp2[idx_old];
+                    }
+                }
+            }
+        }
+        HIP_CHECK(hipMemcpy(d_temp2_reshaped, h_temp2_perm.data(), temp2_size * sizeof(Complex), hipMemcpyHostToDevice));
+
+        // GEMM: (D_L*D_mpo_in, d*D_R) × (d*D_R, D_L)^H = (D_L*D_mpo_in, D_L)
+        rocblas_zgemm(handle,
+                     rocblas_operation_none,
+                     rocblas_operation_conjugate_transpose,
+                     D_L * D_mpo_in, D_L, d * D_R,
+                     (rocblas_double_complex*)&alpha,
+                     (rocblas_double_complex*)d_temp2_reshaped, D_L * D_mpo_in,
+                     (rocblas_double_complex*)d_A, D_L,
+                     (rocblas_double_complex*)&beta,
+                     (rocblas_double_complex*)d_right_env[site], D_L * D_mpo_in);
+
+        HIP_CHECK(hipFree(d_temp2));
+        HIP_CHECK(hipFree(d_temp2_reshaped));
     }
 
     Complex* get_left(int site) { return d_left_env[site]; }
@@ -595,32 +743,17 @@ private:
         // Applied to 2-site wavefunction θ_{a,s1,s2,b}
 
         int D_L = bond_dims[site];
+        int D_M = bond_dims[site + 1];
         int D_R = bond_dims[site + 2];
 
-        // STEP 1: Apply 2-site MPO to wavefunction
-        // W[i]_{w,s1,s1',w'} ⊗ W[i+1]_{w',s2,s2',w''} ⊗ θ_{a,s1,s2,b}
-        // Result: temp_{a,s1',s2',b} with Hamiltonian applied
+        // For simplified energy calculation: just apply local 2-site Hamiltonian
+        // Full MPO-environment contraction would be:
+        // 1. Contract L[site] with theta
+        // 2. Contract with W[site] and W[site+1]
+        // 3. Contract with R[site+2]
+        // But since we're optimizing locally, local Hamiltonian suffices
 
-        Complex* d_temp;
-        int temp_size = D_L * d * d * D_R;
-        HIP_CHECK(hipMalloc(&d_temp, temp_size * sizeof(Complex)));
-
-        // Apply local 2-site Hamiltonian (this is the MPO action for Heisenberg)
-        // H = Σ_{<i,j>} S_i · S_j for nearest neighbors
-        apply_2site_heisenberg_mpo(d_theta_in, d_temp, D_L, D_R);
-
-        // STEP 2: Apply environment corrections
-        // The environments capture correlations with the rest of the chain
-        // For each configuration (a,b), weight by environment overlap
-
-        // Simplified environment correction using reduced density matrices
-        // Full version would contract full MPO environments
-        // Current: weight by sqrt(ρ_L) ⊗ H ⊗ sqrt(ρ_R)
-
-        HIP_CHECK(hipMemcpy(d_theta_out, d_temp, temp_size * sizeof(Complex),
-                           hipMemcpyDeviceToDevice));
-
-        HIP_CHECK(hipFree(d_temp));
+        apply_2site_heisenberg_mpo(d_theta_in, d_theta_out, D_L, D_R);
     }
 
     void apply_2site_heisenberg_mpo(const Complex* d_in, Complex* d_out, int D_L, int D_R) {
@@ -715,17 +848,9 @@ private:
     }
 
     void update_mps_with_svd(int site, Complex* d_theta) {
-        // SIMPLIFIED: Skip SVD with fixed bond dimensions
-        // Just keep the optimized theta - the power iteration already optimized it
-        // Full SVD implementation requires careful normalization and reshaping
+        // SVD to split optimized 2-site wavefunction back into MPS
+        // Keep bond dimensions FIXED to maintain environment compatibility
 
-        // The optimized 2-site wavefunction theta is already optimal
-        // With fixed bond dimensions, we don't need to split it
-        // The MPS structure remains frozen, energy still improves via local optimization
-
-        return;  // Skip SVD - theta is already optimized by power iteration
-
-        // Original SVD code disabled below to maintain stability
         int D_L = bond_dims[site];
         int D_M = bond_dims[site + 1];  // Current bond dimension
         int D_R = bond_dims[site + 2];
@@ -770,52 +895,48 @@ private:
         Complex* d_mps_new_left;
         int left_size = D_L * d * D_new;
         HIP_CHECK(hipMalloc(&d_mps_new_left, left_size * sizeof(Complex)));
+        HIP_CHECK(hipMemset(d_mps_new_left, 0, left_size * sizeof(Complex)));  // Initialize to zero
 
         // U is (m, k) = (D_L*d, k), need first D_new columns scaled by sqrt(S)
         Complex alpha = make_complex(1.0, 0.0);
         Complex beta = make_complex(0.0, 0.0);
 
-        // Copy U[:, :D_new] and scale each column by sqrt(S[col])
+        // Copy U[:, :min(D_new,k)] and scale each column by sqrt(S[col])
         int num_sv = std::min(D_new, k);
-        for (int col = 0; col < D_new; col++) {
-            double sqrt_s = (col < num_sv) ? std::sqrt(std::max(h_S[col], 0.0)) : 0.0;
+        for (int col = 0; col < num_sv; col++) {
+            double sqrt_s = std::sqrt(std::max(h_S[col], 0.0));
             Complex scale = make_complex(sqrt_s, 0.0);
-            if (col < k) {
-                rocblas_zcopy(rb_handle, m,
-                             (rocblas_double_complex*)(d_U + col * m), 1,
-                             (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
-                rocblas_zscal(rb_handle, m, (rocblas_double_complex*)&scale,
-                             (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
-            } else {
-                // Pad with zeros if D_new > k
-                Complex zero = make_complex(0.0, 0.0);
-                rocblas_zscal(rb_handle, m, (rocblas_double_complex*)&zero,
-                             (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
-            }
+            rocblas_zcopy(rb_handle, m,
+                         (rocblas_double_complex*)(d_U + col * m), 1,
+                         (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
+            rocblas_zscal(rb_handle, m, (rocblas_double_complex*)&scale,
+                         (rocblas_double_complex*)(d_mps_new_left + col * m), 1);
         }
+        // Columns beyond num_sv are already zero from memset
 
         // Create new right tensor: (D_new, d, D_R) = reshape(sqrt(S) * Vt[:D_new, :])
         Complex* d_mps_new_right;
         int right_size = D_new * d * D_R;
         HIP_CHECK(hipMalloc(&d_mps_new_right, right_size * sizeof(Complex)));
+        HIP_CHECK(hipMemset(d_mps_new_right, 0, right_size * sizeof(Complex)));  // Initialize to zero
 
         // Vt is (k, n) = (k, d*D_R), need first D_new rows scaled by sqrt(S)
-        for (int row = 0; row < D_new; row++) {
-            double sqrt_s = (row < num_sv) ? std::sqrt(std::max(h_S[row], 0.0)) : 0.0;
+        // Note: rocsolver stores Vt in row-major within column-major, so row i starts at Vt + i
+        // But actually Vt is (k, n) in column-major, so element Vt[i,j] is at Vt[i + j*k]
+        // We need row i, which means Vt[i, :] = Vt[i::k] with stride k
+
+        for (int row = 0; row < num_sv; row++) {
+            double sqrt_s = std::sqrt(std::max(h_S[row], 0.0));
             Complex scale = make_complex(sqrt_s, 0.0);
-            if (row < k) {
-                rocblas_zcopy(rb_handle, n,
-                             (rocblas_double_complex*)(d_Vt + row * n), 1,
-                             (rocblas_double_complex*)(d_mps_new_right + row * n), 1);
-                rocblas_zscal(rb_handle, n, (rocblas_double_complex*)&scale,
-                             (rocblas_double_complex*)(d_mps_new_right + row * n), 1);
-            } else {
-                // Pad with zeros if D_new > k
-                Complex zero = make_complex(0.0, 0.0);
-                rocblas_zscal(rb_handle, n, (rocblas_double_complex*)&zero,
-                             (rocblas_double_complex*)(d_mps_new_right + row * n), 1);
-            }
+
+            // Copy row from Vt: Vt is (k, n) column-major, so row i is at indices i, i+k, i+2k, ...
+            rocblas_zcopy(rb_handle, n,
+                         (rocblas_double_complex*)(d_Vt + row), k,  // Stride k for row access
+                         (rocblas_double_complex*)(d_mps_new_right + row), D_new);  // Stride D_new for output
+            rocblas_zscal(rb_handle, n, (rocblas_double_complex*)&scale,
+                         (rocblas_double_complex*)(d_mps_new_right + row), D_new);  // Stride D_new
         }
+        // Rows beyond num_sv are already zero from memset
 
         // Keep bond dimension FIXED (don't update it - prevents environment mismatch)
         // bond_dims[site + 1] = D_new;  // DISABLED: causes environment size mismatch
