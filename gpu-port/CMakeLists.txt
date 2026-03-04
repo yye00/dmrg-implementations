@@ -92,8 +92,23 @@ target_link_libraries(dmrg_gpu_native
     ${HIPTENSOR_LIBRARY}
 )
 
+# Complete DMRG with Lanczos (working version)
+add_executable(heisenberg_complete
+    src/heisenberg_dmrg_complete.cpp
+)
+set_source_files_properties(src/heisenberg_dmrg_complete.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(heisenberg_complete PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(heisenberg_complete
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+)
+
 # Installation
-install(TARGETS heisenberg_gpu dmrg_benchmark dmrg_gpu_native DESTINATION bin)
+install(TARGETS heisenberg_gpu dmrg_benchmark dmrg_gpu_native heisenberg_complete DESTINATION bin)
 
 # Configuration summary
 message(STATUS "==============================================")
