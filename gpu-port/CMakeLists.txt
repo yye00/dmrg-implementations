@@ -1,16 +1,23 @@
 cmake_minimum_required(VERSION 3.21)
-project(PDMRG_GPU LANGUAGES CXX)
 
 # AMD MI300X Single-GPU DMRG Implementation
 # Priority: 1. Accuracy (complex128), 2. Performance
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-
-# ROCm setup
+# ROCm setup - must be before project()
 if(NOT DEFINED ROCM_PATH)
     set(ROCM_PATH "/opt/rocm" CACHE PATH "Path to ROCm installation")
 endif()
+
+# Set HIP compiler before project()
+set(CMAKE_CXX_COMPILER "${ROCM_PATH}/bin/hipcc")
+set(CMAKE_HIP_COMPILER "${ROCM_PATH}/bin/hipcc")
+
+project(PDMRG_GPU LANGUAGES CXX HIP)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_HIP_STANDARD 17)
+set(CMAKE_HIP_STANDARD_REQUIRED ON)
 
 list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH})
 set(CMAKE_MODULE_PATH "${ROCM_PATH}/lib/cmake/hip" ${CMAKE_MODULE_PATH})
@@ -31,6 +38,7 @@ message(STATUS "Found hipTensor: ${HIPTENSOR_LIBRARY}")
 
 # GPU architecture
 set(GPU_TARGETS "gfx942" CACHE STRING "GPU targets to compile for")
+set(CMAKE_HIP_ARCHITECTURES ${GPU_TARGETS})
 
 # Include directories
 include_directories(
@@ -38,9 +46,9 @@ include_directories(
     ${ROCM_PATH}/include
 )
 
-# Heisenberg benchmark - compile with hipcc
-set(CMAKE_CXX_COMPILER "${ROCM_PATH}/bin/hipcc")
+# Compiler flags for hipcc
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 --offload-arch=${GPU_TARGETS}")
+set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -O3 --offload-arch=${GPU_TARGETS}")
 
 add_executable(heisenberg_gpu src/heisenberg_dmrg_gpu.cpp)
 
