@@ -184,13 +184,15 @@ public:
 
             // Diagonalize S using rocSOLVER
             double* d_evals;
+            double* d_E_heevd;  // Superdiagonal work array for zheevd
             int* d_info;
             HIP_CHECK(hipMalloc(&d_evals, b * sizeof(double)));
+            HIP_CHECK(hipMalloc(&d_E_heevd, b * sizeof(double)));
             HIP_CHECK(hipMalloc(&d_info, sizeof(int)));
 
             rocsolver_zheevd(rs_handle, rocblas_evect_original, rocblas_fill_upper,
                             b, (rocblas_double_complex*)d_S, b, d_evals,
-                            d_info);
+                            d_E_heevd, d_info);
 
             // Get lowest eigenvalue
             double evals[b];
@@ -225,6 +227,7 @@ public:
 
             HIP_CHECK(hipFree(d_S));
             HIP_CHECK(hipFree(d_evals));
+            HIP_CHECK(hipFree(d_E_heevd));
             HIP_CHECK(hipFree(d_info));
             HIP_CHECK(hipFree(d_X_new));
         }
