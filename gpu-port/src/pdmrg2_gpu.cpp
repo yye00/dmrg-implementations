@@ -59,7 +59,7 @@ using Complex = hipDoubleComplex;
     } \
 } while(0)
 
-inline Complex make_complex(double re, double im) {
+__host__ __device__ inline Complex make_complex(double re, double im) {
     return hipDoubleComplex{re, im};
 }
 
