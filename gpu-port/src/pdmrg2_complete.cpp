@@ -1,6 +1,6 @@
-// PDMRG2 - GPU-Optimized DMRG with Block-Davidson
-// Uses BLAS-3 batched operations for maximum GPU efficiency
-// Expected to be 2-3x faster than PDMRG
+// PDMRG2 - GPU-Optimized DMRG with Batched Operations
+// Uses BLAS-3 batched GEMM for Hamiltonian application (GPU-optimized)
+// Power iteration eigensolver (same as PDMRG for stability and correctness)
 
 #include <hip/hip_runtime.h>
 #include <hip/hip_complex.h>
@@ -112,140 +112,74 @@ public:
 };
 
 // ============================================================================
-// Block-Davidson Eigensolver (PDMRG2 - BLAS-3 operations)
+// Power Iteration Eigensolver (PDMRG2 - same as PDMRG for stability)
+// GPU optimization comes from batched BLAS-3 Hamiltonian application
 // ============================================================================
 
-class BlockDavidsonEigensolver {
+class PowerIterationEigensolver {
 private:
     rocblas_handle handle;
-    rocblas_handle rs_handle;
-    int block_size, max_iter;
+    int max_iter;
     double tol;
 
 public:
-    BlockDavidsonEigensolver(rocblas_handle h, rocblas_handle rsh,
-                            int bs = 4, int max_it = 20, double tolerance = 1e-12)
-        : handle(h), rs_handle(rsh), block_size(bs), max_iter(max_it), tol(tolerance) {}
+    PowerIterationEigensolver(rocblas_handle h, int max_it = 30, double tolerance = 1e-12)
+        : handle(h), max_iter(max_it), tol(tolerance) {}
 
     template<typename ApplyH>
     double solve(ApplyH apply_H, int dim, Complex* d_psi_inout) {
-        // Simplified Block-Davidson using batched BLAS-3
-        // Full version would implement subspace projection
-
-        int b = block_size;
-        Complex* d_X;  // Block vectors [dim, b]
-        Complex* d_HX; // H*X [dim, b]
-
-        HIP_CHECK(hipMalloc(&d_X, dim * b * sizeof(Complex)));
-        HIP_CHECK(hipMalloc(&d_HX, dim * b * sizeof(Complex)));
-
-        // Initialize first vector from input
-        HIP_CHECK(hipMemcpy(d_X, d_psi_inout, dim * sizeof(Complex), hipMemcpyDeviceToDevice));
-
-        // Initialize rest of block with random vectors
-        std::vector<Complex> h_init(dim * (b-1));
-        for (size_t i = 0; i < h_init.size(); i++) {
-            double r = (double)rand() / RAND_MAX - 0.5;
-            double im = (double)rand() / RAND_MAX - 0.5;
-            h_init[i] = make_complex(r, im);
-        }
-        HIP_CHECK(hipMemcpy(d_X + dim, h_init.data(), dim * (b-1) * sizeof(Complex),
-                           hipMemcpyHostToDevice));
+        // Power iteration with -H to find ground state (same as PDMRG Lanczos)
+        Complex* d_Hpsi;
+        HIP_CHECK(hipMalloc(&d_Hpsi, dim * sizeof(Complex)));
 
         double energy = 0.0;
 
         for (int iter = 0; iter < max_iter; iter++) {
-            // Apply H to all block vectors: HX = H*X (batched operation)
-            for (int i = 0; i < b; i++) {
-                apply_H(d_X + i * dim, d_HX + i * dim);
-            }
+            // Apply H|psi>
+            apply_H(d_psi_inout, d_Hpsi);
 
-            // Flip sign for minimum
+            // Flip sign: |Hpsi> = -H|psi>
             Complex neg_one = make_complex(-1.0, 0.0);
-            rocblas_zscal(handle, dim * b, (rocblas_double_complex*)&neg_one,
-                         (rocblas_double_complex*)d_HX, 1);
+            rocblas_zscal(handle, dim, (rocblas_double_complex*)&neg_one,
+                         (rocblas_double_complex*)d_Hpsi, 1);
 
-            // Compute projected matrix S = X†*HX [b, b]
-            Complex* d_S;
-            HIP_CHECK(hipMalloc(&d_S, b * b * sizeof(Complex)));
+            // Compute energy = <psi|H|psi>
+            Complex* d_Hpsi_orig;
+            HIP_CHECK(hipMalloc(&d_Hpsi_orig, dim * sizeof(Complex)));
+            apply_H(d_psi_inout, d_Hpsi_orig);
 
-            Complex alpha = make_complex(1.0, 0.0);
-            Complex beta = make_complex(0.0, 0.0);
+            rocblas_double_complex energy_z;
+            rocblas_zdotc(handle, dim,
+                         (rocblas_double_complex*)d_psi_inout, 1,
+                         (rocblas_double_complex*)d_Hpsi_orig, 1,
+                         &energy_z);
+            HIP_CHECK(hipFree(d_Hpsi_orig));
 
-            rocblas_zgemm(handle,
-                         rocblas_operation_conjugate_transpose,
-                         rocblas_operation_none,
-                         b, b, dim,
-                         (rocblas_double_complex*)&alpha,
-                         (rocblas_double_complex*)d_X, dim,
-                         (rocblas_double_complex*)d_HX, dim,
-                         (rocblas_double_complex*)&beta,
-                         (rocblas_double_complex*)d_S, b);
-
-            // Diagonalize S using rocSOLVER
-            double* d_evals;
-            double* d_E_heevd;  // Superdiagonal work array for zheevd
-            int* d_info;
-            HIP_CHECK(hipMalloc(&d_evals, b * sizeof(double)));
-            HIP_CHECK(hipMalloc(&d_E_heevd, b * sizeof(double)));
-            HIP_CHECK(hipMalloc(&d_info, sizeof(int)));
-
-            rocsolver_zheevd(rs_handle, rocblas_evect_original, rocblas_fill_upper,
-                            b, (rocblas_double_complex*)d_S, b, d_evals,
-                            d_E_heevd, d_info);
-
-            // Get lowest eigenvalue of original H
-            // zheevd returns eigenvalues in ascending order
-            // We flipped H→-H, so largest eigenvalue of S corresponds to smallest of H
-            double evals[b];
-            HIP_CHECK(hipMemcpy(evals, d_evals, b * sizeof(double), hipMemcpyDeviceToHost));
-            energy = -evals[b-1];  // Largest eigenvalue of -H = minimum eigenvalue of H
-
-            // Update X with eigenvector corresponding to largest eigenvalue: X = X * S[:,b-1]
-            Complex* d_X_new;
-            HIP_CHECK(hipMalloc(&d_X_new, dim * sizeof(Complex)));
-
-            rocblas_zgemv(handle, rocblas_operation_none,
-                         dim, b,
-                         (rocblas_double_complex*)&alpha,
-                         (rocblas_double_complex*)d_X, dim,
-                         (rocblas_double_complex*)(d_S + (b-1)*b), 1,  // Extract column b-1
-                         (rocblas_double_complex*)&beta,
-                         (rocblas_double_complex*)d_X_new, 1);
+            energy = get_real(energy_z);
 
             // Normalize
             rocblas_double_complex norm_z;
             rocblas_zdotc(handle, dim,
-                         (rocblas_double_complex*)d_X_new, 1,
-                         (rocblas_double_complex*)d_X_new, 1,
+                         (rocblas_double_complex*)d_Hpsi, 1,
+                         (rocblas_double_complex*)d_Hpsi, 1,
                          &norm_z);
 
             double norm = std::sqrt(get_real(norm_z));
             Complex inv_norm = make_complex(1.0 / norm, 0.0);
             rocblas_zscal(handle, dim, (rocblas_double_complex*)&inv_norm,
-                         (rocblas_double_complex*)d_X_new, 1);
+                         (rocblas_double_complex*)d_Hpsi, 1);
 
-            HIP_CHECK(hipMemcpy(d_X, d_X_new, dim * sizeof(Complex), hipMemcpyDeviceToDevice));
-
-            HIP_CHECK(hipFree(d_S));
-            HIP_CHECK(hipFree(d_evals));
-            HIP_CHECK(hipFree(d_E_heevd));
-            HIP_CHECK(hipFree(d_info));
-            HIP_CHECK(hipFree(d_X_new));
+            HIP_CHECK(hipMemcpy(d_psi_inout, d_Hpsi, dim * sizeof(Complex),
+                               hipMemcpyDeviceToDevice));
         }
 
-        // Copy result back
-        HIP_CHECK(hipMemcpy(d_psi_inout, d_X, dim * sizeof(Complex), hipMemcpyDeviceToDevice));
-
-        HIP_CHECK(hipFree(d_X));
-        HIP_CHECK(hipFree(d_HX));
-
+        HIP_CHECK(hipFree(d_Hpsi));
         return energy;
     }
 };
 
 // ============================================================================
-// PDMRG2 - GPU-Optimized with Block-Davidson
+// PDMRG2 - GPU-Optimized with Batched Operations
 // ============================================================================
 
 template<typename Hamiltonian>
@@ -271,7 +205,7 @@ public:
 
         std::cout << "\n========================================\n";
         std::cout << "PDMRG2 - GPU-Optimized DMRG\n";
-        std::cout << "Block-Davidson + BLAS-3 Operations\n";
+        std::cout << "Batched BLAS-3 + Power Iteration\n";
         std::cout << "========================================\n";
         std::cout << "Problem: " << Hamiltonian::name() << "\n";
         std::cout << "L = " << L << ", d = " << d << ", max_D = " << max_D << "\n";
@@ -390,8 +324,8 @@ private:
                      (rocblas_double_complex*)&beta,
                      (rocblas_double_complex*)d_theta, d * D_R);
 
-        // Optimize using Block-Davidson (BLAS-3)
-        BlockDavidsonEigensolver solver(rb_handle, rs_handle, 4, 20, 1e-12);
+        // Optimize using power iteration (same as PDMRG for stability)
+        PowerIterationEigensolver solver(rb_handle, 30, 1e-12);
 
         auto apply_H = [&](const Complex* d_in, Complex* d_out) {
             hamiltonian.apply(d_in, d_out, D_L, D_R, rb_handle);
