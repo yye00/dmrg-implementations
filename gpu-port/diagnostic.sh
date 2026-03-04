@@ -42,15 +42,55 @@ echo ""
 
 # Check ROCm version
 echo "[2/12] Checking ROCm version..."
-if command -v rocminfo &> /dev/null; then
-    # Get runtime version
-    ROCM_RUNTIME=$(rocminfo | grep "Runtime Version" | head -1)
-    echo "$ROCM_RUNTIME"
+ROCM_VERSION_FOUND=false
 
-    # Get system version
-    if [ -f /opt/rocm/.info/version ]; then
-        echo "ROCm System Version: $(cat /opt/rocm/.info/version)"
+# Method 1: Try rocm-smi --version
+if command -v rocm-smi &> /dev/null; then
+    ROCM_SMI_VER=$(rocm-smi --version 2>/dev/null | grep -i "version" | head -1)
+    if [ -n "$ROCM_SMI_VER" ]; then
+        echo "ROCm SMI Version: $ROCM_SMI_VER"
+        ROCM_VERSION_FOUND=true
     fi
+fi
+
+# Method 2: Try amd-smi version
+if command -v amd-smi &> /dev/null; then
+    AMD_SMI_VER=$(amd-smi version 2>/dev/null | grep -i "version" | head -1)
+    if [ -n "$AMD_SMI_VER" ]; then
+        echo "AMD SMI Version: $AMD_SMI_VER"
+        ROCM_VERSION_FOUND=true
+    fi
+fi
+
+# Method 3: Check /opt/rocm/.info/version file
+if [ -f /opt/rocm/.info/version ]; then
+    ROCM_FILE_VER=$(cat /opt/rocm/.info/version)
+    echo "ROCm Package Version: $ROCM_FILE_VER"
+    ROCM_VERSION_FOUND=true
+fi
+
+# Method 4: Check /opt/rocm/.info/version-dev file
+if [ -f /opt/rocm/.info/version-dev ]; then
+    ROCM_DEV_VER=$(cat /opt/rocm/.info/version-dev)
+    echo "ROCm Dev Version: $ROCM_DEV_VER"
+fi
+
+# Method 5: Check rocminfo for runtime (less reliable)
+if command -v rocminfo &> /dev/null; then
+    ROCM_RUNTIME=$(rocminfo | grep "Runtime Version" | head -1)
+    if [ -n "$ROCM_RUNTIME" ]; then
+        echo "$ROCM_RUNTIME (HSA Runtime, not ROCm version)"
+    fi
+fi
+
+if [ "$ROCM_VERSION_FOUND" = false ]; then
+    echo -e "${YELLOW}⚠ Could not determine ROCm version from standard methods${NC}"
+    echo "  Will infer from HIP version later..."
+fi
+echo ""
+
+# Get detailed GPU architecture info
+if command -v rocminfo &> /dev/null; then
 
     # Check for MI300X (gfx942)
     if rocminfo | grep -q "gfx942"; then
