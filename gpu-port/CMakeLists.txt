@@ -107,8 +107,54 @@ target_link_libraries(heisenberg_complete
     roc::rocsolver
 )
 
+# PDMRG - Stream parallelized DMRG (production)
+add_executable(pdmrg_complete
+    src/pdmrg_complete.cpp
+)
+set_source_files_properties(src/pdmrg_complete.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(pdmrg_complete PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(pdmrg_complete
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+)
+
+# PDMRG2 - GPU-optimized DMRG with Block-Davidson (production)
+add_executable(pdmrg2_complete
+    src/pdmrg2_complete.cpp
+)
+set_source_files_properties(src/pdmrg2_complete.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(pdmrg2_complete PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(pdmrg2_complete
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+)
+
+# Benchmark runner
+add_executable(benchmark_runner
+    src/benchmark_runner.cpp
+)
+set_source_files_properties(src/benchmark_runner.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(benchmark_runner PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(benchmark_runner
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+)
+
 # Installation
-install(TARGETS heisenberg_gpu dmrg_benchmark dmrg_gpu_native heisenberg_complete DESTINATION bin)
+install(TARGETS heisenberg_gpu dmrg_benchmark dmrg_gpu_native heisenberg_complete
+        pdmrg_complete pdmrg2_complete benchmark_runner DESTINATION bin)
 
 # Configuration summary
 message(STATUS "==============================================")
