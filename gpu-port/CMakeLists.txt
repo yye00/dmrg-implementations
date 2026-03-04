@@ -1,26 +1,24 @@
 cmake_minimum_required(VERSION 3.21)
 
-# AMD MI300X Single-GPU DMRG Implementation
-# Priority: 1. Accuracy (complex128), 2. Performance
-
-# ROCm setup - must be before project()
-if(NOT DEFINED ROCM_PATH)
-    set(ROCM_PATH "/opt/rocm" CACHE PATH "Path to ROCm installation")
-endif()
-
-# Set HIP compiler before project()
-set(CMAKE_CXX_COMPILER "${ROCM_PATH}/bin/hipcc")
-set(CMAKE_HIP_COMPILER "${ROCM_PATH}/bin/hipcc")
+# Set compiler BEFORE project() to avoid the hipcc wrapper issue
+set(CMAKE_C_COMPILER /opt/rocm/llvm/bin/clang)
+set(CMAKE_CXX_COMPILER /opt/rocm/llvm/bin/clang++)
 
 project(PDMRG_GPU LANGUAGES CXX HIP)
+
+# AMD MI300X Single-GPU DMRG Implementation
+# Priority: 1. Accuracy (complex128), 2. Performance
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_HIP_STANDARD 17)
-set(CMAKE_HIP_STANDARD_REQUIRED ON)
+
+# ROCm setup
+if(NOT DEFINED ROCM_PATH)
+    set(ROCM_PATH "/opt/rocm" CACHE PATH "Path to ROCm installation")
+endif()
 
 list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH})
-set(CMAKE_MODULE_PATH "${ROCM_PATH}/lib/cmake/hip" ${CMAKE_MODULE_PATH})
 
 # Find ROCm packages
 find_package(hip REQUIRED)
@@ -46,11 +44,16 @@ include_directories(
     ${ROCM_PATH}/include
 )
 
-# Compiler flags for hipcc
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 --offload-arch=${GPU_TARGETS}")
-set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -O3 --offload-arch=${GPU_TARGETS}")
-
+# Heisenberg benchmark
 add_executable(heisenberg_gpu src/heisenberg_dmrg_gpu.cpp)
+
+# Mark as HIP source to use proper compiler
+set_source_files_properties(src/heisenberg_dmrg_gpu.cpp PROPERTIES LANGUAGE HIP)
+
+target_compile_options(heisenberg_gpu PRIVATE 
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
 
 target_link_libraries(heisenberg_gpu
     hip::device
@@ -69,7 +72,8 @@ message(STATUS "==============================================")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "ROCm path: ${ROCM_PATH}")
 message(STATUS "GPU targets: ${GPU_TARGETS}")
-message(STATUS "CXX/HIP compiler: ${CMAKE_CXX_COMPILER}")
+message(STATUS "HIP compiler: ${CMAKE_HIP_COMPILER}")
+message(STATUS "CXX compiler: ${CMAKE_CXX_COMPILER}")
 message(STATUS "hipTensor: ${HIPTENSOR_LIBRARY}")
 message(STATUS "Priority: 1. Accuracy, 2. Performance")
 message(STATUS "Data type: complex128 (hipDoubleComplex)")
