@@ -859,7 +859,9 @@ public:
                     double E = optimize_site(site, false);
                     envs->update_bond_dims(bond_dims);
                     if (site > 0) {
-                        envs->update_right_env(site, d_mps, mpo);
+                        // After optimizing [site, site+1] with move_right=false,
+                        // A[site+1] is right-isometric. Update R[site+1] for next step.
+                        envs->update_right_env(site + 1, d_mps, mpo);
                     }
                 }
             }
