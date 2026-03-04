@@ -75,8 +75,25 @@ target_link_libraries(dmrg_benchmark
     ${HIPTENSOR_LIBRARY}
 )
 
+# GPU-Native DMRG (minimal transfers: upload → compute → download)
+add_executable(dmrg_gpu_native
+    src/dmrg_gpu_native.cpp
+    src/heisenberg_mpo.cpp
+)
+set_source_files_properties(src/dmrg_gpu_native.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(dmrg_gpu_native PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(dmrg_gpu_native
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+)
+
 # Installation
-install(TARGETS heisenberg_gpu dmrg_benchmark DESTINATION bin)
+install(TARGETS heisenberg_gpu dmrg_benchmark dmrg_gpu_native DESTINATION bin)
 
 # Configuration summary
 message(STATUS "==============================================")
