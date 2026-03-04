@@ -288,7 +288,7 @@ public:
             rocblas_create_handle(&rb_handles[i]);
             rocblas_set_stream(rb_handles[i], streams[i]);
         }
-        rocsolver_create_handle(&rs_handle);
+        rocblas_create_handle(&rs_handle);  // Use rocblas version in ROCm 7.2
 
         // Initialize bond dimensions
         bond_dims.resize(L + 1);
