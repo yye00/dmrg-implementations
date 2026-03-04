@@ -53,11 +53,11 @@ if command -v rocm-smi &> /dev/null; then
     fi
 fi
 
-# Method 2: Try amd-smi version
+# Method 2: Try amd-smi (get version from main output)
 if command -v amd-smi &> /dev/null; then
-    AMD_SMI_VER=$(amd-smi version 2>/dev/null | grep -i "version" | head -1)
+    AMD_SMI_VER=$(amd-smi 2>/dev/null | head -5 | grep -i "AMD-SMI\|ROCm version" | head -1)
     if [ -n "$AMD_SMI_VER" ]; then
-        echo "AMD SMI Version: $AMD_SMI_VER"
+        echo "AMD SMI Info: $AMD_SMI_VER"
         ROCM_VERSION_FOUND=true
     fi
 fi
