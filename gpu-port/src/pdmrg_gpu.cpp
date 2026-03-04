@@ -640,7 +640,8 @@ public:
         if (init_norm < 1e-15) {
             std::vector<Complex> h_rand(dim);
             for (int i = 0; i < dim; i++)
-                h_rand[i] = make_complex((double)rand()/RAND_MAX - 0.5, 0.0);
+                h_rand[i] = make_complex((double)rand()/RAND_MAX - 0.5,
+                                        (double)rand()/RAND_MAX - 0.5);
             HIP_CHECK(hipMemcpy(d_psi_inout, h_rand.data(), dim * sizeof(Complex), hipMemcpyHostToDevice));
             rocblas_zdotc(handle, dim,
                          (rocblas_double_complex*)d_psi_inout, 1,
@@ -853,6 +854,7 @@ public:
 class PDMRG_GPU {
 private:
     int L, d, max_D, n_sweeps, n_streams;
+    bool verbose_debug;
     MPOBase* mpo;
     Environments* envs;
     rocblas_handle rb_handle;
@@ -869,10 +871,11 @@ private:
 
 public:
     PDMRG_GPU(MPOBase* mpo_in, int max_bond, int sweeps, int num_streams,
-              const std::string& model)
+              const std::string& model, bool debug = false)
         : mpo(mpo_in), max_D(max_bond), n_sweeps(sweeps),
           n_streams(num_streams), envs(nullptr), current_energy(0.0),
-          model_name(model), time_init(0), time_sweeps(0), time_energy_eval(0)
+          model_name(model), time_init(0), time_sweeps(0), time_energy_eval(0),
+          verbose_debug(debug)
     {
         L = mpo->get_length();
         d = mpo->get_phys_dim();
@@ -905,14 +908,15 @@ public:
         for (int i = 0; i <= L; i++) std::cout << bond_dims[i] << " ";
         std::cout << "\n";
 
-        // Initialize MPS with random real tensors
+        // Initialize MPS with random complex tensors
         srand(42);
         d_mps.resize(L);
         for (int i = 0; i < L; i++) {
             int size = bond_dims[i] * d * bond_dims[i + 1];
             std::vector<Complex> h_mps(size);
             for (int j = 0; j < size; j++) {
-                h_mps[j] = make_complex((double)rand() / RAND_MAX - 0.5, 0.0);
+                h_mps[j] = make_complex((double)rand() / RAND_MAX - 0.5,
+                                        (double)rand() / RAND_MAX - 0.5);
             }
             HIP_CHECK(hipMalloc(&d_mps[i], size * sizeof(Complex)));
             HIP_CHECK(hipMemcpy(d_mps[i], h_mps.data(), size * sizeof(Complex),
@@ -1236,6 +1240,27 @@ private:
         LanczosEigensolver solver(rb_handle, 30, 1e-10);
         double energy = solver.solve(apply_H_eff, psi_size, d_theta);
 
+        if (verbose_debug) {
+            // Verify: compute <theta|H|theta> / <theta|theta> directly
+            Complex* d_Htheta;
+            HIP_CHECK(hipMalloc(&d_Htheta, psi_size * sizeof(Complex)));
+            apply_H_eff(d_theta, d_Htheta);
+
+            rocblas_double_complex th_dot, th_Hth;
+            rocblas_zdotc(rb_handle, psi_size,
+                         (rocblas_double_complex*)d_theta, 1,
+                         (rocblas_double_complex*)d_theta, 1, &th_dot);
+            rocblas_zdotc(rb_handle, psi_size,
+                         (rocblas_double_complex*)d_theta, 1,
+                         (rocblas_double_complex*)d_Htheta, 1, &th_Hth);
+            double norm_sq = get_real(th_dot);
+            double E_direct = get_real(th_Hth) / norm_sq;
+            std::cout << "  site " << site << ": Lanczos E=" << std::setprecision(10)
+                      << energy << " Rayleigh E=" << E_direct
+                      << " norm=" << std::sqrt(norm_sq) << "\n";
+            HIP_CHECK(hipFree(d_Htheta));
+        }
+
         update_mps_with_svd(site, d_theta, move_right);
 
         HIP_CHECK(hipFree(d_theta));
@@ -1469,6 +1494,7 @@ int main(int argc, char** argv) {
     std::string streams_str = "1";
     int n_max = 2;
     double E_J = 1.0, E_C = 0.5;
+    bool debug = false;
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -1480,6 +1506,7 @@ int main(int argc, char** argv) {
         else if (arg == "--n-max" && i+1 < argc) n_max = std::stoi(argv[++i]);
         else if (arg == "--E-J" && i+1 < argc) E_J = std::stod(argv[++i]);
         else if (arg == "--E-C" && i+1 < argc) E_C = std::stod(argv[++i]);
+        else if (arg == "--debug") debug = true;
         else if (arg == "--help" || arg == "-h") { print_usage(argv[0]); return 0; }
     }
 
@@ -1522,7 +1549,7 @@ int main(int argc, char** argv) {
 
         Timer t_wall;
         t_wall.tic();
-        PDMRG_GPU dmrg(mpo_ptr, max_D, n_sweeps, ns, model);
+        PDMRG_GPU dmrg(mpo_ptr, max_D, n_sweeps, ns, model, debug);
         double energy = dmrg.run();
         double wall_time = t_wall.toc();
 
