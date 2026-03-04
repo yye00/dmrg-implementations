@@ -108,3 +108,16 @@ message(STATUS "hipTensor: ${HIPTENSOR_LIBRARY}")
 message(STATUS "Priority: 1. Accuracy, 2. Performance")
 message(STATUS "Data type: complex128 (hipDoubleComplex)")
 message(STATUS "==============================================")
+
+# WORKING DMRG (simple test version)
+add_executable(dmrg_working src/dmrg_working.cpp)
+set_source_files_properties(src/dmrg_working.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(dmrg_working PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(dmrg_working
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+)
