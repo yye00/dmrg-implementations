@@ -914,16 +914,19 @@ private:
         std::cout << " done" << std::endl;
 
         // SVD: theta = U * S * Vt
-        std::cout << "[DBG SVD] Calling rocsolver_zgesvd..." << std::flush;
+        // For thin SVD with rocblas_svect_singular:
+        // - U is (m, k) with leading dim m
+        // - Vt is (k, n) with leading dim k  <-- CRITICAL: ldvt = k, not n!
+        std::cout << "[DBG SVD] Calling rocsolver_zgesvd (m=" << m << ", n=" << n << ", k=" << k << ")..." << std::flush;
         HIP_CHECK(hipDeviceSynchronize());  // Ensure previous ops complete
         rocsolver_zgesvd(rb_handle,
-                       rocblas_svect_singular,   // Compute U
-                       rocblas_svect_singular,   // Compute Vt
+                       rocblas_svect_singular,   // Compute U (thin)
+                       rocblas_svect_singular,   // Compute Vt (thin)
                        m, n,
                        (rocblas_double_complex*)d_theta, m,
                        d_S,
                        (rocblas_double_complex*)d_U, m,
-                       (rocblas_double_complex*)d_Vt, n,
+                       (rocblas_double_complex*)d_Vt, k,   // FIX: ldvt = k, not n
                        d_E, rocblas_outofplace, d_info);
         HIP_CHECK(hipDeviceSynchronize());  // Wait for SVD to complete
         std::cout << " done" << std::endl;
