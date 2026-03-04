@@ -30,17 +30,21 @@ find_package(hip REQUIRED)
 find_package(hipblas REQUIRED)
 find_package(rocsolver REQUIRED)
 
-# Find hipTensor (may need manual path)
+# Find hipTensor (optional for now - simple_dmrg doesn't need it)
 find_library(HIPTENSOR_LIBRARY
     NAMES hiptensor
     PATHS ${ROCM_PATH}/lib ${ROCM_PATH}/lib64
-    REQUIRED
 )
 find_path(HIPTENSOR_INCLUDE_DIR
     NAMES hiptensor.h hiptensor/hiptensor.h
     PATHS ${ROCM_PATH}/include
-    REQUIRED
 )
+
+if(HIPTENSOR_LIBRARY)
+    message(STATUS "hipTensor found: ${HIPTENSOR_LIBRARY}")
+else()
+    message(WARNING "hipTensor not found - GPU implementation will need it")
+endif()
 
 # NO MPI - single GPU only!
 
@@ -69,9 +73,18 @@ include_directories(
     ${HIPTENSOR_INCLUDE_DIR}
 )
 
-# Source files
+# Find Eigen (required for CPU test code)
+find_package(Eigen3 3.3 REQUIRED NO_MODULE)
+
+# Source files for simple CPU DMRG test
+set(SIMPLE_DMRG_SOURCES
+    src/simple_dmrg.cpp
+    src/heisenberg_mpo.cpp
+)
+
+# Main GPU DMRG sources (to be developed)
 set(SOURCES
-    src/main.cpp
+    # src/main.cpp
     # Add more sources as developed
     # src/tensor_ops.cpp
     # src/mpo_builders.cpp
@@ -85,20 +98,25 @@ set(HIP_SOURCES
     # src/dmrg_kernel.hip
 )
 
-# Executable
-add_executable(pdmrg_gpu ${SOURCES} ${HIP_SOURCES})
+# Build simple CPU DMRG test first
+add_executable(simple_dmrg ${SIMPLE_DMRG_SOURCES})
+target_link_libraries(simple_dmrg Eigen3::Eigen)
 
-# Link libraries (NO MPI!)
-target_link_libraries(pdmrg_gpu
-    hip::host
-    hip::device
-    roc::hipblas
-    roc::rocsolver
-    ${HIPTENSOR_LIBRARY}
-)
+# Main GPU executable (commented out until implemented)
+# add_executable(pdmrg_gpu ${SOURCES} ${HIP_SOURCES})
+
+# Main GPU executable link libraries (when implemented)
+# target_link_libraries(pdmrg_gpu
+#     hip::host
+#     hip::device
+#     roc::hipblas
+#     roc::rocsolver
+#     ${HIPTENSOR_LIBRARY}
+# )
 
 # Install target
-install(TARGETS pdmrg_gpu DESTINATION bin)
+install(TARGETS simple_dmrg DESTINATION bin)
+# install(TARGETS pdmrg_gpu DESTINATION bin)
 
 # Print configuration summary
 message(STATUS "==============================================")
