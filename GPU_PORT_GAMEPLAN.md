@@ -33,6 +33,7 @@
 - Native AMD tensor contraction library (equivalent to cuTENSOR)
 - Optimized for MI300X architecture
 - C++ API with similar semantics to cuTENSOR
+- Supports batch operations and async execution
 
 **Cons:**
 - Less mature than cuTENSOR
@@ -45,15 +46,26 @@
 **Rationale:**
 - hipTensor is C/C++ native
 - Better performance control than Python bindings
-- Easier integration with MPI for multi-GPU
+- Direct access to HIP streams and async operations
 
-### MPI Library
-**Options:**
-1. **OpenMPI with UCX + ROCm-aware MPI** (recommended)
-   - GPU-direct RDMA between MI300X devices
-   - Requires ROCm-aware MPI build
-2. **MPICH with GPU support**
-   - Fallback if OpenMPI unavailable
+### Parallelism Strategy: **Single-GPU with HIP Streams** (NO MPI)
+**Key Decision:** Entire DMRG problem fits comfortably in 192GB HBM3
+
+**Parallelism approach:**
+1. **HIP Streams** for overlapping operations
+   - Pipelined tensor contractions
+   - Overlap computation with memory copies (if needed)
+   - Multiple concurrent eigensolver iterations
+
+2. **Kernel-level parallelism**
+   - Each tensor contraction uses full GPU (thousands of threads)
+   - Batch operations for multiple sites
+   - Parallel sweep updates
+
+3. **No MPI needed**
+   - Simpler build (no ROCm-aware MPI complexity)
+   - No inter-GPU communication overhead
+   - Easier debugging and profiling
 
 ---
 
@@ -71,7 +83,7 @@
 **Cons:**
 - Need `--device=/dev/kfd --device=/dev/dri` flags for GPU access
 - Volume mounts for code/data
-- Slightly more complex MPI setup
+- ~~Slightly more complex MPI setup~~ (NOT NEEDED - single GPU only!)
 
 **Base Image:**
 ```dockerfile
@@ -83,13 +95,13 @@ FROM rocm/dev-ubuntu-22.04:6.0
 - ROCm runtime (rocminfo, rocm-smi)
 - hipTensor library
 - rocBLAS, rocSOLVER (for dense linear algebra)
-- MPI (OpenMPI with ROCm awareness)
+- ~~MPI~~ (NOT NEEDED - single GPU only!)
 - Build tools (CMake 3.20+, g++ 11+)
 
 #### Option B: Native Installation
 **Pros:**
 - Direct hardware access
-- Simpler MPI configuration
+- ~~Simpler MPI configuration~~ (N/A - no MPI)
 - Potentially lower latency
 
 **Cons:**
@@ -99,12 +111,14 @@ FROM rocm/dev-ubuntu-22.04:6.0
 
 **Verdict:** Start with Docker for development, benchmark native if performance critical
 
+**Single-GPU Simplification:** No MPI = much simpler deployment!
+
 ---
 
 ## 4. Compilation Strategy
 
 ### Build System: CMake
-**Minimum CMakeLists.txt structure:**
+**Minimum CMakeLists.txt structure (Single-GPU, No MPI):**
 ```cmake
 cmake_minimum_required(VERSION 3.20)
 project(pdmrg_gpu LANGUAGES CXX HIP)
@@ -113,7 +127,7 @@ project(pdmrg_gpu LANGUAGES CXX HIP)
 find_package(hip REQUIRED)
 find_package(hipblas REQUIRED)
 find_package(hiptensor REQUIRED)  # May need manual path
-find_package(MPI REQUIRED)
+# NO MPI needed!
 
 # Compiler flags
 set(CMAKE_CXX_STANDARD 17)
@@ -131,7 +145,8 @@ add_compile_options(
 set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} --offload-arch=gfx942")
 
 add_executable(pdmrg_gpu src/main.cpp src/dmrg_kernel.hip)
-target_link_libraries(pdmrg_gpu hip::host hipblas hiptensor MPI::MPI_CXX)
+target_link_libraries(pdmrg_gpu hip::host hip::device hipblas hiptensor)
+# Note: No MPI linking!
 ```
 
 ### Key Compilation Flags
@@ -187,28 +202,40 @@ Based on `pdmrg2_gpu.md` specification:
 3. **Block Davidson eigensolver** (see pdmrg2_gpu.md §2.1)
    - Custom implementation using `rocblas_dgemm` (GEMM-heavy)
 
-#### Phase 3: MPI Communication
-1. **Boundary tensor exchange**
-   - ROCm-aware MPI_Send/Recv with GPU buffers
-   - Avoid host-device copies
+#### Phase 3: Stream-Based Parallelism (Single-GPU)
+1. **HIP Streams for pipelining**
+   - Create multiple streams for overlapping operations
+   - Example: While one site is in eigensolver, prefetch next site's tensors
 
-2. **Gauge synchronization**
-   - MPI_Allreduce for energy convergence checks
+2. **Batch tensor operations**
+   - Process multiple left/right contractions in parallel
+   - Use hipTensor batch modes if available
+
+3. **Async memory operations**
+   - Overlap CPU-side bookkeeping with GPU computation
+   - Only copy final results back to host
 
 ### Data Layout Strategy
 
-**Key Decision: AoS vs SoA for MPS/MPO**
+**Key Decision: GPU-Resident Everything**
 
-Option 1: **GPU-resident tensors** (recommended)
-- Keep entire MPS on GPU during sweeps
-- Only copy final results to CPU
-- Requires ~50GB for L=40, D=100, complex128
+**Single Strategy: Keep everything on GPU** (STRONGLY RECOMMENDED)
+- MI300X has 192GB HBM3 - problem fits easily!
+- Store entire MPS, MPO, left/right environments on GPU
+- No streaming needed (simplifies code enormously)
+- Only copy final energy/state to CPU at end
 
-Option 2: **Streaming** (if memory constrained)
-- Stream tensor pairs to GPU for local optimization
-- More host-device transfers but lower memory
+**Memory estimate for L=40, D=100, complex128:**
+- MPS: L × D² × 16 bytes ≈ 40 × 10,000 × 16 = 6.4 MB
+- MPO: L × d² × D² × 16 bytes (d=5 for Josephson) ≈ 40 MB
+- Environments: 2 × L × D² × 16 bytes ≈ 12.8 MB
+- Working buffers (eigensolver, SVD): ~1 GB generous
+- **Total: < 2 GB for huge problems!**
 
-**For MI300X:** Option 1 preferred (192GB HBM3 is huge!)
+**For L=100, D=500, complex128:**
+- Still only ~100 GB - fits comfortably in 192GB!
+
+**Strategy:** Allocate all memory upfront, zero host-device transfers during sweeps
 
 ---
 
@@ -218,8 +245,8 @@ Option 2: **Streaming** (if memory constrained)
 - [ ] Provision HotAisle MI300X instance
 - [ ] Verify ROCm version: `rocminfo` should show gfx942
 - [ ] Test hipTensor installation: `hipcc --version`, check for libhiptensor.so
-- [ ] Build hello-world HIP kernel
-- [ ] Test MPI: `mpirun -np 2 rocm-smi` should show 2 GPUs
+- [ ] Build hello-world HIP kernel with streams
+- [ ] ~~Test MPI~~ (NOT NEEDED - single GPU only!)
 - [ ] Build Docker image with all dependencies
 
 ### Phase 1: Single-GPU Prototype (Week 2-3)
@@ -235,16 +262,17 @@ Option 2: **Streaming** (if memory constrained)
 - [ ] Implement GPU-resident SVD (rocSOLVER)
 - [ ] Benchmark L=40 single-GPU: target >10x speedup vs CPU
 
-### Phase 3: Multi-GPU with MPI (Week 6-7)
-- [ ] Integrate ROCm-aware MPI
-- [ ] Implement domain decomposition (same as PDMRG Python)
-- [ ] Test 2-GPU: verify bit-exact results vs single-GPU
-- [ ] Test 4-GPU and 8-GPU scaling
+### Phase 3: Stream-Based Optimization (Week 6-7)
+- [ ] Implement HIP stream pipelining
+- [ ] Batch tensor operations where possible
+- [ ] Profile stream utilization with rocprof
+- [ ] Optimize memory access patterns (coalescing)
 
 ### Phase 4: Production & Benchmarks (Week 8)
 - [ ] Run Josephson junction benchmark (complex128)
-- [ ] Generate scaling plots (np=1,2,4,8 GPUs)
-- [ ] Compare vs PDMRG Python: target 50-100x speedup
+- [ ] ~~Generate scaling plots~~ (single GPU - compare problem sizes instead)
+- [ ] Compare vs PDMRG Python: target 50-100x speedup on single GPU
+- [ ] Test large problems (L=100, D=500) that exploit 192GB memory
 - [ ] Document deployment instructions
 
 ---
@@ -296,16 +324,20 @@ docker run -it --rm \
   pdmrg-gpu:latest
 ```
 
-### Multi-GPU MPI Launch
+### Single-GPU Launch (Simple!)
 ```bash
-# Inside container
-mpirun -np 4 \
-  --mca pml ucx \
-  --mca btl ^openib \
-  ./build/pdmrg_gpu \
+# Inside container - just run directly, no MPI!
+./build/pdmrg_gpu \
   --model heisenberg \
   --length 40 \
   --bond-dim 100
+
+# For Josephson junction
+./build/pdmrg_gpu \
+  --model josephson \
+  --length 100 \
+  --bond-dim 500 \
+  --complex
 ```
 
 ---
@@ -326,12 +358,8 @@ mpirun -np 4 \
 - May need to manually split real/imag parts
 - Test Josephson benchmark early
 
-### Issue 3: ROCm-Aware MPI
-**Risk:** HotAisle MPI may not have GPU-direct support
-**Mitigation:**
-- Test with simple GPU buffer MPI send/recv benchmark
-- Fallback: Explicit cudaMemcpy to host before MPI (slower but works)
-- Document requirements for HotAisle support
+### ~~Issue 3: ROCm-Aware MPI~~ (NOT APPLICABLE - Single GPU Only!)
+**REMOVED:** No MPI needed, problem solved!
 
 ### Issue 4: Numerical Precision
 **Risk:** GPU numerics differ from CPU (fused multiply-add, reduction order)
@@ -356,10 +384,10 @@ mpirun -np 4 \
 - [ ] Josephson L=20: |E_gpu - E_cpu| < 1e-10
 - [ ] Reproducibility: 10 runs with same seed → identical results
 
-### Performance (Target)
-- [ ] Single MI300X > 10x faster than 48-core CPU (PDMRG Python)
-- [ ] 4 MI300X > 30x faster (strong scaling efficiency > 75%)
-- [ ] 8 MI300X > 50x faster (strong scaling efficiency > 60%)
+### Performance (Target - Single GPU)
+- [ ] Single MI300X > 50x faster than 48-core CPU (PDMRG Python) for L=40
+- [ ] Single MI300X > 100x faster for L=100 (larger problems scale better on GPU)
+- [ ] Demonstrate problems impossible on CPU: L=200, D=1000 (needs ~100GB)
 
 ### Deployment (Required)
 - [ ] Docker image builds in <10 minutes
@@ -372,16 +400,18 @@ mpirun -np 4 \
 
 ### HotAisle-Specific
 1. What ROCm version is available? (Need 5.7+ for hipTensor)
-2. Do they provide ROCm-aware MPI out of the box?
-3. What's the network topology? (NVLink equivalent for MI300X?)
+2. ~~ROCm-aware MPI~~ (NOT NEEDED!)
+3. ~~Network topology~~ (NOT NEEDED - single GPU!)
 4. Persistent storage setup for Docker volumes?
-5. Multi-instance GPU (MIG) support or full GPU allocation?
+5. Full MI300X allocation (192GB)?
 
 ### hipTensor API
 1. Does hipTensor support einsum directly or only GEMM-like operations?
 2. What's the optimal tensor layout (NCHW vs NHWC equivalent)?
 3. Batch tensor contraction support?
 4. Performance vs manual rocBLAS GEMM?
+5. Stream support for async operations?
+6. Workspace memory management (pre-allocate vs dynamic)?
 
 ### Numerical
 1. Does Block Davidson converge faster on GPU than Lanczos on CPU?
@@ -431,7 +461,7 @@ mpirun -np 4 \
 
 ## 12. Deliverables
 
-### Code Repository Structure
+### Code Repository Structure (Single-GPU)
 ```
 pdmrg-gpu/
 ├── CMakeLists.txt
@@ -443,13 +473,16 @@ pdmrg-gpu/
 │   ├── tensor_ops.cpp          # hipTensor wrappers
 │   ├── mpo_builders.cpp        # Heisenberg, Josephson MPOs
 │   ├── eigensolver.cpp         # Block Davidson
-│   └── mpi_wrapper.cpp         # ROCm-aware MPI helpers
+│   ├── stream_manager.cpp      # HIP stream management
+│   └── gpu_memory.cpp          # Device memory pool
 ├── include/
 │   ├── dmrg_types.hpp          # Tensor, MPS, MPO types
-│   └── config.hpp              # Build configuration
+│   ├── config.hpp              # Build configuration
+│   └── stream_manager.hpp      # Stream utilities
 ├── benchmarks/
 │   ├── heisenberg_L12.cpp
 │   ├── heisenberg_L40.cpp
+│   ├── heisenberg_L100.cpp     # Large problem demo
 │   └── josephson_L20.cpp
 └── scripts/
     ├── build_docker.sh
@@ -468,12 +501,13 @@ pdmrg-gpu/
 
 | Phase | Duration | Deliverable |
 |-------|----------|-------------|
-| Environment setup | 1 week | Docker image, hello-world GPU kernel |
+| Environment setup | 1 week | Docker image, hello-world GPU kernel with streams |
 | Single-GPU prototype | 2 weeks | L=12 Heisenberg correctness |
-| Optimization | 2 weeks | L=40 benchmark, 10x speedup |
-| Multi-GPU MPI | 2 weeks | 4-GPU scaling results |
+| Optimization | 2 weeks | L=40 benchmark, 50x speedup |
+| Stream pipelining | 1 week | Optimized async operations |
+| Large problems | 1 week | L=100, D=500 demonstrations |
 | Production & docs | 1 week | Final benchmarks, documentation |
-| **Total** | **8 weeks** | Production-ready GPU DMRG |
+| **Total** | **8 weeks** | Production-ready single-GPU DMRG |
 
 ---
 

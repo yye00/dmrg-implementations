@@ -1,5 +1,5 @@
-# PDMRG GPU Port - Minimal CMake Configuration
-# Target: AMD MI300X with hipTensor
+# PDMRG GPU Port - Single-GPU CMake Configuration
+# Target: AMD MI300X (192GB) with hipTensor - NO MPI
 
 cmake_minimum_required(VERSION 3.20)
 project(pdmrg_gpu LANGUAGES CXX)
@@ -37,13 +37,12 @@ find_library(HIPTENSOR_LIBRARY
     REQUIRED
 )
 find_path(HIPTENSOR_INCLUDE_DIR
-    NAMES hiptensor.h
+    NAMES hiptensor.h hiptensor/hiptensor.h
     PATHS ${ROCM_PATH}/include
     REQUIRED
 )
 
-# Find MPI
-find_package(MPI REQUIRED)
+# NO MPI - single GPU only!
 
 # Architecture target (MI300X = gfx942)
 set(GPU_TARGETS "gfx942" CACHE STRING "GPU architectures to compile for")
@@ -61,13 +60,13 @@ option(ENABLE_FAST_MATH "Enable fast math optimizations" OFF)
 if(ENABLE_FAST_MATH)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ffast-math")
     set(CMAKE_HIP_FLAGS "${CMAKE_HIP_FLAGS} -ffast-math")
+    message(WARNING "Fast math enabled - verify DMRG convergence carefully!")
 endif()
 
 # Include directories
 include_directories(
     ${CMAKE_SOURCE_DIR}/include
     ${HIPTENSOR_INCLUDE_DIR}
-    ${MPI_CXX_INCLUDE_DIRS}
 )
 
 # Source files
@@ -77,6 +76,8 @@ set(SOURCES
     # src/tensor_ops.cpp
     # src/mpo_builders.cpp
     # src/eigensolver.cpp
+    # src/stream_manager.cpp
+    # src/gpu_memory.cpp
 )
 
 set(HIP_SOURCES
@@ -87,14 +88,13 @@ set(HIP_SOURCES
 # Executable
 add_executable(pdmrg_gpu ${SOURCES} ${HIP_SOURCES})
 
-# Link libraries
+# Link libraries (NO MPI!)
 target_link_libraries(pdmrg_gpu
     hip::host
     hip::device
     roc::hipblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
-    MPI::MPI_CXX
 )
 
 # Install target
@@ -102,14 +102,14 @@ install(TARGETS pdmrg_gpu DESTINATION bin)
 
 # Print configuration summary
 message(STATUS "==============================================")
-message(STATUS "PDMRG GPU Build Configuration")
+message(STATUS "PDMRG GPU Build Configuration (Single-GPU)")
 message(STATUS "==============================================")
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "ROCm path: ${ROCM_PATH}")
 message(STATUS "GPU targets: ${GPU_TARGETS}")
 message(STATUS "HIP compiler: ${CMAKE_HIP_COMPILER}")
 message(STATUS "CXX compiler: ${CMAKE_CXX_COMPILER}")
-message(STATUS "MPI found: ${MPI_FOUND}")
+message(STATUS "MPI: NOT USED (single GPU)")
 message(STATUS "hipTensor library: ${HIPTENSOR_LIBRARY}")
 message(STATUS "Fast math: ${ENABLE_FAST_MATH}")
 message(STATUS "==============================================")

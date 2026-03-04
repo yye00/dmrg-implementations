@@ -87,21 +87,30 @@ else
 fi
 echo ""
 
-# Check MPI
-echo "[7/10] Checking MPI installation..."
-if command -v mpirun &> /dev/null; then
-    mpirun --version | head -3
-    echo "✓ MPI found"
+# Check HIP Streams Support
+echo "[7/10] Testing HIP streams..."
+cat > /tmp/test_streams.cpp << 'EOF'
+#include <hip/hip_runtime.h>
+#include <iostream>
 
-    # Check if ROCm-aware
-    echo "  Checking for ROCm-aware MPI..."
-    if mpirun --version 2>&1 | grep -i "ucx\|rocm\|gpu"; then
-        echo "  ✓ Possibly ROCm-aware (mentions UCX/ROCm/GPU)"
-    else
-        echo "  ⚠ May not be ROCm-aware - GPU-direct may not work"
-    fi
+int main() {
+    hipStream_t stream1, stream2;
+    hipStreamCreate(&stream1);
+    hipStreamCreate(&stream2);
+    std::cout << "✓ HIP streams created successfully" << std::endl;
+    std::cout << "  Stream 1: " << stream1 << std::endl;
+    std::cout << "  Stream 2: " << stream2 << std::endl;
+    hipStreamDestroy(stream1);
+    hipStreamDestroy(stream2);
+    return 0;
+}
+EOF
+
+if hipcc -o /tmp/test_streams /tmp/test_streams.cpp 2>/dev/null; then
+    /tmp/test_streams
+    rm /tmp/test_streams /tmp/test_streams.cpp
 else
-    echo "✗ mpirun not found"
+    echo "✗ HIP streams test failed"
 fi
 echo ""
 
@@ -188,8 +197,14 @@ echo ""
 
 echo "Next Steps:"
 echo "1. If hipTensor missing: Install with 'apt-get install hiptensor' or check ROCm installation"
-echo "2. If MPI not ROCm-aware: May need to rebuild OpenMPI with UCX + ROCm support"
-echo "3. Save this output to share with Claude when starting GPU port"
+echo "2. Verify MI300X has 192GB HBM3 available"
+echo "3. Test HIP stream performance with rocprof"
+echo "4. Save this output to share with Claude when starting GPU port"
+echo ""
+echo "Single-GPU Configuration:"
+echo "  • NO MPI needed - entire problem fits in 192GB"
+echo "  • Use HIP streams for async operations"
+echo "  • Target: 50-100x speedup vs CPU PDMRG"
 echo ""
 echo "Save diagnostic results:"
 echo "  ./diagnostic.sh > hotaisle_diagnostic_$(date +%Y%m%d).txt"
