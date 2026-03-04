@@ -219,20 +219,22 @@ public:
         int min_mn = std::min(m, n);
         int rank = std::min(min_mn, max_rank);
 
-        // Workspace
-        double* d_rwork;
+        // Workspace (ROCm 7.2 API)
+        double* d_E;  // Superdiagonal elements
         int* d_info;
-        HIP_CHECK(hipMalloc(&d_rwork, 5 * min_mn * sizeof(double)));
+        HIP_CHECK(hipMalloc(&d_E, std::max(1, min_mn - 1) * sizeof(double)));
         HIP_CHECK(hipMalloc(&d_info, sizeof(int)));
 
-        // Compute full SVD
+        // Compute full SVD (ROCm 7.2 requires E and fast_alg)
         rocsolver_zgesvd(handle, rocblas_svect_singular, rocblas_svect_singular,
                         m, n,
                         (rocblas_double_complex*)d_M, m,
                         d_S,
                         (rocblas_double_complex*)d_U, m,
                         (rocblas_double_complex*)d_Vt, n,
-                        d_rwork, d_info);
+                        d_E,
+                        rocblas_outofplace,
+                        d_info);
 
         int info;
         HIP_CHECK(hipMemcpy(&info, d_info, sizeof(int), hipMemcpyDeviceToHost));
@@ -240,7 +242,7 @@ public:
             std::cerr << "SVD failed with info = " << info << std::endl;
         }
 
-        HIP_CHECK(hipFree(d_rwork));
+        HIP_CHECK(hipFree(d_E));
         HIP_CHECK(hipFree(d_info));
 
         return rank;
