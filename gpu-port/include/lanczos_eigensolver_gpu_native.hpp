@@ -9,6 +9,25 @@
 #include <stdexcept>
 #include "gpu_memory.hpp"
 
+// Error checking macros
+#define ROCBLAS_CHECK(call) \
+    do { \
+        rocblas_status status = call; \
+        if (status != rocblas_status_success) { \
+            throw std::runtime_error(std::string("rocBLAS error at ") + __FILE__ + ":" + \
+                                     std::to_string(__LINE__) + " - code " + std::to_string(status)); \
+        } \
+    } while(0)
+
+#define ROCSOLVER_CHECK(call) \
+    do { \
+        rocblas_status status = call; \
+        if (status != rocblas_status_success) { \
+            throw std::runtime_error(std::string("rocSOLVER error at ") + __FILE__ + ":" + \
+                                     std::to_string(__LINE__) + " - code " + std::to_string(status)); \
+        } \
+    } while(0)
+
 // GPU-NATIVE Lanczos eigensolver - NO CPU TRANSFERS during iteration
 // Everything stays on GPU: Lanczos vectors, tridiagonal matrix, eigenvector
 // Only final eigenvalue/eigenvector come back to CPU if needed
