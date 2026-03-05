@@ -129,8 +129,19 @@ AccurateSVDResult AccurateSVD_GPU::standard_svd(double* d_M, int m, int n) {
         HIP_CHECK(hipMalloc(&workspace.d_info, sizeof(int)));
     }
 
+    // Debug: Check matrix before SVD
+    std::vector<double> debug_M(std::min(9, m*n));
+    HIP_CHECK(hipMemcpy(debug_M.data(), d_M, std::min(9, m*n) * sizeof(double), hipMemcpyDeviceToHost));
+    std::cerr << "DEBUG: Matrix before SVD (first 9 elements): ";
+    for (int i = 0; i < std::min(9, m*n); i++) {
+        std::cerr << debug_M[i] << " ";
+    }
+    std::cerr << std::endl;
+
     // Compute SVD (ROCm 7.2.0 API - no separate buffer size query)
     // Note: rocsolver_dgesvd modifies the input matrix d_M
+    std::cerr << "DEBUG: Calling rocsolver_dgesvd(m=" << m << ", n=" << n << ", lda=" << m << ", ldu=" << m << ", ldv=" << k << ")" << std::endl;
+
     ROCSOLVER_CHECK(rocsolver_dgesvd(
         rocblas_h,               // Note: use rocblas_handle, not rocsolver_handle
         rocblas_svect_singular,  // Compute U
@@ -139,7 +150,7 @@ AccurateSVDResult AccurateSVD_GPU::standard_svd(double* d_M, int m, int n) {
         d_M, m,                  // Input matrix (will be destroyed)
         result.d_S,              // Singular values output
         result.d_U, m,           // Left singular vectors output
-        result.d_Vh, k,          // Right singular vectors output (V, not Vh!)
+        result.d_Vh, k,          // Right singular vectors output (V^T stored as [k x n])
         d_E,                     // Superdiagonal elements (not used)
         rocblas_outofplace,      // Workspace mode
         workspace.d_info         // Info output
