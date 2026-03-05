@@ -621,6 +621,86 @@ void StreamSegment::recompute_boundary_v(bool left_boundary) {
 }
 
 //==============================================================================
+// Boundary Tensor Extraction
+//==============================================================================
+
+void StreamSegment::extract_boundary_tensors() {
+    // Extract MPS tensors and environments at segment boundaries
+    // and copy them into BoundaryData structures for merge operations
+    //
+    // Left boundary: site 0 is the rightmost tensor of the left segment's boundary
+    // Right boundary: site num_sites-1 is the leftmost tensor of the right segment's boundary
+
+    if (has_left_boundary_) {
+        // Left boundary data (for merging with left neighbor)
+        int site_idx = 0;  // Leftmost site in this segment
+        int chi_L = mps_chi_left_[site_idx];
+        int chi_R = mps_chi_right_[site_idx];  // This is chi_bond at the boundary
+
+        // Check if BoundaryData needs reallocation
+        if (left_boundary_.chi_bond != chi_R ||
+            left_boundary_.chi_L != chi_L ||
+            left_boundary_.chi_R != chi_R) {
+            // Reallocate with correct dimensions
+            left_boundary_.free();
+            left_boundary_.allocate(chi_L, chi_R, chi_R, d_, D_mpo_);
+        }
+
+        // Copy MPS tensor (this site is psi_right in the boundary merge)
+        size_t mps_size = chi_L * d_ * chi_R * sizeof(double);
+        HIP_CHECK(hipMemcpy(left_boundary_.d_psi_right, d_mps_tensors_[site_idx],
+                           mps_size, hipMemcpyDeviceToDevice));
+
+        // For psi_left, we would need the rightmost tensor from the left neighbor
+        // This will be set during the merge coordination by the coordinator
+
+        // Copy left environment (R_env at position 0)
+        size_t env_size = D_mpo_ * chi_R * chi_R * sizeof(double);
+        HIP_CHECK(hipMemcpy(left_boundary_.d_R_env, d_R_envs_[site_idx],
+                           env_size, hipMemcpyDeviceToDevice));
+
+        // Copy MPO tensor
+        size_t mpo_size = D_mpo_ * d_ * d_ * D_mpo_ * sizeof(double);
+        HIP_CHECK(hipMemcpy(left_boundary_.d_W_right, d_mpo_tensors_[site_idx],
+                           mpo_size, hipMemcpyDeviceToDevice));
+    }
+
+    if (has_right_boundary_) {
+        // Right boundary data (for merging with right neighbor)
+        int site_idx = num_sites_ - 1;  // Rightmost site in this segment
+        int chi_L = mps_chi_left_[site_idx];  // This is chi_bond at the boundary
+        int chi_R = mps_chi_right_[site_idx];
+
+        // Check if BoundaryData needs reallocation
+        if (right_boundary_.chi_bond != chi_L ||
+            right_boundary_.chi_L != chi_L ||
+            right_boundary_.chi_R != chi_R) {
+            // Reallocate with correct dimensions
+            right_boundary_.free();
+            right_boundary_.allocate(chi_L, chi_R, chi_L, d_, D_mpo_);
+        }
+
+        // Copy MPS tensor (this site is psi_left in the boundary merge)
+        size_t mps_size = chi_L * d_ * chi_R * sizeof(double);
+        HIP_CHECK(hipMemcpy(right_boundary_.d_psi_left, d_mps_tensors_[site_idx],
+                           mps_size, hipMemcpyDeviceToDevice));
+
+        // For psi_right, we would need the leftmost tensor from the right neighbor
+        // This will be set during the merge coordination by the coordinator
+
+        // Copy right environment (L_env at position num_sites_)
+        size_t env_size = D_mpo_ * chi_L * chi_L * sizeof(double);
+        HIP_CHECK(hipMemcpy(right_boundary_.d_L_env, d_L_envs_[num_sites_],
+                           env_size, hipMemcpyDeviceToDevice));
+
+        // Copy MPO tensor
+        size_t mpo_size = D_mpo_ * d_ * d_ * D_mpo_ * sizeof(double);
+        HIP_CHECK(hipMemcpy(right_boundary_.d_W_left, d_mpo_tensors_[site_idx],
+                           mpo_size, hipMemcpyDeviceToDevice));
+    }
+}
+
+//==============================================================================
 // Getters
 //==============================================================================
 

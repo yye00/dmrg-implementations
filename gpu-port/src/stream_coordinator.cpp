@@ -242,6 +242,10 @@ double StreamCoordinator::merge_boundary(int left_idx, int right_idx) {
     StreamSegment* left = segments_[left_idx];
     StreamSegment* right = segments_[right_idx];
 
+    // Extract boundary tensors from both segments before merge
+    left->extract_boundary_tensors();
+    right->extract_boundary_tensors();
+
     // Get boundary data
     BoundaryData* left_boundary = left->get_right_boundary();
     BoundaryData* right_boundary = right->get_left_boundary();
@@ -250,8 +254,23 @@ double StreamCoordinator::merge_boundary(int left_idx, int right_idx) {
         throw std::runtime_error("StreamCoordinator::merge_boundary: null boundary data");
     }
 
-    // Extract boundary tensors into BoundaryData
-    // TODO: Implement extract_boundary_tensors() in StreamSegment
+    // The extract_boundary_tensors() copied:
+    // - left_boundary->d_psi_left from left segment's rightmost tensor
+    // - right_boundary->d_psi_right from right segment's leftmost tensor
+    //
+    // For the merge, both boundaries need both tensors. Copy them:
+    // - left segment's rightmost -> right boundary's psi_left
+    // - right segment's leftmost -> left boundary's psi_right
+
+    // Copy left segment's edge tensor to right boundary's psi_left
+    size_t psi_left_size = left_boundary->chi_L * d_ * left_boundary->chi_bond * sizeof(double);
+    HIP_CHECK(hipMemcpy(right_boundary->d_psi_left, left_boundary->d_psi_left,
+                       psi_left_size, hipMemcpyDeviceToDevice));
+
+    // Copy right segment's edge tensor to left boundary's psi_right
+    size_t psi_right_size = right_boundary->chi_bond * d_ * right_boundary->chi_R * sizeof(double);
+    HIP_CHECK(hipMemcpy(left_boundary->d_psi_right, right_boundary->d_psi_right,
+                       psi_right_size, hipMemcpyDeviceToDevice));
 
     // Perform merge using the appropriate merger
     double energy = 0.0;
