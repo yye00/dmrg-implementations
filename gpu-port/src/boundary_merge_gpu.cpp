@@ -2,6 +2,7 @@
 #include <hip/hip_runtime.h>
 #include <hipblas/hipblas.h>
 #include <rocblas/rocblas.h>
+#include <rocsolver/rocsolver.h>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -27,6 +28,16 @@
             fprintf(stderr, "rocBLAS error in %s:%d - status %d\n", \
                     __FILE__, __LINE__, status); \
             throw std::runtime_error("rocBLAS error"); \
+        } \
+    } while(0)
+
+#define ROCSOLVER_CHECK(call) \
+    do { \
+        rocblas_status status = call; \
+        if (status != rocblas_status_success) { \
+            fprintf(stderr, "rocSOLVER error in %s:%d - status %d\n", \
+                    __FILE__, __LINE__, status); \
+            throw std::runtime_error("rocSOLVER error"); \
         } \
     } while(0)
 
