@@ -263,12 +263,17 @@ void BoundaryMergeGPU::merge(BoundaryData* left, BoundaryData* right,
     // Step 3: Split with exact SVD
     int k_out;
     double* d_S_temp;
+    double* d_A_left_temp;
+    double* d_A_right_temp;
+
     HIP_CHECK(hipMalloc(&d_S_temp, max_bond_ * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_A_left_temp, chi_L * d * max_bond_ * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_A_right_temp, max_bond_ * d * chi_R * sizeof(double)));
 
     split_with_svd(
         d_theta_,  // Now contains optimized theta
-        left->d_psi_left,    // Will be updated with A_left_new
-        right->d_psi_right,  // Will be updated with A_right_new
+        d_A_left_temp,   // Temporary buffer for A_left_new
+        d_A_right_temp,  // Temporary buffer for A_right_new
         d_S_temp,
         trunc_err,
         k_out,
@@ -276,20 +281,45 @@ void BoundaryMergeGPU::merge(BoundaryData* left, BoundaryData* right,
         stream
     );
 
-    // Step 4: Compute V_new = 1/S
+    // Step 4: Compute V_new = 1/S (into temporary buffer)
+    double* d_V_temp;
+    HIP_CHECK(hipMalloc(&d_V_temp, k_out * sizeof(double)));
+
     compute_v_from_s(
         d_S_temp,
-        left->d_V,  // Update V for next iteration
+        d_V_temp,
         k_out,
         1e-12,  // Regularization
         stream
     );
 
+    // Now reallocate boundary data with new bond dimension k_out
+    // Free old allocations
+    HIP_CHECK(hipFree(left->d_psi_left));
+    HIP_CHECK(hipFree(right->d_psi_right));
+    HIP_CHECK(hipFree(left->d_V));
+
+    // Allocate new buffers with correct size
+    HIP_CHECK(hipMalloc(&left->d_psi_left, chi_L * d * k_out * sizeof(double)));
+    HIP_CHECK(hipMalloc(&right->d_psi_right, k_out * d * chi_R * sizeof(double)));
+    HIP_CHECK(hipMalloc(&left->d_V, k_out * sizeof(double)));
+
+    // Copy from temporary buffers
+    HIP_CHECK(hipMemcpy(left->d_psi_left, d_A_left_temp,
+                        chi_L * d * k_out * sizeof(double), hipMemcpyDeviceToDevice));
+    HIP_CHECK(hipMemcpy(right->d_psi_right, d_A_right_temp,
+                        k_out * d * chi_R * sizeof(double), hipMemcpyDeviceToDevice));
+    HIP_CHECK(hipMemcpy(left->d_V, d_V_temp, k_out * sizeof(double), hipMemcpyDeviceToDevice));
+
     // Update chi_bond in boundary data
     left->chi_bond = k_out;
     right->chi_bond = k_out;
 
+    // Free temporary buffers
     HIP_CHECK(hipFree(d_S_temp));
+    HIP_CHECK(hipFree(d_A_left_temp));
+    HIP_CHECK(hipFree(d_A_right_temp));
+    HIP_CHECK(hipFree(d_V_temp));
 }
 
 //==============================================================================
