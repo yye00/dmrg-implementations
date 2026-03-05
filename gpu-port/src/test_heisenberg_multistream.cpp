@@ -1,7 +1,7 @@
 #include "stream_coordinator.h"
 #include <hip/hip_runtime.h>
 #include <iostream>
-<parameter name="iomanip">
+#include <iomanip>
 #include <vector>
 
 int main() {
