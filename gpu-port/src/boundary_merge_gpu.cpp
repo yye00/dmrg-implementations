@@ -740,6 +740,7 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     // Check for errors
     int h_info;
     HIP_CHECK(hipMemcpy(&h_info, d_info, sizeof(int), hipMemcpyDeviceToHost));
+    printf("DEBUG rocsolver_dsyev: info = %d\n", h_info);
     if (h_info != 0) {
         throw std::runtime_error("rocsolver_dsyev failed with info = " + std::to_string(h_info));
     }
