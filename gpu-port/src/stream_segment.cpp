@@ -598,25 +598,45 @@ void StreamSegment::rebuild_left_boundary_env() {
 void StreamSegment::recompute_boundary_v(bool left_boundary) {
     // Recompute V = 1/S at boundary after canonization
     // The boundary tensors contract to form the bond matrix Lambda
+    //
+    // NOTE: This is called after sweeps, which may have changed bond dimensions.
+    // We need to use the current MPS bond dimensions, not the cached boundary dimensions.
 
     if (left_boundary && has_left_boundary_) {
-        // Contract psi_left and psi_right to get bond matrix
-        // Compute SVD: M = U S V^T
-        // Set V = 1 / clip(S, 1e-12, inf)
+        // Get current bond dimension at left edge
+        int site_idx = 0;
+        int chi_bond_current = mps_chi_left_[site_idx];  // Left bond of leftmost site
 
-        // TODO: Implement V computation
+        // Check if boundary needs reallocation
+        if (left_boundary_.chi_bond != chi_bond_current) {
+            // Bond dimension changed - will be reallocated by extract_boundary_tensors()
+            // Skip V update for now
+            return;
+        }
+
+        // TODO: Implement proper V computation from SVD
         // For now: initialize V to ones (will be updated during merge)
-        int chi_bond = left_boundary_.chi_bond;
-        std::vector<double> h_V(chi_bond, 1.0);
+        std::vector<double> h_V(chi_bond_current, 1.0);
         HIP_CHECK(hipMemcpy(left_boundary_.d_V, h_V.data(),
-                           chi_bond * sizeof(double), hipMemcpyHostToDevice));
+                           chi_bond_current * sizeof(double), hipMemcpyHostToDevice));
 
     } else if (!left_boundary && has_right_boundary_) {
-        // Similar for right boundary
-        int chi_bond = right_boundary_.chi_bond;
-        std::vector<double> h_V(chi_bond, 1.0);
+        // Get current bond dimension at right edge
+        int site_idx = num_sites_ - 1;
+        int chi_bond_current = mps_chi_right_[site_idx];  // Right bond of rightmost site
+
+        // Check if boundary needs reallocation
+        if (right_boundary_.chi_bond != chi_bond_current) {
+            // Bond dimension changed - will be reallocated by extract_boundary_tensors()
+            // Skip V update for now
+            return;
+        }
+
+        // TODO: Implement proper V computation from SVD
+        // For now: initialize V to ones (will be updated during merge)
+        std::vector<double> h_V(chi_bond_current, 1.0);
         HIP_CHECK(hipMemcpy(right_boundary_.d_V, h_V.data(),
-                           chi_bond * sizeof(double), hipMemcpyHostToDevice));
+                           chi_bond_current * sizeof(double), hipMemcpyHostToDevice));
     }
 }
 
