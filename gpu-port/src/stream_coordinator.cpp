@@ -337,6 +337,11 @@ void StreamCoordinator::collect_energy() {
 
 void StreamCoordinator::set_mpo(double** d_mpo_tensors) {
     // Distribute MPO tensors to segments
+    // Handle variable MPO bond dimensions at boundaries:
+    //   Left boundary (site 0): D_left = 1, D_right = D_mpo
+    //   Bulk sites: D_left = D_mpo, D_right = D_mpo
+    //   Right boundary (site L-1): D_left = D_mpo, D_right = 1
+
     for (int i = 0; i < n_streams_; i++) {
         int start = segments_[i]->get_start_site();
         int end = segments_[i]->get_end_site();
@@ -345,8 +350,11 @@ void StreamCoordinator::set_mpo(double** d_mpo_tensors) {
             int local_idx = site - start;
             double* d_mpo_local = segments_[i]->get_mpo_tensor(site);
 
-            // Copy MPO tensor for this site
-            size_t mpo_size = D_mpo_ * d_ * d_ * D_mpo_;
+            // Compute actual MPO tensor size for this site
+            int D_left = (site == 0) ? 1 : D_mpo_;
+            int D_right = (site == chain_length_ - 1) ? 1 : D_mpo_;
+            size_t mpo_size = D_left * d_ * d_ * D_right;
+
             HIP_CHECK(hipMemcpy(d_mpo_local, d_mpo_tensors[site],
                                mpo_size * sizeof(double), hipMemcpyDeviceToDevice));
         }

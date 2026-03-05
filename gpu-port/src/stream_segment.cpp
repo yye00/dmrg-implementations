@@ -229,8 +229,19 @@ void StreamSegment::allocate_memory() {
     }
 
     // Allocate MPO tensors (will be set by coordinator)
+    // Handle variable bond dimensions at boundaries:
+    //   Global site 0 (chain start): D_left = 1, D_right = D_mpo
+    //   Global site L-1 (chain end): D_left = D_mpo, D_right = 1
+    //   Bulk sites: D_left = D_mpo, D_right = D_mpo
     for (int i = 0; i < num_sites_; i++) {
-        HIP_CHECK(hipMalloc(&d_mpo_tensors_[i], D_mpo_ * d_ * d_ * D_mpo_ * sizeof(double)));
+        int global_site = start_site_ + i;
+        // Assuming chain_length is known via some parameter
+        // For now, use conservative allocation (max size)
+        // TODO: Pass chain_length to StreamSegment constructor to compute exact sizes
+        int D_left = D_mpo_;   // Conservative: assume bulk
+        int D_right = D_mpo_;  // Conservative: assume bulk
+        size_t mpo_size = D_left * d_ * d_ * D_right;
+        HIP_CHECK(hipMalloc(&d_mpo_tensors_[i], mpo_size * sizeof(double)));
     }
 
     // Allocate boundary data if needed
