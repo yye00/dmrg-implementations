@@ -54,7 +54,7 @@ int main() {
         std::cout << "✓ Initialization complete\n" << std::endl;
 
         // Run multiple DMRG iterations
-        const int max_iterations = 10;  // Even number to end on converged iteration
+        const int max_iterations = 11;  // Ends on iter 10 (even) for converged energy
         std::cout << "Running " << max_iterations << " DMRG iterations..." << std::endl;
         std::cout << std::string(50, '=') << std::endl;
 
