@@ -122,6 +122,10 @@ void StreamCoordinator::distribute_sites() {
 double StreamCoordinator::run_iteration(int iter) {
     std::cout << "\n=== Iteration " << iter << " ===" << std::endl;
 
+    // Reset segment energies at start of iteration
+    // Only boundaries that are merged will update these values
+    std::fill(segment_energies_.begin(), segment_energies_.end(), 0.0);
+
     // Phase 1: Forward sweep (all segments in parallel)
     std::cout << "  Forward sweep..." << std::endl;
     sweep_forward();
@@ -341,24 +345,30 @@ double StreamCoordinator::compute_full_chain_energy() {
     // This is an approximation until we implement full environment contractions
     // for all bonds (not just segment boundaries).
     //
-    // For now: Average the boundary energies and multiply by number of bonds
-    // This gives the right order of magnitude and sign.
+    // segment_energies_ is reset to 0.0 at start of each iteration,
+    // then populated only for boundaries that are actually merged.
 
     double total = 0.0;
     int n_bonds = chain_length_ - 1;
     int n_boundaries = n_streams_ - 1;
 
     if (n_boundaries > 0) {
-        // Average boundary energy
-        double avg_boundary_energy = 0.0;
-        for (int i = 0; i < n_streams_; i++) {
-            avg_boundary_energy += segment_energies_[i];
+        // Count only non-zero boundary energies (actually computed this iteration)
+        double sum_boundary_energy = 0.0;
+        int count = 0;
+        for (int i = 0; i < n_boundaries; i++) {
+            if (segment_energies_[i] != 0.0) {
+                sum_boundary_energy += segment_energies_[i];
+                count++;
+            }
         }
-        avg_boundary_energy /= n_boundaries;
 
-        // Scale to full chain
-        // Assumption: Boundary energies are representative of all bonds
-        total = avg_boundary_energy * n_bonds;
+        if (count > 0) {
+            double avg_boundary_energy = sum_boundary_energy / count;
+            // Scale to full chain
+            // Assumption: Boundary energies are representative of all bonds
+            total = avg_boundary_energy * n_bonds;
+        }
     }
 
     return total;
