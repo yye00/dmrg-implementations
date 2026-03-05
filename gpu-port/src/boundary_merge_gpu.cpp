@@ -674,6 +674,18 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     HIP_CHECK(hipMemcpy(d_E, h_beta.data(), niter * sizeof(double),
                         hipMemcpyHostToDevice));
 
+    // DEBUG: Verify what's on GPU BEFORE rocSOLVER call
+    std::vector<double> h_D_before(niter), h_E_before(niter);
+    HIP_CHECK(hipMemcpy(h_D_before.data(), d_D, niter * sizeof(double),
+                        hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_E_before.data(), d_E, niter * sizeof(double),
+                        hipMemcpyDeviceToHost));
+    printf("DEBUG BEFORE dsteqr: D=[");
+    for (int i = 0; i < niter; i++) printf("%.6f%s", h_D_before[i], i<niter-1?", ":"");
+    printf("], E=[");
+    for (int i = 0; i < niter-1; i++) printf("%.6f%s", h_E_before[i], i<niter-2?", ":"");
+    printf("]\n");
+
     // ==================================================================
     // Call rocSOLVER tridiagonal eigensolver (dsteqr)
     // ==================================================================
