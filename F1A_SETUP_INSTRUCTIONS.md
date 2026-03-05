@@ -9,7 +9,7 @@
 cd /path/to/dmrg-implementations
 
 # Export GitHub token from .zshrc
-export GITHUB_TOKEN=REDACTED_TOKEN
+export GITHUB_TOKEN=<your_github_token_here>
 
 # Pull latest changes
 git pull https://${GITHUB_TOKEN}@github.com/yye00/dmrg-implementations.git master
@@ -244,7 +244,7 @@ dmrg-implementations/
 ```bash
 # Pull latest
 cd dmrg-implementations
-export GITHUB_TOKEN=REDACTED_TOKEN
+export GITHUB_TOKEN=<your_github_token_here>
 git pull https://${GITHUB_TOKEN}@github.com/yye00/dmrg-implementations.git master
 
 # Build

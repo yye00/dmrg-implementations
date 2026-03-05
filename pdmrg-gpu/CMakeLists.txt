@@ -409,3 +409,20 @@ target_link_libraries(pdmrg_benchmark_loaded
     ${HIPTENSOR_LIBRARY}
     lapack
 )
+
+# PDMRG Benchmark V2 - Integrated with Full PDMRG_GPU Implementation
+add_executable(pdmrg_benchmark_loaded_v2
+    src/pdmrg_benchmark_loaded_v2.cpp
+)
+set_source_files_properties(src/pdmrg_benchmark_loaded_v2.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(pdmrg_benchmark_loaded_v2 PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(pdmrg_benchmark_loaded_v2
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+    lapack
+)
