@@ -42,3 +42,27 @@ slurm-*.out
 pdmrg/venv/
 pdmrg2/venv/
 a2dmrg/venv/
+
+# Exclude development artifacts in subdirectories
+**/SESSION_*.txt
+**/.bash_profile
+**/.bashrc
+**/.profile
+**/.zprofile
+**/.zshrc
+**/.gitconfig
+**/.gitmodules
+**/.ripgreprc
+**/.idea
+**/.vscode
+**/.claude
+**/.claude_settings.json
+**/.mcp.json
+**/HEAD
+**/hooks
+**/refs
+**/objects
+**/config
+**/*.egg-info/
+**/.pytest_cache/
+**/venv/
