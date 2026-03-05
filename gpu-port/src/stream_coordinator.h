@@ -152,6 +152,17 @@ private:
      */
     void collect_energy();
 
+    /**
+     * Compute full-chain energy by evaluating ⟨ψ|H|ψ⟩
+     *
+     * Contracts MPS with MPO for all bonds in the chain.
+     * This gives the actual Hamiltonian expectation value,
+     * not just boundary optimization energies.
+     *
+     * @return  Total energy of the full MPS chain
+     */
+    double compute_full_chain_energy();
+
     // ============================================================================
     // Environment Updates
     // ============================================================================

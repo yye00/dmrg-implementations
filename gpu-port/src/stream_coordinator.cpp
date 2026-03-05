@@ -148,8 +148,11 @@ double StreamCoordinator::run_iteration(int iter) {
         merge_even_boundaries(iter);
     }
 
-    // Collect energy
+    // Collect boundary energies
     collect_energy();
+
+    // Compute full-chain energy (scales boundary energy to all bonds)
+    total_energy_ = compute_full_chain_energy();
 
     std::cout << "  Total energy: " << total_energy_ << std::endl;
 
@@ -329,6 +332,36 @@ void StreamCoordinator::collect_energy() {
     if (n_streams_ > 1) {
         total_energy_ /= (n_streams_ - 1);  // Approximate correction
     }
+}
+
+double StreamCoordinator::compute_full_chain_energy() {
+    // Compute ⟨ψ|H|ψ⟩ for the full MPS chain
+    //
+    // Strategy: Use boundary merge energies and scale by number of bonds
+    // This is an approximation until we implement full environment contractions
+    // for all bonds (not just segment boundaries).
+    //
+    // For now: Average the boundary energies and multiply by number of bonds
+    // This gives the right order of magnitude and sign.
+
+    double total = 0.0;
+    int n_bonds = chain_length_ - 1;
+    int n_boundaries = n_streams_ - 1;
+
+    if (n_boundaries > 0) {
+        // Average boundary energy
+        double avg_boundary_energy = 0.0;
+        for (int i = 0; i < n_streams_; i++) {
+            avg_boundary_energy += segment_energies_[i];
+        }
+        avg_boundary_energy /= n_boundaries;
+
+        // Scale to full chain
+        // Assumption: Boundary energies are representative of all bonds
+        total = avg_boundary_energy * n_bonds;
+    }
+
+    return total;
 }
 
 //==============================================================================
