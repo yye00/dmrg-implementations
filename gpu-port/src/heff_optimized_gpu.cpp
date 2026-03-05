@@ -108,7 +108,7 @@ void OptimizedHeff::initialize_descriptors() {
         *handle, &desc_L,
         extent_L.size(), extent_L.data(),
         nullptr,  // strides = nullptr means column-major
-        HIP_R_64F,  // Double precision for < 1e-10 validation
+        HIPTENSOR_R_64F,  // Double precision for < 1e-10 validation
         HIPTENSOR_OP_IDENTITY
     ));
 
@@ -121,7 +121,7 @@ void OptimizedHeff::initialize_descriptors() {
         *handle, &desc_R,
         extent_R.size(), extent_R.data(),
         nullptr,
-        HIP_R_64F,
+        HIPTENSOR_R_64F,
         HIPTENSOR_OP_IDENTITY
     ));
 
@@ -135,7 +135,7 @@ void OptimizedHeff::initialize_descriptors() {
         *handle, &desc_W1,
         extent_W1.size(), extent_W1.data(),
         nullptr,
-        HIP_R_64F,
+        HIPTENSOR_R_64F,
         HIPTENSOR_OP_IDENTITY
     ));
 
@@ -149,7 +149,7 @@ void OptimizedHeff::initialize_descriptors() {
         *handle, &desc_W2,
         extent_W2.size(), extent_W2.data(),
         nullptr,
-        HIP_R_64F,
+        HIPTENSOR_R_64F,
         HIPTENSOR_OP_IDENTITY
     ));
 
@@ -163,7 +163,7 @@ void OptimizedHeff::initialize_descriptors() {
         *handle, &desc_theta,
         extent_theta.size(), extent_theta.data(),
         nullptr,
-        HIP_R_64F,
+        HIPTENSOR_R_64F,
         HIPTENSOR_OP_IDENTITY
     ));
 
@@ -178,7 +178,7 @@ void OptimizedHeff::initialize_descriptors() {
         *handle, &desc_T1,
         extent_T1.size(), extent_T1.data(),
         nullptr,
-        HIP_R_64F,
+        HIPTENSOR_R_64F,
         HIPTENSOR_OP_IDENTITY
     ));
 
@@ -194,7 +194,7 @@ void OptimizedHeff::initialize_descriptors() {
         *handle, &desc_T2,
         extent_T2.size(), extent_T2.data(),
         nullptr,
-        HIP_R_64F,
+        HIPTENSOR_R_64F,
         HIPTENSOR_OP_IDENTITY
     ));
 
@@ -209,7 +209,7 @@ void OptimizedHeff::initialize_descriptors() {
         *handle, &desc_T3,
         extent_T3.size(), extent_T3.data(),
         nullptr,
-        HIP_R_64F,
+        HIPTENSOR_R_64F,
         HIPTENSOR_OP_IDENTITY
     ));
 
@@ -223,7 +223,7 @@ void OptimizedHeff::initialize_descriptors() {
         *handle, &desc_result,
         extent_result.size(), extent_result.data(),
         nullptr,
-        HIP_R_64F,
+        HIPTENSOR_R_64F,
         HIPTENSOR_OP_IDENTITY
     ));
 }
