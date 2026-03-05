@@ -54,6 +54,15 @@ bool test_accurate_svd() {
         }
     }
 
+    // Debug: Print first few elements of input matrix
+    std::cout << "Input matrix M (first 3x3):" << std::endl;
+    for (int i = 0; i < std::min(3, m); i++) {
+        for (int j = 0; j < std::min(3, n); j++) {
+            std::cout << h_M[i + j * m] << " ";
+        }
+        std::cout << std::endl;
+    }
+
     // Copy to device
     double* d_M;
     HIP_CHECK(hipMalloc(&d_M, m * n * sizeof(double)));
@@ -70,8 +79,19 @@ bool test_accurate_svd() {
     std::vector<double> h_S(result.rank);
     HIP_CHECK(hipMemcpy(h_S.data(), result.d_S, result.rank * sizeof(double), hipMemcpyDeviceToHost));
 
+    // Debug: Check U matrix
+    std::vector<double> h_U(m * result.rank);
+    HIP_CHECK(hipMemcpy(h_U.data(), result.d_U, m * result.rank * sizeof(double), hipMemcpyDeviceToHost));
+    std::cout << "U matrix (first 3x3):" << std::endl;
+    for (int i = 0; i < std::min(3, m); i++) {
+        for (int j = 0; j < std::min(3, result.rank); j++) {
+            std::cout << h_U[i + j * m] << " ";
+        }
+        std::cout << std::endl;
+    }
+
     // Display first and last few singular values
-    std::cout << "Singular values:" << std::endl;
+    std::cout << "\nSingular values:" << std::endl;
     std::cout << "  σ[0] = " << std::scientific << std::setprecision(6) << h_S[0] << std::endl;
     if (result.rank > 1) {
         std::cout << "  σ[1] = " << h_S[1] << std::endl;
