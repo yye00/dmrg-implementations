@@ -352,3 +352,31 @@ target_link_libraries(test_stream_coordinator
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
 )
+
+# Phase 2: Multi-stream with Heisenberg Hamiltonian
+add_executable(test_heisenberg_multistream
+    src/test_heisenberg_multistream.cpp
+    src/stream_coordinator.cpp
+    src/boundary_merge_gpu.cpp
+    src/stream_segment.cpp
+    src/accurate_svd_gpu.cpp
+    src/heff_optimized_gpu.cpp
+    src/heisenberg_mpo.cpp
+)
+set_source_files_properties(src/test_heisenberg_multistream.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/stream_coordinator.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/boundary_merge_gpu.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/stream_segment.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/accurate_svd_gpu.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/heff_optimized_gpu.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/heisenberg_mpo.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(test_heisenberg_multistream PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(test_heisenberg_multistream
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+)
