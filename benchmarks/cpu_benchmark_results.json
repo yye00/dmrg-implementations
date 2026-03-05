@@ -1,0 +1,138 @@
+{
+  "timestamp": "2026-03-04 19:26:12",
+  "platform": "CPU",
+  "quimb_version": "1.12.1",
+  "numpy_version": "2.1.0",
+  "python_version": "3.13.11",
+  "heisenberg": {
+    "Heisenberg-Small": {
+      "L": 12,
+      "D": 100,
+      "d": 2,
+      "model": "heisenberg",
+      "reference_energy": -5.14209138,
+      "DMRG1": {
+        "energy": -5.142090632840535,
+        "wall_time_s": 0.7371869087219238,
+        "n_sweeps": 3,
+        "memory_mb": 15.546875,
+        "converged": true
+      },
+      "DMRG2": {
+        "energy": -5.142090632840503,
+        "wall_time_s": 0.8110239505767822,
+        "n_sweeps": 3,
+        "memory_mb": 210.9140625,
+        "converged": true
+      }
+    },
+    "Heisenberg-Medium": {
+      "L": 20,
+      "D": 100,
+      "d": 2,
+      "model": "heisenberg",
+      "reference_energy": -8.91254841,
+      "DMRG1": {
+        "energy": -8.682473334398944,
+        "wall_time_s": 9.386147737503052,
+        "n_sweeps": 3,
+        "memory_mb": 18.1953125,
+        "converged": true
+      },
+      "DMRG2": {
+        "energy": -8.682473334398573,
+        "wall_time_s": 17.83528208732605,
+        "n_sweeps": 3,
+        "memory_mb": 229.109375,
+        "converged": true
+      }
+    },
+    "Heisenberg-Large": {
+      "L": 40,
+      "D": 200,
+      "d": 2,
+      "model": "heisenberg",
+      "reference_energy": -18.07533653,
+      "DMRG1": {
+        "energy": -17.541473299904577,
+        "wall_time_s": 158.75942611694336,
+        "n_sweeps": 5,
+        "memory_mb": 210.546875,
+        "converged": true
+      },
+      "DMRG2": {
+        "energy": -17.541473299903455,
+        "wall_time_s": 464.91854214668274,
+        "n_sweeps": 4,
+        "memory_mb": 439.65625,
+        "converged": true
+      }
+    }
+  },
+  "josephson": {
+    "Josephson-Small": {
+      "L": 8,
+      "D": 50,
+      "d": 3,
+      "n_max": 2,
+      "model": "josephson",
+      "DMRG1": {
+        "energy": -22.078742222023976,
+        "wall_time_s": 0.17257976531982422,
+        "n_sweeps": 4,
+        "memory_mb": 439.65625,
+        "converged": true
+      },
+      "DMRG2": {
+        "energy": -22.078742222023934,
+        "wall_time_s": 1.3466839790344238,
+        "n_sweeps": 4,
+        "memory_mb": 439.65625,
+        "converged": true
+      }
+    },
+    "Josephson-Medium": {
+      "L": 12,
+      "D": 50,
+      "d": 3,
+      "n_max": 2,
+      "model": "josephson",
+      "DMRG1": {
+        "energy": -33.56385557343519,
+        "wall_time_s": 1.4853229522705078,
+        "n_sweeps": 13,
+        "memory_mb": 439.65625,
+        "converged": true
+      },
+      "DMRG2": {
+        "energy": -33.56385557342896,
+        "wall_time_s": 24.41458511352539,
+        "n_sweeps": 13,
+        "memory_mb": 439.65625,
+        "converged": true
+      }
+    },
+    "Josephson-Large": {
+      "L": 16,
+      "D": 100,
+      "d": 3,
+      "n_max": 2,
+      "model": "josephson",
+      "DMRG1": {
+        "energy": -45.14055226350585,
+        "wall_time_s": 25.068730115890503,
+        "n_sweeps": 5,
+        "memory_mb": 439.65625,
+        "converged": true
+      },
+      "DMRG2": {
+        "energy": -45.14055226350576,
+        "wall_time_s": 54.11677670478821,
+        "n_sweeps": 5,
+        "memory_mb": 439.65625,
+        "converged": true
+      }
+    }
+  },
+  "total_benchmark_time_s": 759.1322071552277
+}
