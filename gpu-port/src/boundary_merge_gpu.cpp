@@ -628,30 +628,92 @@ void BoundaryMergeGPU::lanczos_eigensolver(
 
     int niter = iter;
 
-    // Solve tridiagonal eigenvalue problem on CPU
-    // T = tridiag(beta[:-1], alpha, beta[:-1])
-    // For simplicity: use power method or just return Rayleigh quotient
-    // Full implementation would use LAPACK dstev
+    // ==================================================================
+    // Solve tridiagonal eigenvalue problem on GPU using rocSOLVER
+    // ==================================================================
+    // Tridiagonal matrix T has:
+    //   - Diagonal: alpha[0..niter-1]
+    //   - Off-diagonal: beta[0..niter-2]
+    //
+    // We need to find the minimum eigenvalue and corresponding eigenvector
 
-    // For now: simple approach - lowest eigenvalue ≈ alpha[0] - 2*beta[0]
-    // (valid for well-conditioned problems)
-    energy = h_alpha[0];
+    // Allocate GPU arrays for tridiagonal matrix
+    double* d_T_diag;    // Diagonal elements (alpha)
+    double* d_T_offdiag; // Off-diagonal elements (beta)
+    double* d_T_evecs;   // Eigenvectors (niter x niter)
+    int* d_info;
 
-    // Better: compute Rayleigh quotient with v[0]
-    // E = <v0|H|v0>
-    apply_heff(d_L_env, d_R_env, d_W_left, d_W_right,
-               d_v0, d_H_theta_, chi_L, d, chi_R, D_mpo, stream);
+    HIP_CHECK(hipMalloc(&d_T_diag, niter * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_T_offdiag, (niter - 1) * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_T_evecs, niter * niter * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_info, sizeof(int)));
 
-    double e_rayleigh;
-    ROCBLAS_CHECK(rocblas_ddot(rocblas_h_, n, d_v0, 1, d_H_theta_, 1, &e_rayleigh));
+    // Copy alpha and beta to GPU
+    HIP_CHECK(hipMemcpy(d_T_diag, h_alpha.data(), niter * sizeof(double),
+                        hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_T_offdiag, h_beta.data(), (niter - 1) * sizeof(double),
+                        hipMemcpyHostToDevice));
 
-    // TEMPORARY FIX: Negate energy for antiferromagnetic Hamiltonian
-    // The Lanczos eigensolver placeholder doesn't minimize - it just computes <v0|H|v0>
-    // For the antiferromagnetic Heisenberg model, we want the negative of this
-    energy = -e_rayleigh;
+    // Solve symmetric tridiagonal eigenvalue problem on GPU
+    // rocsolver_dstev computes eigenvalues and eigenvectors
+    // Note: This modifies d_T_diag to contain eigenvalues in ascending order
+    ROCSOLVER_CHECK(rocsolver_dstev(
+        rocblas_h_,
+        rocblas_evect_original,  // Compute eigenvectors
+        niter,
+        d_T_diag,      // Input: diagonal, Output: eigenvalues (ascending)
+        d_T_offdiag,   // Off-diagonal (destroyed)
+        d_T_evecs,     // Output: eigenvectors (column-major, niter x niter)
+        niter,         // Leading dimension
+        d_info
+    ));
 
-    // Copy back normalized v0 to theta (ground state approximation)
-    HIP_CHECK(hipMemcpy(d_theta, d_v0, n * sizeof(double), hipMemcpyDeviceToDevice));
+    // Check for errors
+    int h_info;
+    HIP_CHECK(hipMemcpy(&h_info, d_info, sizeof(int), hipMemcpyDeviceToHost));
+    if (h_info != 0) {
+        throw std::runtime_error("rocsolver_dstev failed with info = " + std::to_string(h_info));
+    }
+
+    // Minimum eigenvalue is now in d_T_diag[0] (eigenvalues are sorted ascending)
+    HIP_CHECK(hipMemcpy(&energy, d_T_diag, sizeof(double), hipMemcpyDeviceToHost));
+
+    // Eigenvector corresponding to minimum eigenvalue is in first column of d_T_evecs
+    // Reconstruct ground state: |psi> = sum_i evec[i] * |v_i> = V * evec
+    // where V is matrix of Lanczos vectors (n × niter), evec is first column (niter × 1)
+
+    // Use GPU matrix-vector product: d_theta = d_lanczos_v_ * d_T_evecs[:, 0]
+    // V is stored as [v0 v1 v2 ...] with each vi of length n
+    // So V is n × niter in column-major format
+    const double alpha = 1.0;
+    const double beta = 0.0;
+
+    ROCBLAS_CHECK(rocblas_dgemv(
+        rocblas_h_,
+        rocblas_operation_none,  // No transpose
+        n,                        // Rows of V
+        niter,                    // Cols of V
+        &alpha,                   // Scale factor
+        d_lanczos_v_,            // Matrix V (n × niter)
+        n,                        // Leading dimension of V
+        d_T_evecs,               // Vector evec (first column of eigenvector matrix)
+        1,                        // Stride
+        &beta,                    // Scale for d_theta (0 = overwrite)
+        d_theta,                  // Output vector
+        1                         // Stride
+    ));
+
+    // Normalize d_theta
+    double theta_norm;
+    ROCBLAS_CHECK(rocblas_dnrm2(rocblas_h_, n, d_theta, 1, &theta_norm));
+    double norm_scale = 1.0 / theta_norm;
+    ROCBLAS_CHECK(rocblas_dscal(rocblas_h_, n, &norm_scale, d_theta, 1));
+
+    // Free GPU memory
+    HIP_CHECK(hipFree(d_T_diag));
+    HIP_CHECK(hipFree(d_T_offdiag));
+    HIP_CHECK(hipFree(d_T_evecs));
+    HIP_CHECK(hipFree(d_info));
 }
 
 //==============================================================================
