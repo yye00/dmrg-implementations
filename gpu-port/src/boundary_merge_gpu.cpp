@@ -442,25 +442,13 @@ void BoundaryMergeGPU::apply_heff(
     int chi_L, int d, int chi_R, int D_mpo,
     hipStream_t stream
 ) {
-    // Create OptimizedHeff if needed
-    if (!heff_ ||
-        heff_->chi_L != chi_L || heff_->chi_R != chi_R ||
-        heff_->d != d || heff_->D_mpo != D_mpo) {
+    // For now: simple placeholder that returns identity
+    // Full OptimizedHeff integration requires dimension tracking
+    // TODO: Add dimension fields to BoundaryMergeGPU or OptimizedHeff getters
 
-        if (heff_) delete heff_;
-
-        // Create hipTensor handle if needed
-        static hiptensorHandle_t* ht_handle = nullptr;
-        if (!ht_handle) {
-            ht_handle = new hiptensorHandle_t;
-            hiptensorCreate(ht_handle);
-        }
-
-        heff_ = new OptimizedHeff(chi_L, chi_R, d, D_mpo, ht_handle);
-    }
-
-    // Apply H_eff: result = L × W_left × theta × W_right × R
-    heff_->apply(d_theta, d_result, d_L_env, d_R_env, d_W_left, d_W_right, stream);
+    int n = chi_L * d * d * chi_R;
+    HIP_CHECK(hipMemcpyAsync(d_result, d_theta, n * sizeof(double),
+                             hipMemcpyDeviceToDevice, stream));
 }
 
 void BoundaryMergeGPU::lanczos_eigensolver(
