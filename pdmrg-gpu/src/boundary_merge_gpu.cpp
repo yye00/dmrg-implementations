@@ -673,6 +673,21 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     std::copy(h_beta.begin(), h_beta.begin() + niter - 1, h_E.begin());
     if (niter > 0) h_E[niter-1] = 0.0;  // Last element unused by LAPACK
 
+    // DEBUG: Print input to LAPACK
+    printf("DEBUG LAPACK INPUT: niter=%d\n", niter);
+    printf("  D (diagonal) = [");
+    for (int i = 0; i < std::min(5, niter); i++) {
+        printf("%.6f%s", h_D[i], (i < std::min(4, niter-1) ? ", " : ""));
+    }
+    if (niter > 5) printf(", ...");
+    printf("]\n");
+    printf("  E (off-diag) = [");
+    for (int i = 0; i < std::min(5, niter-1); i++) {
+        printf("%.6f%s", h_E[i], (i < std::min(4, niter-2) ? ", " : ""));
+    }
+    if (niter > 5) printf(", ...");
+    printf("]\n");
+
     // Call LAPACK dstev: compute eigenvalues and eigenvectors
     const char jobz = 'V';  // Compute eigenvectors
     const int n_lapack = niter;
