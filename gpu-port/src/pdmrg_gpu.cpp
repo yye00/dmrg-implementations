@@ -57,7 +57,7 @@ using Complex = hipDoubleComplex;
     } \
 } while(0)
 
-__host__ __device__ __host__ __device__ inline Complex make_complex(double re, double im) {
+__host__ __device__ inline Complex make_complex(double re, double im) {
     return hipDoubleComplex{re, im};
 }
 
@@ -510,6 +510,128 @@ __global__ void kernel_update_right_env(
 }
 
 // ============================================================================
+// GPU Kernels for H_eff Application (4-step tensor contraction)
+// ============================================================================
+
+// Step 1: T1[w,ap,s1,s2,b] = sum_a L[a,w,ap] * theta[a,s1,s2,b]
+// Each thread computes one element of T1
+__global__ void kernel_heff_step1(
+    const Complex* __restrict__ L,       // [Da, Dw, Da]
+    const Complex* __restrict__ theta,   // [Da, d, d, Db]
+    Complex* __restrict__ T1,            // [Dw, Da, d, d, Db]
+    int Da, int Db, int Dw, int d)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = Dw * Da * d * d * Db;
+    if (idx >= total) return;
+
+    int b   = idx % Db;
+    int s2  = (idx / Db) % d;
+    int s1  = (idx / (Db * d)) % d;
+    int ap  = (idx / (Db * d * d)) % Da;
+    int w   = idx / (Db * d * d * Da);
+
+    double sum_re = 0.0, sum_im = 0.0;
+    for (int a = 0; a < Da; a++) {
+        Complex Lv = L[a * (Dw * Da) + w * Da + ap];
+        Complex tv = theta[a * (d * d * Db) + s1 * (d * Db) + s2 * Db + b];
+        sum_re += Lv.x * tv.x - Lv.y * tv.y;
+        sum_im += Lv.x * tv.y + Lv.y * tv.x;
+    }
+    T1[w * (Da * d * d * Db) + ap * (d * d * Db) + s1 * (d * Db) + s2 * Db + b] =
+        make_complex(sum_re, sum_im);
+}
+
+// Step 2: T2[wm,ap,s1p,s2,b] = sum_{w,s1} W1[w,s1,s1p,wm] * T1[w,ap,s1,s2,b]
+__global__ void kernel_heff_step2(
+    const Complex* __restrict__ W1,      // [Dw, d, d, Dwm]
+    const Complex* __restrict__ T1,      // [Dw, Da, d, d, Db]
+    Complex* __restrict__ T2,            // [Dwm, Da, d, d, Db]
+    int Da, int Db, int Dw, int Dwm, int d)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = Dwm * Da * d * d * Db;
+    if (idx >= total) return;
+
+    int b   = idx % Db;
+    int s2  = (idx / Db) % d;
+    int s1p = (idx / (Db * d)) % d;
+    int ap  = (idx / (Db * d * d)) % Da;
+    int wm  = idx / (Db * d * d * Da);
+
+    double sum_re = 0.0, sum_im = 0.0;
+    for (int w = 0; w < Dw; w++) {
+        for (int s1 = 0; s1 < d; s1++) {
+            Complex Wv = W1[w * (d * d * Dwm) + s1 * (d * Dwm) + s1p * Dwm + wm];
+            Complex T1v = T1[w * (Da * d * d * Db) + ap * (d * d * Db) + s1 * (d * Db) + s2 * Db + b];
+            sum_re += Wv.x * T1v.x - Wv.y * T1v.y;
+            sum_im += Wv.x * T1v.y + Wv.y * T1v.x;
+        }
+    }
+    T2[wm * (Da * d * d * Db) + ap * (d * d * Db) + s1p * (d * Db) + s2 * Db + b] =
+        make_complex(sum_re, sum_im);
+}
+
+// Step 3: T3[ap,s1p,s2p,wr,b] = sum_{wm,s2} W2[wm,s2,s2p,wr] * T2[wm,ap,s1p,s2,b]
+__global__ void kernel_heff_step3(
+    const Complex* __restrict__ W2,      // [Dwm, d, d, Dwr]
+    const Complex* __restrict__ T2,      // [Dwm, Da, d, d, Db]
+    Complex* __restrict__ T3,            // [Da, d, d, Dwr, Db]
+    int Da, int Db, int Dwm, int Dwr, int d)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = Da * d * d * Dwr * Db;
+    if (idx >= total) return;
+
+    int b   = idx % Db;
+    int wr  = (idx / Db) % Dwr;
+    int s2p = (idx / (Db * Dwr)) % d;
+    int s1p = (idx / (Db * Dwr * d)) % d;
+    int ap  = idx / (Db * Dwr * d * d);
+
+    double sum_re = 0.0, sum_im = 0.0;
+    for (int wm = 0; wm < Dwm; wm++) {
+        for (int s2 = 0; s2 < d; s2++) {
+            Complex Wv = W2[wm * (d * d * Dwr) + s2 * (d * Dwr) + s2p * Dwr + wr];
+            Complex T2v = T2[wm * (Da * d * d * Db) + ap * (d * d * Db) + s1p * (d * Db) + s2 * Db + b];
+            sum_re += Wv.x * T2v.x - Wv.y * T2v.y;
+            sum_im += Wv.x * T2v.y + Wv.y * T2v.x;
+        }
+    }
+    T3[ap * (d * d * Dwr * Db) + s1p * (d * Dwr * Db) + s2p * (Dwr * Db) + wr * Db + b] =
+        make_complex(sum_re, sum_im);
+}
+
+// Step 4: result[ap,s1p,s2p,bp] = sum_{wr,b} R[b,wr,bp] * T3[ap,s1p,s2p,wr,b]
+__global__ void kernel_heff_step4(
+    const Complex* __restrict__ R,       // [Db, Dwr, Db]
+    const Complex* __restrict__ T3,      // [Da, d, d, Dwr, Db]
+    Complex* __restrict__ result,        // [Da, d, d, Db]
+    int Da, int Db, int Dwr, int d)
+{
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = Da * d * d * Db;
+    if (idx >= total) return;
+
+    int bp  = idx % Db;
+    int s2p = (idx / Db) % d;
+    int s1p = (idx / (Db * d)) % d;
+    int ap  = idx / (Db * d * d);
+
+    double sum_re = 0.0, sum_im = 0.0;
+    for (int b = 0; b < Db; b++) {
+        for (int wr = 0; wr < Dwr; wr++) {
+            Complex Rv = R[b * (Dwr * Db) + wr * Db + bp];
+            Complex T3v = T3[ap * (d * d * Dwr * Db) + s1p * (d * Dwr * Db) + s2p * (Dwr * Db) + wr * Db + b];
+            sum_re += Rv.x * T3v.x - Rv.y * T3v.y;
+            sum_im += Rv.x * T3v.y + Rv.y * T3v.x;
+        }
+    }
+    result[ap * (d * d * Db) + s1p * (d * Db) + s2p * Db + bp] =
+        make_complex(sum_re, sum_im);
+}
+
+// ============================================================================
 // Environment Tensors on GPU
 // ============================================================================
 
@@ -578,7 +700,6 @@ public:
             d_left_env[site + 1],
             Da, Db, Dw, Dwp, d);
         HIP_CHECK(hipGetLastError());
-        HIP_CHECK(hipDeviceSynchronize());
     }
 
     // update_right_env: R[site] = contract(A[site], W[site], A*[site], R[site+1])
@@ -604,7 +725,6 @@ public:
             d_right_env[site],
             Da, Db, Dw, Dwp, d);
         HIP_CHECK(hipGetLastError());
-        HIP_CHECK(hipDeviceSynchronize());
     }
 
     Complex* get_left(int site) { return d_left_env[site]; }
@@ -631,7 +751,16 @@ public:
         int krylov_size = std::min(max_iter, dim);
         std::vector<double> alpha_k(krylov_size, 0.0);
         std::vector<double> beta_k(krylov_size, 0.0);
-        std::vector<Complex*> d_v(krylov_size + 1, nullptr);
+
+        // Pre-allocate all Krylov vectors + work vector in a single allocation
+        // Layout: [v0, v1, ..., v_{krylov_size}, w] = (krylov_size + 2) vectors
+        Complex* d_krylov_block;
+        HIP_CHECK(hipMalloc(&d_krylov_block, (size_t)(krylov_size + 2) * dim * sizeof(Complex)));
+        std::vector<Complex*> d_v(krylov_size + 1);
+        for (int i = 0; i <= krylov_size; i++) {
+            d_v[i] = d_krylov_block + (size_t)i * dim;
+        }
+        Complex* d_w = d_krylov_block + (size_t)(krylov_size + 1) * dim;
 
         rocblas_double_complex dot_z;
         rocblas_zdotc(handle, dim,
@@ -655,11 +784,7 @@ public:
         rocblas_zscal(handle, dim, (rocblas_double_complex*)&inv_norm,
                      (rocblas_double_complex*)d_psi_inout, 1);
 
-        HIP_CHECK(hipMalloc(&d_v[0], dim * sizeof(Complex)));
         HIP_CHECK(hipMemcpy(d_v[0], d_psi_inout, dim * sizeof(Complex), hipMemcpyDeviceToDevice));
-
-        Complex* d_w;
-        HIP_CHECK(hipMalloc(&d_w, dim * sizeof(Complex)));
 
         int actual_krylov = 0;
         for (int j = 0; j < krylov_size; j++) {
@@ -712,14 +837,11 @@ public:
 
             beta_k[j + 1] = w_norm;
 
-            HIP_CHECK(hipMalloc(&d_v[j + 1], dim * sizeof(Complex)));
             Complex inv_beta = make_complex(1.0 / w_norm, 0.0);
             HIP_CHECK(hipMemcpy(d_v[j + 1], d_w, dim * sizeof(Complex), hipMemcpyDeviceToDevice));
             rocblas_zscal(handle, dim, (rocblas_double_complex*)&inv_beta,
                          (rocblas_double_complex*)d_v[j + 1], 1);
         }
-
-        HIP_CHECK(hipFree(d_w));
 
         // Solve tridiagonal eigenvalue problem on CPU using bisection + inverse iteration.
         // Bisection (Sturm sequence) finds the smallest eigenvalue to machine precision.
@@ -824,12 +946,10 @@ public:
         // Reconstruct ground state
         HIP_CHECK(hipMemset(d_psi_inout, 0, dim * sizeof(Complex)));
         for (int j = 0; j < nk; j++) {
-            if (d_v[j]) {
-                Complex coeff = make_complex(evec[j], 0.0);
-                rocblas_zaxpy(handle, dim, (rocblas_double_complex*)&coeff,
-                             (rocblas_double_complex*)d_v[j], 1,
-                             (rocblas_double_complex*)d_psi_inout, 1);
-            }
+            Complex coeff = make_complex(evec[j], 0.0);
+            rocblas_zaxpy(handle, dim, (rocblas_double_complex*)&coeff,
+                         (rocblas_double_complex*)d_v[j], 1,
+                         (rocblas_double_complex*)d_psi_inout, 1);
         }
 
         // Normalize
@@ -844,7 +964,8 @@ public:
                          (rocblas_double_complex*)d_psi_inout, 1);
         }
 
-        for (auto& p : d_v) if (p) HIP_CHECK(hipFree(p));
+        // Free the single Krylov block allocation
+        HIP_CHECK(hipFree(d_krylov_block));
         return lowest_eval;
     }
 };
@@ -868,6 +989,12 @@ private:
     double current_energy;
     std::string model_name;
 
+    // Pre-allocated GPU buffers for H_eff intermediates (avoids hipMalloc per Lanczos iteration)
+    Complex* d_heff_buf1;  // for T1
+    Complex* d_heff_buf2;  // for T2
+    Complex* d_heff_buf3;  // for T3
+    size_t heff_buf_size;  // allocated size in elements
+
     // Timing instrumentation
     double time_init, time_sweeps, time_energy_eval;
     std::vector<double> sweep_times;
@@ -877,7 +1004,10 @@ public:
               const std::string& model, bool debug = false)
         : mpo(mpo_in), max_D(max_bond), n_sweeps(sweeps),
           n_streams(num_streams), envs(nullptr), current_energy(0.0),
-          model_name(model), time_init(0), time_sweeps(0), time_energy_eval(0),
+          model_name(model),
+          d_heff_buf1(nullptr), d_heff_buf2(nullptr), d_heff_buf3(nullptr),
+          heff_buf_size(0u),
+          time_init(0), time_sweeps(0), time_energy_eval(0),
           verbose_debug(debug)
     {
         L = mpo->get_length();
@@ -936,6 +1066,21 @@ public:
         envs = new Environments(L, d, bond_dims, rb_handle);
         envs->initialize(d_mps, *mpo);
 
+        // Pre-allocate H_eff intermediate buffers
+        // Largest intermediate: T1/T2 = max_D_mpo * max_D * d * d * max_D
+        //                       T3    = max_D * d * d * max_D_mpo * max_D
+        // Use size_t to prevent integer overflow for large systems
+        int max_D_mpo = 0;
+        for (int i = 0; i < L; i++) {
+            max_D_mpo = std::max(max_D_mpo, mpo->get_left_dim(i));
+            max_D_mpo = std::max(max_D_mpo, mpo->get_right_dim(i));
+        }
+        size_t buf_size = (size_t)max_D_mpo * max_D * d * d * max_D;
+        heff_buf_size = buf_size;
+        HIP_CHECK(hipMalloc(&d_heff_buf1, buf_size * sizeof(Complex)));
+        HIP_CHECK(hipMalloc(&d_heff_buf2, buf_size * sizeof(Complex)));
+        HIP_CHECK(hipMalloc(&d_heff_buf3, buf_size * sizeof(Complex)));
+
         time_init = t_init_timer.toc();
         std::cout << "Initialization complete (" << std::fixed << std::setprecision(3)
                   << time_init << "s).\n\n";
@@ -945,6 +1090,9 @@ public:
         delete envs;
         delete ht_heff;
         for (auto& p : d_mps) if (p) HIP_CHECK(hipFree(p));
+        if (d_heff_buf1) HIP_CHECK(hipFree(d_heff_buf1));
+        if (d_heff_buf2) HIP_CHECK(hipFree(d_heff_buf2));
+        if (d_heff_buf3) HIP_CHECK(hipFree(d_heff_buf3));
         rocblas_destroy_handle(rb_handle);
     }
 
@@ -1244,7 +1392,10 @@ private:
             apply_H_eff_with_environments(d_in, d_out, site);
         };
 
-        LanczosEigensolver solver(rb_handle, 30, 1e-10);
+        // Adaptive Lanczos: use more iterations for larger dimensions
+        // d=5 (Josephson) needs more Krylov vectors than d=2 (Heisenberg)
+        int max_lanczos = std::min(std::max(40, psi_size / 10), 100);
+        LanczosEigensolver solver(rb_handle, max_lanczos, 1e-10);
         double energy = solver.solve(apply_H_eff, psi_size, d_theta);
 
         if (verbose_debug) {
@@ -1274,11 +1425,11 @@ private:
         return energy;
     }
 
-    // Apply H_eff using hipTensor GPU contractions (from working PDMRG2)
+    // Apply H_eff using GPU kernels (zero CPU transfers, pre-allocated buffers)
     // result[ap, s1p, s2p, bp] = L[a,w,ap] * theta[a,s1,s2,b] *
     //                            W1[w,s1,s1p,wm] * W2[wm,s2,s2p,wr] * R[b,wr,bp]
     //
-    // Decomposed into 4 hipTensor contractions (all on GPU):
+    // Decomposed into 4 GPU kernel launches (all on GPU, no host transfers):
     // 1. T1 = L * theta  (contract over a)
     // 2. T2 = T1 * W1    (contract over w, s1)
     // 3. T3 = T2 * W2    (contract over wm, s2)
@@ -1289,203 +1440,49 @@ private:
         int D_mpo_L = mpo->get_left_dim(site);
         int D_mpo_M = mpo->get_right_dim(site);
         int D_mpo_R = mpo->get_right_dim(site + 1);
-        int psi_size = D_L * d * d * D_R;
 
-        // For small dimensions, CPU contraction is actually faster due to
-        // hipTensor plan creation overhead. Use GPU for large dimensions.
-        int total_work = D_L * D_L * D_mpo_L * d * d * D_R;
-        bool use_gpu = (total_work > 10000);
+        int block_size = 256;
 
-        if (!use_gpu) {
-            apply_H_eff_cpu(d_theta_in, d_theta_out, site);
-            return;
-        }
+        // Use pre-allocated buffers (no hipMalloc/hipFree per Lanczos iteration)
+        Complex* d_T1 = d_heff_buf1;
+        Complex* d_T2 = d_heff_buf2;
+        Complex* d_T3 = d_heff_buf3;
 
-        // GPU contraction path using hipTensor
         // Step 1: T1[w,ap,s1,s2,b] = sum_a L[a,w,ap] * theta[a,s1,s2,b]
-        // C row-major L[a,w,ap]: col-major extents {D_L, D_mpo_L, D_L}
-        // C row-major theta[a,s1,s2,b]: col-major extents {D_R, d, d, D_L}
-        // C row-major T1[w,ap,s1,s2,b]: col-major extents {D_R, d, d, D_L, D_mpo_L}
-        // mode labels: a=0, w=1, ap=2, s1=3, s2=4, b=5
-
-        int T1_size = D_mpo_L * D_L * d * d * D_R;
-        Complex* d_T1;
-        HIP_CHECK(hipMalloc(&d_T1, T1_size * sizeof(Complex)));
-
         {
-            int64_t extL[] = {(int64_t)D_L, (int64_t)D_mpo_L, (int64_t)D_L};
-            int64_t extTheta[] = {(int64_t)D_R, (int64_t)d, (int64_t)d, (int64_t)D_L};
-            int64_t extT1[] = {(int64_t)D_R, (int64_t)d, (int64_t)d, (int64_t)D_L, (int64_t)D_mpo_L};
-            int32_t modesL[] = {2, 1, 0};    // col-major order: (ap, w, a)
-            int32_t modesTheta[] = {5, 4, 3, 0}; // col-major order: (b, s2, s1, a)
-            int32_t modesT1[] = {5, 4, 3, 2, 1}; // col-major order: (b, s2, s1, ap, w)
-            hipDoubleComplex alpha_v = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta_v = make_hipDoubleComplex(0.0, 0.0);
-            ht_heff->contract(
-                envs->get_left(site), 3, extL, modesL, HIPTENSOR_OP_IDENTITY,
-                d_theta_in, 4, extTheta, modesTheta, HIPTENSOR_OP_IDENTITY,
-                d_T1, 5, extT1, modesT1, alpha_v, beta_v, 0);
+            int T1_size = D_mpo_L * D_L * d * d * D_R;
+            int grid = (T1_size + block_size - 1) / block_size;
+            hipLaunchKernelGGL(kernel_heff_step1, dim3(grid), dim3(block_size), 0, 0,
+                envs->get_left(site), d_theta_in, d_T1,
+                D_L, D_R, D_mpo_L, d);
         }
 
         // Step 2: T2[wm,ap,s1p,s2,b] = sum_{w,s1} W1[w,s1,s1p,wm] * T1[w,ap,s1,s2,b]
-        // C row-major W1[w,s1,s1p,wm]: col-major extents {D_mpo_M, d, d, D_mpo_L}
-        // mode labels: s1p=6, wm=7
-        int T2_size = D_mpo_M * D_L * d * d * D_R;
-        Complex* d_T2;
-        HIP_CHECK(hipMalloc(&d_T2, T2_size * sizeof(Complex)));
-
         {
-            int64_t extT1[] = {(int64_t)D_R, (int64_t)d, (int64_t)d, (int64_t)D_L, (int64_t)D_mpo_L};
-            int64_t extW1[] = {(int64_t)D_mpo_M, (int64_t)d, (int64_t)d, (int64_t)D_mpo_L};
-            int64_t extT2[] = {(int64_t)D_R, (int64_t)d, (int64_t)d, (int64_t)D_L, (int64_t)D_mpo_M};
-            int32_t modesT1_2[] = {5, 4, 3, 2, 1};         // (b, s2, s1, ap, w)
-            int32_t modesW1[] = {7, 6, 3, 1};               // (wm, s1p, s1, w)
-            int32_t modesT2[] = {5, 4, 6, 2, 7};            // (b, s2, s1p, ap, wm)
-            hipDoubleComplex alpha_v = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta_v = make_hipDoubleComplex(0.0, 0.0);
-            ht_heff->contract(
-                d_T1, 5, extT1, modesT1_2, HIPTENSOR_OP_IDENTITY,
-                mpo->get_mpo(site), 4, extW1, modesW1, HIPTENSOR_OP_IDENTITY,
-                d_T2, 5, extT2, modesT2, alpha_v, beta_v, 0);
+            int T2_size = D_mpo_M * D_L * d * d * D_R;
+            int grid = (T2_size + block_size - 1) / block_size;
+            hipLaunchKernelGGL(kernel_heff_step2, dim3(grid), dim3(block_size), 0, 0,
+                mpo->get_mpo(site), d_T1, d_T2,
+                D_L, D_R, D_mpo_L, D_mpo_M, d);
         }
-
-        HIP_CHECK(hipFree(d_T1));
 
         // Step 3: T3[ap,s1p,s2p,wr,b] = sum_{wm,s2} W2[wm,s2,s2p,wr] * T2[wm,ap,s1p,s2,b]
-        // mode labels: s2p=8, wr=9
-        int T3_size = D_L * d * d * D_mpo_R * D_R;
-        Complex* d_T3;
-        HIP_CHECK(hipMalloc(&d_T3, T3_size * sizeof(Complex)));
-
         {
-            int64_t extT2[] = {(int64_t)D_R, (int64_t)d, (int64_t)d, (int64_t)D_L, (int64_t)D_mpo_M};
-            int64_t extW2[] = {(int64_t)D_mpo_R, (int64_t)d, (int64_t)d, (int64_t)D_mpo_M};
-            int64_t extT3[] = {(int64_t)D_R, (int64_t)D_mpo_R, (int64_t)d, (int64_t)d, (int64_t)D_L};
-            int32_t modesT2_2[] = {5, 4, 6, 2, 7};          // (b, s2, s1p, ap, wm)
-            int32_t modesW2[] = {9, 8, 4, 7};               // (wr, s2p, s2, wm)
-            int32_t modesT3[] = {5, 9, 8, 6, 2};            // (b, wr, s2p, s1p, ap)
-            hipDoubleComplex alpha_v = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta_v = make_hipDoubleComplex(0.0, 0.0);
-            ht_heff->contract(
-                d_T2, 5, extT2, modesT2_2, HIPTENSOR_OP_IDENTITY,
-                mpo->get_mpo(site + 1), 4, extW2, modesW2, HIPTENSOR_OP_IDENTITY,
-                d_T3, 5, extT3, modesT3, alpha_v, beta_v, 0);
+            int T3_size = D_L * d * d * D_mpo_R * D_R;
+            int grid = (T3_size + block_size - 1) / block_size;
+            hipLaunchKernelGGL(kernel_heff_step3, dim3(grid), dim3(block_size), 0, 0,
+                mpo->get_mpo(site + 1), d_T2, d_T3,
+                D_L, D_R, D_mpo_M, D_mpo_R, d);
         }
-
-        HIP_CHECK(hipFree(d_T2));
 
         // Step 4: result[ap,s1p,s2p,bp] = sum_{wr,b} R[b,wr,bp] * T3[ap,s1p,s2p,wr,b]
-        // mode labels: bp=10
         {
-            int64_t extT3[] = {(int64_t)D_R, (int64_t)D_mpo_R, (int64_t)d, (int64_t)d, (int64_t)D_L};
-            int64_t extR[] = {(int64_t)D_R, (int64_t)D_mpo_R, (int64_t)D_R};
-            int64_t extResult[] = {(int64_t)D_R, (int64_t)d, (int64_t)d, (int64_t)D_L};
-            int32_t modesT3_2[] = {5, 9, 8, 6, 2};          // (b, wr, s2p, s1p, ap)
-            int32_t modesR[] = {10, 9, 5};                   // (bp, wr, b)
-            int32_t modesResult[] = {10, 8, 6, 2};           // (bp, s2p, s1p, ap)
-            hipDoubleComplex alpha_v = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta_v = make_hipDoubleComplex(0.0, 0.0);
-            ht_heff->contract(
-                d_T3, 5, extT3, modesT3_2, HIPTENSOR_OP_IDENTITY,
-                envs->get_right(site + 2), 3, extR, modesR, HIPTENSOR_OP_IDENTITY,
-                d_theta_out, 4, extResult, modesResult, alpha_v, beta_v, 0);
+            int out_size = D_L * d * d * D_R;
+            int grid = (out_size + block_size - 1) / block_size;
+            hipLaunchKernelGGL(kernel_heff_step4, dim3(grid), dim3(block_size), 0, 0,
+                envs->get_right(site + 2), d_T3, d_theta_out,
+                D_L, D_R, D_mpo_R, d);
         }
-
-        HIP_CHECK(hipFree(d_T3));
-    }
-
-    // CPU fallback for H_eff (small systems where hipTensor overhead dominates)
-    void apply_H_eff_cpu(const Complex* d_theta_in, Complex* d_theta_out, int site) {
-        int D_L = bond_dims[site];
-        int D_R = bond_dims[site + 2];
-        int D_mpo_L = mpo->get_left_dim(site);
-        int D_mpo_M = mpo->get_right_dim(site);
-        int D_mpo_R = mpo->get_right_dim(site + 1);
-        int psi_size = D_L * d * d * D_R;
-
-        int L_size = D_L * D_mpo_L * D_L;
-        int R_size = D_R * D_mpo_R * D_R;
-        int W1_size = D_mpo_L * d * d * D_mpo_M;
-        int W2_size = D_mpo_M * d * d * D_mpo_R;
-
-        std::vector<Complex> hL(L_size), hR(R_size), hW1(W1_size), hW2(W2_size), hTheta(psi_size);
-        HIP_CHECK(hipMemcpy(hL.data(), envs->get_left(site), L_size * sizeof(Complex), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(hR.data(), envs->get_right(site + 2), R_size * sizeof(Complex), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(hW1.data(), mpo->get_mpo(site), W1_size * sizeof(Complex), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(hW2.data(), mpo->get_mpo(site + 1), W2_size * sizeof(Complex), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(hTheta.data(), d_theta_in, psi_size * sizeof(Complex), hipMemcpyDeviceToHost));
-
-        std::vector<Complex> hResult(psi_size, make_complex(0.0, 0.0));
-
-        int T1_size = D_mpo_L * D_L * d * d * D_R;
-        std::vector<Complex> hT1(T1_size, make_complex(0.0, 0.0));
-        for (int w = 0; w < D_mpo_L; w++)
-            for (int ap = 0; ap < D_L; ap++)
-                for (int s1 = 0; s1 < d; s1++)
-                    for (int s2 = 0; s2 < d; s2++)
-                        for (int b = 0; b < D_R; b++) {
-                            Complex sum = make_complex(0.0, 0.0);
-                            for (int a = 0; a < D_L; a++) {
-                                Complex Lv = hL[a*(D_mpo_L*D_L) + w*D_L + ap];
-                                Complex tv = hTheta[a*(d*d*D_R) + s1*(d*D_R) + s2*D_R + b];
-                                sum.x += Lv.x*tv.x - Lv.y*tv.y;
-                                sum.y += Lv.x*tv.y + Lv.y*tv.x;
-                            }
-                            hT1[w*(D_L*d*d*D_R) + ap*(d*d*D_R) + s1*(d*D_R) + s2*D_R + b] = sum;
-                        }
-
-        int T2_size = D_mpo_M * D_L * d * d * D_R;
-        std::vector<Complex> hT2(T2_size, make_complex(0.0, 0.0));
-        for (int wm = 0; wm < D_mpo_M; wm++)
-            for (int ap = 0; ap < D_L; ap++)
-                for (int s1p = 0; s1p < d; s1p++)
-                    for (int s2 = 0; s2 < d; s2++)
-                        for (int b = 0; b < D_R; b++) {
-                            Complex sum = make_complex(0.0, 0.0);
-                            for (int w = 0; w < D_mpo_L; w++)
-                                for (int s1 = 0; s1 < d; s1++) {
-                                    Complex Wv = hW1[w*(d*d*D_mpo_M) + s1*(d*D_mpo_M) + s1p*D_mpo_M + wm];
-                                    Complex T1v = hT1[w*(D_L*d*d*D_R) + ap*(d*d*D_R) + s1*(d*D_R) + s2*D_R + b];
-                                    sum.x += Wv.x*T1v.x - Wv.y*T1v.y;
-                                    sum.y += Wv.x*T1v.y + Wv.y*T1v.x;
-                                }
-                            hT2[wm*(D_L*d*d*D_R) + ap*(d*d*D_R) + s1p*(d*D_R) + s2*D_R + b] = sum;
-                        }
-
-        int T3_size = D_L * d * d * D_mpo_R * D_R;
-        std::vector<Complex> hT3(T3_size, make_complex(0.0, 0.0));
-        for (int ap = 0; ap < D_L; ap++)
-            for (int s1p = 0; s1p < d; s1p++)
-                for (int s2p = 0; s2p < d; s2p++)
-                    for (int wr = 0; wr < D_mpo_R; wr++)
-                        for (int b = 0; b < D_R; b++) {
-                            Complex sum = make_complex(0.0, 0.0);
-                            for (int wm = 0; wm < D_mpo_M; wm++)
-                                for (int s2 = 0; s2 < d; s2++) {
-                                    Complex Wv = hW2[wm*(d*d*D_mpo_R) + s2*(d*D_mpo_R) + s2p*D_mpo_R + wr];
-                                    Complex T2v = hT2[wm*(D_L*d*d*D_R) + ap*(d*d*D_R) + s1p*(d*D_R) + s2*D_R + b];
-                                    sum.x += Wv.x*T2v.x - Wv.y*T2v.y;
-                                    sum.y += Wv.x*T2v.y + Wv.y*T2v.x;
-                                }
-                            hT3[ap*(d*d*D_mpo_R*D_R) + s1p*(d*D_mpo_R*D_R) + s2p*(D_mpo_R*D_R) + wr*D_R + b] = sum;
-                        }
-
-        for (int ap = 0; ap < D_L; ap++)
-            for (int s1p = 0; s1p < d; s1p++)
-                for (int s2p = 0; s2p < d; s2p++)
-                    for (int bp = 0; bp < D_R; bp++) {
-                        Complex sum = make_complex(0.0, 0.0);
-                        for (int b = 0; b < D_R; b++)
-                            for (int wr = 0; wr < D_mpo_R; wr++) {
-                                Complex Rv = hR[b*(D_mpo_R*D_R) + wr*D_R + bp];
-                                Complex T3v = hT3[ap*(d*d*D_mpo_R*D_R) + s1p*(d*D_mpo_R*D_R) + s2p*(D_mpo_R*D_R) + wr*D_R + b];
-                                sum.x += Rv.x*T3v.x - Rv.y*T3v.y;
-                                sum.y += Rv.x*T3v.y + Rv.y*T3v.x;
-                            }
-                        hResult[ap*(d*d*D_R) + s1p*(d*D_R) + s2p*D_R + bp] = sum;
-                    }
-
-        HIP_CHECK(hipMemcpy(d_theta_out, hResult.data(), psi_size * sizeof(Complex), hipMemcpyHostToDevice));
     }
 
     // SVD to split optimized 2-site wavefunction (from working dmrg_with_environments.cpp)
