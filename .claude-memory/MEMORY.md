@@ -266,3 +266,38 @@ Successfully validated full iterative DMRG pipeline on MI300X:
 
 **Phase 2 Status: Core pipeline operational and tested**
 
+
+## 2026-03-05: hipTensor Environment Contractions (In Progress) 🔨
+
+Implemented full hipTensor-based environment contractions:
+
+**Completed:**
+- ✅ hipTensor handle initialization in StreamSegment
+- ✅ HIPTENSOR_CHECK error handling macro
+- ✅ Full 3-step contraction logic for L_env and R_env
+- ✅ Helper function hiptensor_contract() with correct API
+
+**hipTensor API (Correct):**
+- hiptensorCreateContraction (operation descriptor)
+- hiptensorCreatePlanPreference (ALGO_DEFAULT, JIT_MODE_NONE)
+- hiptensorEstimateWorkspaceSize (WORKSPACE_DEFAULT)
+- hiptensorCreatePlan
+- hiptensorContract
+- Constants: HIPTENSOR_R_64F, HIPTENSOR_COMPUTE_DESC_64F
+
+**Current Issue:**
+- Initial implementation used wrong API names (ContractionDescriptor, etc.)
+- Helper function created with correct API (~60 lines)
+- Need to replace 6 verbose contractions with helper calls
+- ~1300 lines in stream_segment.cpp (will reduce to ~600 after refactor)
+
+**Environment Contraction Formula:**
+```
+L_new[b,wp,b'] = sum L[a,w,a'] * A[a,s,b] * W[w,s,s',wp] * A[a',s',b']
+```
+3 steps: temp1 = L*A, temp2 = temp1*W, L_new = temp2*A
+
+**Next Step:**
+Replace verbose hip tensor calls in rebuild_right_boundary_env() and 
+rebuild_left_boundary_env() with ~12 line calls to hiptensor_contract()
+
