@@ -182,8 +182,15 @@ AccurateSVDResult AccurateSVD_GPU::decompose_recursive(double* d_M, int m, int n
         return standard_svd(d_M, m, n);
     }
 
+    // CRITICAL FIX: Copy M before SVD because standard_svd destroys it
+    // We'll need the original M for recursive refinement
+    double* d_M_copy;
+    HIP_CHECK(hipMalloc(&d_M_copy, m * n * sizeof(double)));
+    HIP_CHECK(hipMemcpy(d_M_copy, d_M, m * n * sizeof(double), hipMemcpyDeviceToDevice));
+
     // Step 1: Compute standard SVD
-    // NOTE: This consumes d_M (it gets overwritten)
+    // NOTE: This consumes d_M (it gets overwritten), so we work with the original d_M
+    // and keep d_M_copy for later if needed
     AccurateSVDResult result = standard_svd(d_M, m, n);
 
     // Step 2: Find degradation threshold
@@ -191,124 +198,53 @@ AccurateSVDResult AccurateSVD_GPU::decompose_recursive(double* d_M, int m, int n
 
     // Base case 3: No degradation found, return standard SVD
     if (p == -1 || p == k - 1) {
+        HIP_CHECK(hipFree(d_M_copy));  // Clean up M_copy
         return result;
     }
 
     // Step 3: Recursive refinement needed
     int k_sub = k - p;  // Size of inaccurate subspace
 
-    // Allocate temporary matrices for subspace projection
-    // X = U[:, p:]^H @ M @ Vh[p:, :]^H
-    // Since M was destroyed by SVD, we need to reconstruct the inaccurate part:
-    // M_sub ≈ U[:, p:] @ diag(S[p:]) @ Vh[p:, :]
-    // Then X = U[:, p:]^H @ M_sub @ Vh[p:, :]^H
-    // But for efficiency, we actually compute:
-    // X = U_sub @ diag(S_sub) @ Vh_sub where subspace is U[:, p:] @ X @ Vh[p:, :]
-
-    // For simplicity in this implementation, we'll form X as a k_sub x k_sub matrix
-    // X[i,j] = sum_l sum_r U[l, p+i]^* M_orig[l, r] Vh[p+j, r]^*
-    // But M_orig was destroyed, so we approximate via current decomposition
-
+    // Project original M onto inaccurate subspace: X = U[:, p:]^T @ M_copy @ Vh[p:, :]^T
     double* d_X;
     HIP_CHECK(hipMalloc(&d_X, k_sub * k_sub * sizeof(double)));
 
-    // Reconstruct M in the inaccurate subspace
-    // M_sub = U[:, p:] @ diag(S[p:]) @ Vh[p:, :]
-    // Then project back: X = U[:, p:]^H @ M_sub @ Vh[p:, :]^H
-    // This simplifies to: X = diag(S[p:])
+    double* d_U_sub = result.d_U + p * m;    // U[:, p:] in column-major
+    double* d_Vh_sub = result.d_Vh + p * n;  // Vh[p:, :] (V^T[p:, :]) in column-major
 
-    // Actually, the proper algorithm is to work with the original M
-    // Since we don't have it anymore after SVD, we use the approximation:
-    // X = diag(S[p:k]) as a starting point for refinement
-
-    // For a more accurate implementation, we would need to:
-    // 1. Copy M before initial SVD, OR
-    // 2. Reconstruct M = U @ diag(S) @ Vh
-
-    // Let's reconstruct M in the inaccurate subspace
-    // M_sub[i,j] = sum_a U[i, p+a] * S[p+a] * Vh[p+a, j]
-
-    // For efficiency, use GEMM operations:
-    // First: T[i, a] = U[i, p+a] * S[p+a]  (m x k_sub)
-    // Then: M_sub[i, j] = T[i, a] @ Vh[p+a, j]  (m x n)
-
-    double* d_M_sub;
-    HIP_CHECK(hipMalloc(&d_M_sub, m * n * sizeof(double)));
-
-    // Scale U[:, p:] by S[p:]
-    double* d_U_scaled;
-    HIP_CHECK(hipMalloc(&d_U_scaled, m * k_sub * sizeof(double)));
-
-    // Copy U[:, p:] and scale by S[p:]
-    // We need to do: U_scaled[i, j] = U[i, p+j] * S[p+j]
-    // This is efficiently done on GPU with a custom kernel, but for now use rocBLAS
-
-    // Copy U[:, p:k] to U_scaled
-    double* d_U_sub = result.d_U + p * m;  // Column-major: U[0, p] offset
-    HIP_CHECK(hipMemcpy(d_U_scaled, d_U_sub, m * k_sub * sizeof(double), hipMemcpyDeviceToDevice));
-
-    // Scale columns by S[p:]
-    for (int j = 0; j < k_sub; j++) {
-        double scale;
-        HIP_CHECK(hipMemcpy(&scale, result.d_S + p + j, sizeof(double), hipMemcpyDeviceToHost));
-        ROCBLAS_CHECK(rocblas_dscal(
-            rocblas_h,
-            m,                        // Number of elements
-            &scale,                   // Scale factor
-            d_U_scaled + j * m,      // Column j (column-major)
-            1                         // Stride
-        ));
-    }
-
-    // Reconstruct M_sub = U_scaled @ Vh[p:, :]
-    double alpha = 1.0;
-    double beta = 0.0;
-    double* d_Vh_sub = result.d_Vh + p * n;  // Row p in row-major, but Vh is column-major so this is col p
-    ROCBLAS_CHECK(rocblas_dgemm(
-        rocblas_h,
-        rocblas_operation_none,
-        rocblas_operation_none,
-        m, n, k_sub,
-        &alpha,
-        d_U_scaled, m,
-        d_Vh_sub, k,
-        &beta,
-        d_M_sub, m
-    ));
-
-    // Now project onto subspace: X = U[:, p:]^H @ M_sub @ Vh[p:, :]^H
-    // First: T = U[:, p:]^H @ M_sub  (k_sub x n)
+    // First: T = U[:, p:]^T @ M_copy  (k_sub x n)
     double* d_T;
     HIP_CHECK(hipMalloc(&d_T, k_sub * n * sizeof(double)));
 
+    double alpha = 1.0;
+    double beta = 0.0;
     ROCBLAS_CHECK(rocblas_dgemm(
         rocblas_h,
         rocblas_operation_transpose,
         rocblas_operation_none,
         k_sub, n, m,
         &alpha,
-        d_U_sub, m,
-        d_M_sub, m,
+        d_U_sub, m,              // U[:, p:] shape [m x k_sub], lda=m
+        d_M_copy, m,             // M_copy shape [m x n], lda=m
         &beta,
-        d_T, k_sub
+        d_T, k_sub               // T shape [k_sub x n], lda=k_sub
     ));
 
-    // Then: X = T @ Vh[p:, :]^H  (k_sub x k_sub)
+    // Then: X = T @ Vh[p:, :]^T  (k_sub x k_sub)
+    // Vh[p:, :] is already V^T, so we need (V^T)^T = V
     ROCBLAS_CHECK(rocblas_dgemm(
         rocblas_h,
         rocblas_operation_none,
         rocblas_operation_transpose,
         k_sub, k_sub, n,
         &alpha,
-        d_T, k_sub,
-        d_Vh_sub, k,
+        d_T, k_sub,              // T shape [k_sub x n], lda=k_sub
+        d_Vh_sub, k,             // Vh[p:, :] shape [k_sub x n], lda=k (from full Vh)
         &beta,
-        d_X, k_sub
+        d_X, k_sub               // X shape [k_sub x k_sub], lda=k_sub
     ));
 
     // Clean up temporaries
-    HIP_CHECK(hipFree(d_U_scaled));
-    HIP_CHECK(hipFree(d_M_sub));
     HIP_CHECK(hipFree(d_T));
 
     // Step 4: Recursively compute accurate SVD of X
@@ -353,6 +289,9 @@ AccurateSVDResult AccurateSVD_GPU::decompose_recursive(double* d_M, int m, int n
 
     // Clean up subspace result (we've copied the data out)
     // Note: sub_result destructor will free its memory
+
+    // Clean up M_copy
+    HIP_CHECK(hipFree(d_M_copy));
 
     return result;
 }
