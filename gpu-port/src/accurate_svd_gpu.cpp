@@ -189,8 +189,8 @@ AccurateSVDResult AccurateSVD_GPU::decompose_recursive(double* d_M, int m, int n
     HIP_CHECK(hipMemcpy(d_M_copy, d_M, m * n * sizeof(double), hipMemcpyDeviceToDevice));
 
     // Step 1: Compute standard SVD
-    // NOTE: This consumes d_M (it gets overwritten), so we work with the original d_M
-    // and keep d_M_copy for later if needed
+    // NOTE: This consumes d_M (it gets overwritten)
+    // Use d_M (parameter) for SVD, keep d_M_copy for later projection
     AccurateSVDResult result = standard_svd(d_M, m, n);
 
     // Step 2: Find degradation threshold
@@ -209,8 +209,11 @@ AccurateSVDResult AccurateSVD_GPU::decompose_recursive(double* d_M, int m, int n
     double* d_X;
     HIP_CHECK(hipMalloc(&d_X, k_sub * k_sub * sizeof(double)));
 
-    double* d_U_sub = result.d_U + p * m;    // U[:, p:] in column-major
-    double* d_Vh_sub = result.d_Vh + p * n;  // Vh[p:, :] (V^T[p:, :]) in column-major
+    // CRITICAL: Correct offsets for column-major storage
+    // U is [m x k] with lda=m, so column p starts at offset p*m
+    // Vh is [k x n] with ldv=k, so row p starts at offset p (NOT p*n!)
+    double* d_U_sub = result.d_U + p * m;    // U[:, p:] column p in column-major
+    double* d_Vh_sub = result.d_Vh + p;      // Vh[p:, :] row p in column-major [k x n]
 
     // First: T = U[:, p:]^T @ M_copy  (k_sub x n)
     double* d_T;
