@@ -637,34 +637,45 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     //
     // We need to find the minimum eigenvalue and corresponding eigenvector
 
-    // Allocate GPU arrays for tridiagonal matrix
-    double* d_T_diag;    // Diagonal elements (alpha)
-    double* d_T_offdiag; // Off-diagonal elements (beta)
-    double* d_T_evecs;   // Eigenvectors (niter x niter)
+    // Build full tridiagonal matrix on GPU
+    // T is symmetric with alpha on diagonal, beta on off-diagonals
+    double* d_T_matrix;  // Full matrix (niter x niter)
+    double* d_T_evals;   // Eigenvalues
     int* d_info;
 
-    HIP_CHECK(hipMalloc(&d_T_diag, niter * sizeof(double)));
-    HIP_CHECK(hipMalloc(&d_T_offdiag, (niter - 1) * sizeof(double)));
-    HIP_CHECK(hipMalloc(&d_T_evecs, niter * niter * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_T_matrix, niter * niter * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_T_evals, niter * sizeof(double)));
     HIP_CHECK(hipMalloc(&d_info, sizeof(int)));
 
-    // Copy alpha and beta to GPU
-    HIP_CHECK(hipMemcpy(d_T_diag, h_alpha.data(), niter * sizeof(double),
-                        hipMemcpyHostToDevice));
-    HIP_CHECK(hipMemcpy(d_T_offdiag, h_beta.data(), (niter - 1) * sizeof(double),
+    // Initialize T matrix to zero
+    HIP_CHECK(hipMemset(d_T_matrix, 0, niter * niter * sizeof(double)));
+
+    // Build tridiagonal matrix on CPU first (it's small)
+    std::vector<double> h_T_matrix(niter * niter, 0.0);
+    for (int i = 0; i < niter; i++) {
+        h_T_matrix[i + i * niter] = h_alpha[i];  // Diagonal
+        if (i > 0) {
+            h_T_matrix[i + (i-1) * niter] = h_beta[i-1];  // Lower off-diagonal
+            h_T_matrix[(i-1) + i * niter] = h_beta[i-1];  // Upper off-diagonal
+        }
+    }
+
+    // Copy to GPU
+    HIP_CHECK(hipMemcpy(d_T_matrix, h_T_matrix.data(), niter * niter * sizeof(double),
                         hipMemcpyHostToDevice));
 
-    // Solve symmetric tridiagonal eigenvalue problem on GPU
-    // rocsolver_dstev computes eigenvalues and eigenvectors
-    // Note: This modifies d_T_diag to contain eigenvalues in ascending order
-    ROCSOLVER_CHECK(rocsolver_dstev(
+    // Solve symmetric eigenvalue problem on GPU
+    // rocsolver_dsyev computes eigenvalues and eigenvectors
+    // On return: d_T_matrix contains eigenvectors (column-major)
+    //            d_T_evals contains eigenvalues (ascending order)
+    ROCSOLVER_CHECK(rocsolver_dsyev(
         rocblas_h_,
         rocblas_evect_original,  // Compute eigenvectors
-        niter,
-        d_T_diag,      // Input: diagonal, Output: eigenvalues (ascending)
-        d_T_offdiag,   // Off-diagonal (destroyed)
-        d_T_evecs,     // Output: eigenvectors (column-major, niter x niter)
-        niter,         // Leading dimension
+        rocblas_fill_upper,      // Use upper triangle
+        niter,                   // Matrix size
+        d_T_matrix,              // Input: matrix, Output: eigenvectors
+        niter,                   // Leading dimension
+        d_T_evals,               // Output: eigenvalues (ascending)
         d_info
     ));
 
@@ -672,33 +683,33 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     int h_info;
     HIP_CHECK(hipMemcpy(&h_info, d_info, sizeof(int), hipMemcpyDeviceToHost));
     if (h_info != 0) {
-        throw std::runtime_error("rocsolver_dstev failed with info = " + std::to_string(h_info));
+        throw std::runtime_error("rocsolver_dsyev failed with info = " + std::to_string(h_info));
     }
 
-    // Minimum eigenvalue is now in d_T_diag[0] (eigenvalues are sorted ascending)
-    HIP_CHECK(hipMemcpy(&energy, d_T_diag, sizeof(double), hipMemcpyDeviceToHost));
+    // Minimum eigenvalue is now in d_T_evals[0] (eigenvalues are sorted ascending)
+    HIP_CHECK(hipMemcpy(&energy, d_T_evals, sizeof(double), hipMemcpyDeviceToHost));
 
-    // Eigenvector corresponding to minimum eigenvalue is in first column of d_T_evecs
+    // Eigenvector corresponding to minimum eigenvalue is in first column of d_T_matrix
     // Reconstruct ground state: |psi> = sum_i evec[i] * |v_i> = V * evec
     // where V is matrix of Lanczos vectors (n × niter), evec is first column (niter × 1)
 
-    // Use GPU matrix-vector product: d_theta = d_lanczos_v_ * d_T_evecs[:, 0]
+    // Use GPU matrix-vector product: d_theta = d_lanczos_v_ * d_T_matrix[:, 0]
     // V is stored as [v0 v1 v2 ...] with each vi of length n
     // So V is n × niter in column-major format
-    const double alpha = 1.0;
-    const double beta = 0.0;
+    const double alpha_gemv = 1.0;
+    const double beta_gemv = 0.0;
 
     ROCBLAS_CHECK(rocblas_dgemv(
         rocblas_h_,
         rocblas_operation_none,  // No transpose
         n,                        // Rows of V
         niter,                    // Cols of V
-        &alpha,                   // Scale factor
+        &alpha_gemv,              // Scale factor
         d_lanczos_v_,            // Matrix V (n × niter)
         n,                        // Leading dimension of V
-        d_T_evecs,               // Vector evec (first column of eigenvector matrix)
+        d_T_matrix,              // Vector evec (first column of eigenvector matrix)
         1,                        // Stride
-        &beta,                    // Scale for d_theta (0 = overwrite)
+        &beta_gemv,               // Scale for d_theta (0 = overwrite)
         d_theta,                  // Output vector
         1                         // Stride
     ));
@@ -710,9 +721,8 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     ROCBLAS_CHECK(rocblas_dscal(rocblas_h_, n, &norm_scale, d_theta, 1));
 
     // Free GPU memory
-    HIP_CHECK(hipFree(d_T_diag));
-    HIP_CHECK(hipFree(d_T_offdiag));
-    HIP_CHECK(hipFree(d_T_evecs));
+    HIP_CHECK(hipFree(d_T_matrix));
+    HIP_CHECK(hipFree(d_T_evals));
     HIP_CHECK(hipFree(d_info));
 }
 
