@@ -428,7 +428,8 @@ void BoundaryMergeGPU::split_with_svd(
 ) {
     // Reshape theta: (chi_L, d, d, chi_R) → M: (chi_L*d, d*chi_R)
     // For column-major, this is just a reinterpretation
-    const double* d_M_reshaped = d_theta_opt;
+    // Note: decompose() doesn't modify input, but signature requires non-const
+    double* d_M_reshaped = const_cast<double*>(d_theta_opt);
 
     int m = chi_L * d;
     int n = d * chi_R;
