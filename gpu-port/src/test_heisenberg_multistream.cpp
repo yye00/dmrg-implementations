@@ -54,7 +54,7 @@ int main() {
         std::cout << "✓ Initialization complete\n" << std::endl;
 
         // Run multiple DMRG iterations
-        const int max_iterations = 5;
+        const int max_iterations = 10;  // Even number to end on converged iteration
         std::cout << "Running " << max_iterations << " DMRG iterations..." << std::endl;
         std::cout << std::string(50, '=') << std::endl;
 
