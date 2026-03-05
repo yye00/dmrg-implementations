@@ -325,6 +325,7 @@ target_link_libraries(test_boundary_merge
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    lapack
 )
 
 # Phase 2: StreamCoordinator test
@@ -351,6 +352,7 @@ target_link_libraries(test_stream_coordinator
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    lapack
 )
 
 # Phase 2: Multi-stream iterative DMRG test
@@ -379,4 +381,5 @@ target_link_libraries(test_heisenberg_multistream
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    lapack
 )
