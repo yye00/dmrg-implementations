@@ -3,6 +3,7 @@
 #include <hipblas/hipblas.h>
 #include <rocblas/rocblas.h>
 #include <rocsolver/rocsolver.h>
+#include <hiptensor/hiptensor.h>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
@@ -47,6 +48,16 @@
             fprintf(stderr, "rocSOLVER error in %s:%d - status %d\n", \
                     __FILE__, __LINE__, status); \
             throw std::runtime_error("rocSOLVER error"); \
+        } \
+    } while(0)
+
+#define HIPTENSOR_CHECK(call) \
+    do { \
+        hiptensorStatus_t status = call; \
+        if (status != HIPTENSOR_STATUS_SUCCESS) { \
+            fprintf(stderr, "hipTensor error in %s:%d - status %d\n", \
+                    __FILE__, __LINE__, status); \
+            throw std::runtime_error("hipTensor error"); \
         } \
     } while(0)
 
@@ -144,6 +155,9 @@ StreamSegment::StreamSegment(int segment_id, int start_site, int end_site,
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
     ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
 
+    // Create hipTensor handle for environment contractions
+    HIPTENSOR_CHECK(hiptensorCreate(&hiptensor_h_));
+
     // Allocate memory for all tensors
     allocate_memory();
 
@@ -170,6 +184,7 @@ StreamSegment::~StreamSegment() {
 
     if (d_tau_) HIP_CHECK(hipFree(d_tau_));
     if (rocblas_h_) ROCBLAS_CHECK(rocblas_destroy_handle(rocblas_h_));
+    if (hiptensor_h_) HIPTENSOR_CHECK(hiptensorDestroy(hiptensor_h_));
 }
 
 void StreamSegment::allocate_memory() {
@@ -607,31 +622,229 @@ void StreamSegment::rebuild_right_boundary_env() {
     HIP_CHECK(hipMalloc(&d_temp1, temp_size * sizeof(double)));
     HIP_CHECK(hipMalloc(&d_temp2, temp_size * sizeof(double)));
 
-    // TODO: Full environment contraction implementation needed
-    //
-    // The correct implementation requires contracting:
+    // Full hipTensor implementation for environment contraction
     // L_new[b, wp, b'] = sum_{a, a', w, s, s'}
     //     L[a, w, a'] * A[a, s, b] * W[w, s, s', wp] * A[a', s', b']
     //
-    // Options for implementation:
-    // 1. **hipTensor** (optimal): Use Einstein summation for automatic optimization
-    //    - See dmrg_with_environments.cpp for reference
-    //    - Requires hipTensor library setup
-    //
-    // 2. **Manual rocBLAS loops** (slower but correct):
-    //    - Loop over (w, wp, s, s') and accumulate with dgemm
-    //    - ~50-100 lines of careful index management
-    //
-    // 3. **Custom CUDA kernel** (advanced): Write fused kernel for this operation
-    //
-    // Current workaround: Keep identity initialization from initialize_environments()
-    // - Identity L_env[w=0, a, a] = delta[a, a'] works for many cases
-    // - Sufficient for coordination test and simple MPOs
-    // - Real DMRG iterations with non-trivial H will need proper contraction
-    //
-    // Status: test_stream_coordinator PASSES without this (uses identity env)
+    // Decomposed into 3 sequential contractions:
+    // 1. temp1[w, a', s, b] = L[a, w, a'] * A[a, s, b]  (contract over a)
+    // 2. temp2[a', s', b, wp] = temp1[w, a', s, b] * W[w, s, s', wp]  (contract over w, s)
+    // 3. L_new[b, wp, b'] = temp2[a', s', b, wp] * A[a', s', b']  (contract over a', s')
+
+    // Step 1: temp1[w, a', s, b] = sum_a L[a, w, a'] * A[a, s, b]
+    {
+        // For real tensors in column-major:
+        // L[a, w, a']: shape (chi_L, D_mpo, chi_L) -> col-major extents {chi_L, D_mpo, chi_L}
+        // A[a, s, b]: shape (chi_L, d, chi_R) -> col-major extents {chi_L, d, chi_R}
+        // temp1[w, a', s, b]: shape (D_mpo, chi_L, d, chi_R) -> col-major extents {D_mpo, chi_L, d, chi_R}
+        //
+        // Mode labels: a=0, w=1, astar=2, s=3, b=4
+        // L col-major (a, w, a'):        modes {0, 1, 2}
+        // A col-major (a, s, b):         modes {0, 3, 4}
+        // temp1 col-major (w, a', s, b): modes {1, 2, 3, 4}
+        // Contract over mode 0 (a)
+
+        int64_t extentL[] = {(int64_t)chi_L, (int64_t)D_mpo_, (int64_t)chi_L};
+        int64_t extentA[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R};
+        int64_t extent_temp1[] = {(int64_t)D_mpo_, (int64_t)chi_L, (int64_t)d_, (int64_t)chi_R};
+
+        int32_t modesL[] = {0, 1, 2};
+        int32_t modesA[] = {0, 3, 4};
+        int32_t modes_temp1[] = {1, 2, 3, 4};
+
+        hiptensorTensorDescriptor_t descL, descA, desc_temp1;
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descL, 3, extentL,
+                        nullptr, HIPTENSOR_R_64F, 16));
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descA, 3, extentA,
+                        nullptr, HIPTENSOR_R_64F, 16));
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &desc_temp1, 4, extent_temp1,
+                        nullptr, HIPTENSOR_R_64F, 16));
+
+        hiptensorOperator_t opA = HIPTENSOR_OP_IDENTITY;
+        hiptensorOperator_t opL = HIPTENSOR_OP_IDENTITY;
+
+        double alpha = 1.0;
+        double beta = 0.0;
+
+        uint32_t alignmentA, alignmentL, alignment_temp1;
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_A, &descA, &alignmentA));
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_L_in, &descL, &alignmentL));
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_temp1, &desc_temp1, &alignment_temp1));
+
+        hiptensorContractionDescriptor_t desc_contraction;
+        HIPTENSOR_CHECK(hiptensorCreateContractionDescriptor(hiptensor_h_, &desc_contraction,
+                        &descL, modesL, alignmentL, opL,
+                        &descA, modesA, alignmentA, opA,
+                        &desc_temp1, modes_temp1, alignment_temp1,
+                        &desc_temp1, modes_temp1, alignment_temp1,
+                        HIPTENSOR_COMPUTE_64F));
+
+        hiptensorContractionFind_t find;
+        HIPTENSOR_CHECK(hiptensorCreateContractionFind(hiptensor_h_, &find,
+                        HIPTENSOR_ALGO_DEFAULT));
+
+        uint64_t worksize = 0;
+        HIPTENSOR_CHECK(hiptensorContractionGetWorkspaceSize(hiptensor_h_, &desc_contraction,
+                        &find, HIPTENSOR_WORKSPACE_RECOMMENDED, &worksize));
+
+        void* d_workspace_ht = nullptr;
+        if (worksize > 0) {
+            HIP_CHECK(hipMalloc(&d_workspace_ht, worksize));
+        }
+
+        hiptensorContractionPlan_t plan;
+        HIPTENSOR_CHECK(hiptensorCreateContractionPlan(hiptensor_h_, &plan,
+                        &desc_contraction, &find, worksize));
+
+        HIPTENSOR_CHECK(hiptensorContraction(hiptensor_h_, &plan,
+                        &alpha, d_L_in, d_A, &beta, d_temp1, d_temp1,
+                        d_workspace_ht, worksize, stream_));
+
+        if (d_workspace_ht) HIP_CHECK(hipFree(d_workspace_ht));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionPlan(&plan));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionFind(&find));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionDescriptor(&desc_contraction));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&descL));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&descA));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&desc_temp1));
+    }
+
+    // Step 2: temp2[a', s', b, wp] = sum_{w,s} temp1[w, a', s, b] * W[w, s, s', wp]
+    {
+        // temp1[w, a', s, b]: modes {1, 2, 3, 4}
+        // W[w, s, s', wp]: shape (D_mpo, d, d, D_mpo) -> col-major, modes {1, 3, 5, 6}
+        // temp2[a', s', b, wp]: modes {2, 5, 4, 6}
+        // Contract over modes 1(w) and 3(s)
+
+        int64_t extent_temp1[] = {(int64_t)D_mpo_, (int64_t)chi_L, (int64_t)d_, (int64_t)chi_R};
+        int64_t extentW[] = {(int64_t)D_mpo_, (int64_t)d_, (int64_t)d_, (int64_t)D_mpo_};
+        int64_t extent_temp2[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R, (int64_t)D_mpo_};
+
+        int32_t modes_temp1[] = {1, 2, 3, 4};
+        int32_t modesW[] = {1, 3, 5, 6};
+        int32_t modes_temp2[] = {2, 5, 4, 6};
+
+        hiptensorTensorDescriptor_t desc_temp1, descW, desc_temp2;
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &desc_temp1, 4, extent_temp1,
+                        nullptr, HIPTENSOR_R_64F, 16));
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descW, 4, extentW,
+                        nullptr, HIPTENSOR_R_64F, 16));
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &desc_temp2, 4, extent_temp2,
+                        nullptr, HIPTENSOR_R_64F, 16));
+
+        double alpha = 1.0, beta = 0.0;
+
+        uint32_t alignment_temp1, alignmentW, alignment_temp2;
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_temp1, &desc_temp1, &alignment_temp1));
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_W, &descW, &alignmentW));
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_temp2, &desc_temp2, &alignment_temp2));
+
+        hiptensorContractionDescriptor_t desc_contraction;
+        HIPTENSOR_CHECK(hiptensorCreateContractionDescriptor(hiptensor_h_, &desc_contraction,
+                        &desc_temp1, modes_temp1, alignment_temp1, HIPTENSOR_OP_IDENTITY,
+                        &descW, modesW, alignmentW, HIPTENSOR_OP_IDENTITY,
+                        &desc_temp2, modes_temp2, alignment_temp2,
+                        &desc_temp2, modes_temp2, alignment_temp2,
+                        HIPTENSOR_COMPUTE_64F));
+
+        hiptensorContractionFind_t find;
+        HIPTENSOR_CHECK(hiptensorCreateContractionFind(hiptensor_h_, &find, HIPTENSOR_ALGO_DEFAULT));
+
+        uint64_t worksize = 0;
+        HIPTENSOR_CHECK(hiptensorContractionGetWorkspaceSize(hiptensor_h_, &desc_contraction,
+                        &find, HIPTENSOR_WORKSPACE_RECOMMENDED, &worksize));
+
+        void* d_workspace_ht = nullptr;
+        if (worksize > 0) {
+            HIP_CHECK(hipMalloc(&d_workspace_ht, worksize));
+        }
+
+        hiptensorContractionPlan_t plan;
+        HIPTENSOR_CHECK(hiptensorCreateContractionPlan(hiptensor_h_, &plan,
+                        &desc_contraction, &find, worksize));
+
+        HIPTENSOR_CHECK(hiptensorContraction(hiptensor_h_, &plan,
+                        &alpha, d_temp1, d_W, &beta, d_temp2, d_temp2,
+                        d_workspace_ht, worksize, stream_));
+
+        if (d_workspace_ht) HIP_CHECK(hipFree(d_workspace_ht));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionPlan(&plan));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionFind(&find));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionDescriptor(&desc_contraction));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&desc_temp1));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&descW));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&desc_temp2));
+    }
 
     HIP_CHECK(hipFree(d_temp1));
+
+    // Step 3: L_new[b, wp, b'] = sum_{a',s'} temp2[a', s', b, wp] * A[a', s', b']
+    {
+        // temp2[a', s', b, wp]: modes {2, 5, 4, 6}
+        // A[a', s', b']: shape (chi_R, d, chi_R) -> col-major, modes {2, 5, 7}
+        // L_new[b, wp, b']: shape (chi_R, D_mpo, chi_R) -> col-major, modes {4, 6, 7}
+        // Contract over modes 2(a') and 5(s')
+
+        int64_t extent_temp2[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R, (int64_t)D_mpo_};
+        int64_t extentA[] = {(int64_t)chi_R, (int64_t)d_, (int64_t)chi_R};
+        int64_t extent_Lnew[] = {(int64_t)chi_R, (int64_t)D_mpo_, (int64_t)chi_R};
+
+        int32_t modes_temp2[] = {2, 5, 4, 6};
+        int32_t modesA[] = {2, 5, 7};
+        int32_t modes_Lnew[] = {4, 6, 7};
+
+        hiptensorTensorDescriptor_t desc_temp2, descA, desc_Lnew;
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &desc_temp2, 4, extent_temp2,
+                        nullptr, HIPTENSOR_R_64F, 16));
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descA, 3, extentA,
+                        nullptr, HIPTENSOR_R_64F, 16));
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &desc_Lnew, 3, extent_Lnew,
+                        nullptr, HIPTENSOR_R_64F, 16));
+
+        double alpha = 1.0, beta = 0.0;
+
+        uint32_t alignment_temp2, alignmentA, alignment_Lnew;
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_temp2, &desc_temp2, &alignment_temp2));
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_A, &descA, &alignmentA));
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_L_out, &desc_Lnew, &alignment_Lnew));
+
+        hiptensorContractionDescriptor_t desc_contraction;
+        HIPTENSOR_CHECK(hiptensorCreateContractionDescriptor(hiptensor_h_, &desc_contraction,
+                        &desc_temp2, modes_temp2, alignment_temp2, HIPTENSOR_OP_IDENTITY,
+                        &descA, modesA, alignmentA, HIPTENSOR_OP_IDENTITY,
+                        &desc_Lnew, modes_Lnew, alignment_Lnew,
+                        &desc_Lnew, modes_Lnew, alignment_Lnew,
+                        HIPTENSOR_COMPUTE_64F));
+
+        hiptensorContractionFind_t find;
+        HIPTENSOR_CHECK(hiptensorCreateContractionFind(hiptensor_h_, &find, HIPTENSOR_ALGO_DEFAULT));
+
+        uint64_t worksize = 0;
+        HIPTENSOR_CHECK(hiptensorContractionGetWorkspaceSize(hiptensor_h_, &desc_contraction,
+                        &find, HIPTENSOR_WORKSPACE_RECOMMENDED, &worksize));
+
+        void* d_workspace_ht = nullptr;
+        if (worksize > 0) {
+            HIP_CHECK(hipMalloc(&d_workspace_ht, worksize));
+        }
+
+        hiptensorContractionPlan_t plan;
+        HIPTENSOR_CHECK(hiptensorCreateContractionPlan(hiptensor_h_, &plan,
+                        &desc_contraction, &find, worksize));
+
+        HIPTENSOR_CHECK(hiptensorContraction(hiptensor_h_, &plan,
+                        &alpha, d_temp2, d_A, &beta, d_L_out, d_L_out,
+                        d_workspace_ht, worksize, stream_));
+
+        if (d_workspace_ht) HIP_CHECK(hipFree(d_workspace_ht));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionPlan(&plan));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionFind(&find));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionDescriptor(&desc_contraction));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&desc_temp2));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&descA));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&desc_Lnew));
+    }
+
     HIP_CHECK(hipFree(d_temp2));
 }
 
@@ -662,15 +875,215 @@ void StreamSegment::rebuild_left_boundary_env() {
     HIP_CHECK(hipMalloc(&d_temp1, temp_size * sizeof(double)));
     HIP_CHECK(hipMalloc(&d_temp2, temp_size * sizeof(double)));
 
-    // TODO: Full environment contraction (mirror of rebuild_right_boundary_env)
-    //
+    // Full hipTensor implementation (mirror of rebuild_right_boundary_env)
     // R_new[a, w, a'] = sum_{b, b', wp, s, s'}
     //     R[b, wp, b'] * A[a, s, b] * W[w, s, s', wp] * A[a', s', b']
     //
-    // See rebuild_right_boundary_env() for implementation options and status
-    // Current: Uses identity initialization (sufficient for test)
+    // This is analogous but contracts from right to left
+
+    // Step 1: temp1[wp, b', s, a] = sum_b R[b, wp, b'] * A[a, s, b]
+    {
+        int64_t extentR[] = {(int64_t)chi_R, (int64_t)D_mpo_, (int64_t)chi_R};
+        int64_t extentA[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R};
+        int64_t extent_temp1[] = {(int64_t)D_mpo_, (int64_t)chi_R, (int64_t)d_, (int64_t)chi_L};
+
+        // R col-major (b, wp, b'): modes {0, 1, 2}
+        // A col-major (a, s, b):   modes {3, 4, 0}
+        // temp1 col-major (wp, b', s, a): modes {1, 2, 4, 3}
+        // Contract over mode 0 (b)
+
+        int32_t modesR[] = {0, 1, 2};
+        int32_t modesA[] = {3, 4, 0};
+        int32_t modes_temp1[] = {1, 2, 4, 3};
+
+        hiptensorTensorDescriptor_t descR, descA, desc_temp1;
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descR, 3, extentR,
+                        nullptr, HIPTENSOR_R_64F, 16));
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descA, 3, extentA,
+                        nullptr, HIPTENSOR_R_64F, 16));
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &desc_temp1, 4, extent_temp1,
+                        nullptr, HIPTENSOR_R_64F, 16));
+
+        double alpha = 1.0, beta = 0.0;
+
+        uint32_t alignmentR, alignmentA, alignment_temp1;
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_R_in, &descR, &alignmentR));
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_A, &descA, &alignmentA));
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_temp1, &desc_temp1, &alignment_temp1));
+
+        hiptensorContractionDescriptor_t desc_contraction;
+        HIPTENSOR_CHECK(hiptensorCreateContractionDescriptor(hiptensor_h_, &desc_contraction,
+                        &descR, modesR, alignmentR, HIPTENSOR_OP_IDENTITY,
+                        &descA, modesA, alignmentA, HIPTENSOR_OP_IDENTITY,
+                        &desc_temp1, modes_temp1, alignment_temp1,
+                        &desc_temp1, modes_temp1, alignment_temp1,
+                        HIPTENSOR_COMPUTE_64F));
+
+        hiptensorContractionFind_t find;
+        HIPTENSOR_CHECK(hiptensorCreateContractionFind(hiptensor_h_, &find, HIPTENSOR_ALGO_DEFAULT));
+
+        uint64_t worksize = 0;
+        HIPTENSOR_CHECK(hiptensorContractionGetWorkspaceSize(hiptensor_h_, &desc_contraction,
+                        &find, HIPTENSOR_WORKSPACE_RECOMMENDED, &worksize));
+
+        void* d_workspace_ht = nullptr;
+        if (worksize > 0) {
+            HIP_CHECK(hipMalloc(&d_workspace_ht, worksize));
+        }
+
+        hiptensorContractionPlan_t plan;
+        HIPTENSOR_CHECK(hiptensorCreateContractionPlan(hiptensor_h_, &plan,
+                        &desc_contraction, &find, worksize));
+
+        HIPTENSOR_CHECK(hiptensorContraction(hiptensor_h_, &plan,
+                        &alpha, d_R_in, d_A, &beta, d_temp1, d_temp1,
+                        d_workspace_ht, worksize, stream_));
+
+        if (d_workspace_ht) HIP_CHECK(hipFree(d_workspace_ht));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionPlan(&plan));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionFind(&find));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionDescriptor(&desc_contraction));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&descR));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&descA));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&desc_temp1));
+    }
+
+    // Step 2: temp2[b', s', a, w] = sum_{wp,s} temp1[wp, b', s, a] * W[w, s, s', wp]
+    {
+        int64_t extent_temp1[] = {(int64_t)D_mpo_, (int64_t)chi_R, (int64_t)d_, (int64_t)chi_L};
+        int64_t extentW[] = {(int64_t)D_mpo_, (int64_t)d_, (int64_t)d_, (int64_t)D_mpo_};
+        int64_t extent_temp2[] = {(int64_t)chi_R, (int64_t)d_, (int64_t)chi_L, (int64_t)D_mpo_};
+
+        // temp1 modes: {1(wp), 2(b'), 4(s), 3(a)}
+        // W modes: {5(w), 4(s), 6(s'), 1(wp)}
+        // temp2 modes: {2(b'), 6(s'), 3(a), 5(w)}
+        // Contract over modes 1(wp) and 4(s)
+
+        int32_t modes_temp1[] = {1, 2, 4, 3};
+        int32_t modesW[] = {5, 4, 6, 1};
+        int32_t modes_temp2[] = {2, 6, 3, 5};
+
+        hiptensorTensorDescriptor_t desc_temp1, descW, desc_temp2;
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &desc_temp1, 4, extent_temp1,
+                        nullptr, HIPTENSOR_R_64F, 16));
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descW, 4, extentW,
+                        nullptr, HIPTENSOR_R_64F, 16));
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &desc_temp2, 4, extent_temp2,
+                        nullptr, HIPTENSOR_R_64F, 16));
+
+        double alpha = 1.0, beta = 0.0;
+
+        uint32_t alignment_temp1, alignmentW, alignment_temp2;
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_temp1, &desc_temp1, &alignment_temp1));
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_W, &descW, &alignmentW));
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_temp2, &desc_temp2, &alignment_temp2));
+
+        hiptensorContractionDescriptor_t desc_contraction;
+        HIPTENSOR_CHECK(hiptensorCreateContractionDescriptor(hiptensor_h_, &desc_contraction,
+                        &desc_temp1, modes_temp1, alignment_temp1, HIPTENSOR_OP_IDENTITY,
+                        &descW, modesW, alignmentW, HIPTENSOR_OP_IDENTITY,
+                        &desc_temp2, modes_temp2, alignment_temp2,
+                        &desc_temp2, modes_temp2, alignment_temp2,
+                        HIPTENSOR_COMPUTE_64F));
+
+        hiptensorContractionFind_t find;
+        HIPTENSOR_CHECK(hiptensorCreateContractionFind(hiptensor_h_, &find, HIPTENSOR_ALGO_DEFAULT));
+
+        uint64_t worksize = 0;
+        HIPTENSOR_CHECK(hiptensorContractionGetWorkspaceSize(hiptensor_h_, &desc_contraction,
+                        &find, HIPTENSOR_WORKSPACE_RECOMMENDED, &worksize));
+
+        void* d_workspace_ht = nullptr;
+        if (worksize > 0) {
+            HIP_CHECK(hipMalloc(&d_workspace_ht, worksize));
+        }
+
+        hiptensorContractionPlan_t plan;
+        HIPTENSOR_CHECK(hiptensorCreateContractionPlan(hiptensor_h_, &plan,
+                        &desc_contraction, &find, worksize));
+
+        HIPTENSOR_CHECK(hiptensorContraction(hiptensor_h_, &plan,
+                        &alpha, d_temp1, d_W, &beta, d_temp2, d_temp2,
+                        d_workspace_ht, worksize, stream_));
+
+        if (d_workspace_ht) HIP_CHECK(hipFree(d_workspace_ht));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionPlan(&plan));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionFind(&find));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionDescriptor(&desc_contraction));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&desc_temp1));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&descW));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&desc_temp2));
+    }
 
     HIP_CHECK(hipFree(d_temp1));
+
+    // Step 3: R_new[a, w, a'] = sum_{b',s'} temp2[b', s', a, w] * A[a', s', b']
+    {
+        int64_t extent_temp2[] = {(int64_t)chi_R, (int64_t)d_, (int64_t)chi_L, (int64_t)D_mpo_};
+        int64_t extentA[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R};
+        int64_t extent_Rnew[] = {(int64_t)chi_L, (int64_t)D_mpo_, (int64_t)chi_L};
+
+        // temp2 modes: {2(b'), 6(s'), 3(a), 5(w)}
+        // A modes: {7(a'), 6(s'), 2(b')}
+        // R_new modes: {3(a), 5(w), 7(a')}
+        // Contract over modes 2(b') and 6(s')
+
+        int32_t modes_temp2[] = {2, 6, 3, 5};
+        int32_t modesA[] = {7, 6, 2};
+        int32_t modes_Rnew[] = {3, 5, 7};
+
+        hiptensorTensorDescriptor_t desc_temp2, descA, desc_Rnew;
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &desc_temp2, 4, extent_temp2,
+                        nullptr, HIPTENSOR_R_64F, 16));
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descA, 3, extentA,
+                        nullptr, HIPTENSOR_R_64F, 16));
+        HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &desc_Rnew, 3, extent_Rnew,
+                        nullptr, HIPTENSOR_R_64F, 16));
+
+        double alpha = 1.0, beta = 0.0;
+
+        uint32_t alignment_temp2, alignmentA, alignment_Rnew;
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_temp2, &desc_temp2, &alignment_temp2));
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_A, &descA, &alignmentA));
+        HIPTENSOR_CHECK(hiptensorGetAlignmentRequirement(hiptensor_h_, d_R_out, &desc_Rnew, &alignment_Rnew));
+
+        hiptensorContractionDescriptor_t desc_contraction;
+        HIPTENSOR_CHECK(hiptensorCreateContractionDescriptor(hiptensor_h_, &desc_contraction,
+                        &desc_temp2, modes_temp2, alignment_temp2, HIPTENSOR_OP_IDENTITY,
+                        &descA, modesA, alignmentA, HIPTENSOR_OP_IDENTITY,
+                        &desc_Rnew, modes_Rnew, alignment_Rnew,
+                        &desc_Rnew, modes_Rnew, alignment_Rnew,
+                        HIPTENSOR_COMPUTE_64F));
+
+        hiptensorContractionFind_t find;
+        HIPTENSOR_CHECK(hiptensorCreateContractionFind(hiptensor_h_, &find, HIPTENSOR_ALGO_DEFAULT));
+
+        uint64_t worksize = 0;
+        HIPTENSOR_CHECK(hiptensorContractionGetWorkspaceSize(hiptensor_h_, &desc_contraction,
+                        &find, HIPTENSOR_WORKSPACE_RECOMMENDED, &worksize));
+
+        void* d_workspace_ht = nullptr;
+        if (worksize > 0) {
+            HIP_CHECK(hipMalloc(&d_workspace_ht, worksize));
+        }
+
+        hiptensorContractionPlan_t plan;
+        HIPTENSOR_CHECK(hiptensorCreateContractionPlan(hiptensor_h_, &plan,
+                        &desc_contraction, &find, worksize));
+
+        HIPTENSOR_CHECK(hiptensorContraction(hiptensor_h_, &plan,
+                        &alpha, d_temp2, d_A, &beta, d_R_out, d_R_out,
+                        d_workspace_ht, worksize, stream_));
+
+        if (d_workspace_ht) HIP_CHECK(hipFree(d_workspace_ht));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionPlan(&plan));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionFind(&find));
+        HIPTENSOR_CHECK(hiptensorDestroyContractionDescriptor(&desc_contraction));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&desc_temp2));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&descA));
+        HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(&desc_Rnew));
+    }
+
     HIP_CHECK(hipFree(d_temp2));
 }
 

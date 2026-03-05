@@ -1,6 +1,7 @@
 #pragma once
 
 #include <hip/hip_runtime.h>
+#include <hiptensor/hiptensor.h>
 #include "heff_optimized_gpu.h"
 #include "accurate_svd_gpu.h"
 
@@ -225,6 +226,9 @@ private:
 
     // rocBLAS handle for QR/LQ operations
     rocblas_handle rocblas_h_;
+
+    // hipTensor handle for environment contractions
+    hiptensorHandle_t hiptensor_h_;
 
     // Workspace for intermediate operations
     double* d_workspace_;
