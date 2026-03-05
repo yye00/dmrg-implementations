@@ -9,8 +9,8 @@
 set -e  # Exit on error
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-GPU_PORT_DIR="${SCRIPT_DIR}/../gpu-port"
-BUILD_DIR="${GPU_PORT_DIR}/build"
+PDMRG_GPU_DIR="${SCRIPT_DIR}/../pdmrg-gpu"
+BUILD_DIR="${PDMRG_GPU_DIR}/build"
 RESULTS_DIR="${SCRIPT_DIR}/gpu_results"
 
 # Create results directory
@@ -19,9 +19,9 @@ mkdir -p "${RESULTS_DIR}"
 echo "============================================================"
 echo "GPU Multi-Stream Benchmark Suite"
 echo "============================================================"
-echo "Script dir: ${SCRIPT_DIR}"
-echo "GPU port:   ${GPU_PORT_DIR}"
-echo "Build dir:  ${BUILD_DIR}"
+echo "Script dir:   ${SCRIPT_DIR}"
+echo "PDMRG-GPU:    ${PDMRG_GPU_DIR}"
+echo "Build dir:    ${BUILD_DIR}"
 echo "Results:    ${RESULTS_DIR}"
 echo ""
 
@@ -31,7 +31,7 @@ if [ ! -f "${GPU_EXE}" ]; then
     echo "❌ GPU executable not found: ${GPU_EXE}"
     echo ""
     echo "Build with:"
-    echo "  cd ${GPU_PORT_DIR}"
+    echo "  cd ${PDMRG_GPU_DIR}"
     echo "  mkdir -p build && cd build"
     echo "  cmake -DCMAKE_BUILD_TYPE=Release .."
     echo "  make -j16 test_heisenberg_multistream"

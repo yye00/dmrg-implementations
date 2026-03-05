@@ -33,9 +33,9 @@ MAX_ITERATIONS = 20
 TOL = 1e-10  # Target accuracy
 PASS_TOL = 1e-10  # Same as solver tolerance
 
-# GPU executable path
-GPU_PORT_DIR = Path(__file__).parent.parent / "gpu-port"
-BUILD_DIR = GPU_PORT_DIR / "build"
+# GPU executable path (PDMRG-GPU implementation)
+PDMRG_GPU_DIR = Path(__file__).parent.parent / "pdmrg-gpu"
+BUILD_DIR = PDMRG_GPU_DIR / "build"
 
 
 def parse_args():
