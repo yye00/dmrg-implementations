@@ -383,3 +383,29 @@ target_link_libraries(test_heisenberg_multistream
     ${HIPTENSOR_LIBRARY}
     lapack
 )
+
+# Test MPS/MPO binary file loader (CPU-only, no HIP)
+add_executable(test_mps_mpo_loader
+    src/test_mps_mpo_loader.cpp
+)
+target_compile_options(test_mps_mpo_loader PRIVATE
+    -O2
+)
+# No GPU libraries needed for this test
+
+# PDMRG Benchmark with Loaded Data (Production benchmarking executable)
+add_executable(pdmrg_benchmark_loaded
+    src/pdmrg_benchmark_loaded.cpp
+)
+set_source_files_properties(src/pdmrg_benchmark_loaded.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(pdmrg_benchmark_loaded PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(pdmrg_benchmark_loaded
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+    lapack
+)
