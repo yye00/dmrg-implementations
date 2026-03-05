@@ -692,12 +692,12 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     // This is MUCH more efficient than dense syev for tridiagonal matrices
     ROCSOLVER_CHECK(rocsolver_dsteqr(
         rocblas_h_,
-        rocblas_evect_original,  // Compute eigenvectors
-        niter,                   // Matrix size
-        d_D,                     // Input: diagonal, Output: eigenvalues (ascending)
-        d_E,                     // Input: off-diagonal (destroyed)
-        d_C,                     // Output: eigenvectors (niter × niter, column-major)
-        niter,                   // Leading dimension of C
+        rocblas_evect_tridiagonal,  // Compute eigenvectors of tridiagonal matrix
+        niter,                      // Matrix size
+        d_D,                        // Input: diagonal, Output: eigenvalues (ascending)
+        d_E,                        // Input: off-diagonal (destroyed)
+        d_C,                        // Output: eigenvectors (niter × niter, column-major)
+        niter,                      // Leading dimension of C
         d_info
     ));
 
