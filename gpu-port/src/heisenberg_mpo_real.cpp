@@ -5,7 +5,8 @@
 /**
  * Build real-valued Heisenberg MPO tensors for Phase 2 multi-stream DMRG
  *
- * Hamiltonian: H = Σ_i (S^x_i S^x_{i+1} + S^y_i S^y_{i+1} + S^z_i S^z_{i+1})
+ * Hamiltonian: H = -Σ_i (S^x_i S^x_{i+1} + S^y_i S^y_{i+1} + S^z_i S^z_{i+1})
+ *              (Antiferromagnetic Heisenberg with negative coupling)
  *
  * MPO structure:
  * - Physical dimension: d = 2 (spin-1/2)
@@ -21,10 +22,10 @@
  * Column-major layout: W[w + s*D_mpo + sp*D_mpo*d + wp*D_mpo*d*d]
  */
 
-// Pauli matrices (real-valued for Heisenberg interactions)
-const double Sx[2][2] = {{0.0, 1.0}, {1.0, 0.0}};        // σ^x
-const double Sy[2][2] = {{0.0, 1.0}, {1.0, 0.0}};        // σ^y (actually σ^x in real basis)
-const double Sz[2][2] = {{1.0, 0.0}, {0.0, -1.0}};       // σ^z
+// Pauli matrices with NEGATIVE sign (antiferromagnetic coupling)
+const double Sx[2][2] = {{0.0, -1.0}, {-1.0, 0.0}};      // -σ^x
+const double Sy[2][2] = {{0.0, -1.0}, {-1.0, 0.0}};      // -σ^y (same as -σ^x in real basis)
+const double Sz[2][2] = {{-1.0, 0.0}, {0.0, 1.0}};       // -σ^z
 const double Id[2][2] = {{1.0, 0.0}, {0.0, 1.0}};        // Identity
 
 void build_heisenberg_mpo_real_site(int site, int L, double* h_mpo) {
