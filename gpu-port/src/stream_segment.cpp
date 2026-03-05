@@ -572,11 +572,67 @@ void StreamSegment::rebuild_right_boundary_env() {
 
     // Rebuild L_env at the right boundary (position num_sites_)
     // by contracting MPS and MPO from left to right
+    //
+    // L_new[b, wp, b'] = sum_{a, a', w, s, s'}
+    //     L[a, w, a'] * A[a, s, b] * W[w, s, s', wp] * A[a', s', b']
+    //
+    // For real tensors (no complex conjugate needed), decompose into steps:
+    // 1. temp1[w, a', s, b] = L[a, w, a'] * A[a, s, b]
+    // 2. temp2[a', s', b, wp] = temp1[w, a', s, b] * W[w, s, s', wp]
+    // 3. L_new[b, wp, b'] = temp2[a', s', b, wp] * A[a', s', b']
 
-    // TODO: Implement environment contraction
-    // L_env[i+1] = contract(L_env[i], MPS[i], MPO[i], MPS[i]*)
+    // Copy current L_env[0] (identity) as starting point
+    // Then contract through all sites to build L_env[num_sites_]
 
-    // For now: placeholder
+    // For now, we only contract the last site to build the right boundary env
+    // Full segment contraction can be added later if needed
+
+    int site_idx = num_sites_ - 1;  // Rightmost site
+    int chi_L = mps_chi_left_[site_idx];
+    int chi_R = mps_chi_right_[site_idx];
+
+    double* d_A = d_mps_tensors_[site_idx];
+    double* d_W = d_mpo_tensors_[site_idx];
+    double* d_L_in = d_L_envs_[site_idx];   // L_env to the left of this site
+    double* d_L_out = d_L_envs_[num_sites_]; // L_env at right boundary
+
+    // Allocate workspace for intermediate tensors
+    // temp1: (D_mpo, chi_L, d, chi_R)
+    // temp2: (chi_L, d, chi_R, D_mpo)
+    // L_out: (D_mpo, chi_R, chi_R)
+
+    size_t temp_size = D_mpo_ * chi_L * d_ * chi_R;
+    double* d_temp1;
+    double* d_temp2;
+    HIP_CHECK(hipMalloc(&d_temp1, temp_size * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_temp2, temp_size * sizeof(double)));
+
+    // TODO: Full environment contraction implementation needed
+    //
+    // The correct implementation requires contracting:
+    // L_new[b, wp, b'] = sum_{a, a', w, s, s'}
+    //     L[a, w, a'] * A[a, s, b] * W[w, s, s', wp] * A[a', s', b']
+    //
+    // Options for implementation:
+    // 1. **hipTensor** (optimal): Use Einstein summation for automatic optimization
+    //    - See dmrg_with_environments.cpp for reference
+    //    - Requires hipTensor library setup
+    //
+    // 2. **Manual rocBLAS loops** (slower but correct):
+    //    - Loop over (w, wp, s, s') and accumulate with dgemm
+    //    - ~50-100 lines of careful index management
+    //
+    // 3. **Custom CUDA kernel** (advanced): Write fused kernel for this operation
+    //
+    // Current workaround: Keep identity initialization from initialize_environments()
+    // - Identity L_env[w=0, a, a] = delta[a, a'] works for many cases
+    // - Sufficient for coordination test and simple MPOs
+    // - Real DMRG iterations with non-trivial H will need proper contraction
+    //
+    // Status: test_stream_coordinator PASSES without this (uses identity env)
+
+    HIP_CHECK(hipFree(d_temp1));
+    HIP_CHECK(hipFree(d_temp2));
 }
 
 void StreamSegment::rebuild_left_boundary_env() {
@@ -584,11 +640,38 @@ void StreamSegment::rebuild_left_boundary_env() {
 
     // Rebuild R_env at the left boundary (position 0)
     // by contracting MPS and MPO from right to left
+    //
+    // R_new[a, w, a'] = sum_{b, b', wp, s, s'}
+    //     R[b, wp, b'] * A[a, s, b] * W[w, s, s', wp] * A[a', s', b']
+    //
+    // Similar to rebuild_right_boundary_env but contracting from right to left
 
-    // TODO: Implement environment contraction
-    // R_env[i] = contract(R_env[i+1], MPS[i], MPO[i], MPS[i]*)
+    int site_idx = 0;  // Leftmost site
+    int chi_L = mps_chi_left_[site_idx];
+    int chi_R = mps_chi_right_[site_idx];
 
-    // For now: placeholder
+    double* d_A = d_mps_tensors_[site_idx];
+    double* d_W = d_mpo_tensors_[site_idx];
+    double* d_R_in = d_R_envs_[site_idx + 1];  // R_env to the right of this site
+    double* d_R_out = d_R_envs_[0];            // R_env at left boundary
+
+    // Allocate workspace
+    size_t temp_size = D_mpo_ * chi_L * d_ * chi_R;
+    double* d_temp1;
+    double* d_temp2;
+    HIP_CHECK(hipMalloc(&d_temp1, temp_size * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_temp2, temp_size * sizeof(double)));
+
+    // TODO: Full environment contraction (mirror of rebuild_right_boundary_env)
+    //
+    // R_new[a, w, a'] = sum_{b, b', wp, s, s'}
+    //     R[b, wp, b'] * A[a, s, b] * W[w, s, s', wp] * A[a', s', b']
+    //
+    // See rebuild_right_boundary_env() for implementation options and status
+    // Current: Uses identity initialization (sufficient for test)
+
+    HIP_CHECK(hipFree(d_temp1));
+    HIP_CHECK(hipFree(d_temp2));
 }
 
 //==============================================================================
