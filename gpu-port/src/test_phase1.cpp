@@ -229,19 +229,19 @@ bool test_optimized_heff() {
     HIP_CHECK(hipMemcpy(d_theta, h_theta.data(), h_theta.size() * sizeof(double), hipMemcpyHostToDevice));
 
     // Initialize environments and MPO (identity-like)
+    // CRITICAL: L and R must have identity only at one MPO bond index (w=0, y=0)
+    // Otherwise we get a factor of D_mpo!
     std::vector<double> h_L(D_mpo * chi_L * chi_L, 0.0);
-    for (int w = 0; w < D_mpo; w++) {
-        for (int a = 0; a < chi_L; a++) {
-            h_L[w + a * D_mpo + a * D_mpo * chi_L] = 1.0;  // Identity in MPS indices
-        }
+    for (int a = 0; a < chi_L; a++) {
+        // Only w=0: L[0, a, a] = 1.0 (identity in MPS indices at w=0)
+        h_L[0 + a * D_mpo + a * D_mpo * chi_L] = 1.0;
     }
     HIP_CHECK(hipMemcpy(d_L, h_L.data(), h_L.size() * sizeof(double), hipMemcpyHostToDevice));
 
     std::vector<double> h_R(D_mpo * chi_R * chi_R, 0.0);
-    for (int y = 0; y < D_mpo; y++) {
-        for (int b = 0; b < chi_R; b++) {
-            h_R[y + b * D_mpo + b * D_mpo * chi_R] = 1.0;
-        }
+    for (int b = 0; b < chi_R; b++) {
+        // Only y=0: R[0, b, b] = 1.0 (identity in MPS indices at y=0)
+        h_R[0 + b * D_mpo + b * D_mpo * chi_R] = 1.0;
     }
     HIP_CHECK(hipMemcpy(d_R, h_R.data(), h_R.size() * sizeof(double), hipMemcpyHostToDevice));
 

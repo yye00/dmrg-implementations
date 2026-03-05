@@ -448,7 +448,36 @@ void OptimizedHeff::apply(
     const double alpha = 1.0;
     const double beta = 0.0;
 
+    // DEBUG: Check input tensor norms
+    std::cerr << "\n=== DEBUG: OptimizedHeff::apply() ===" << std::endl;
+
+    // Helper lambda to compute norm of a tensor
+    auto compute_norm = [](const double* d_data, size_t size, const char* name) {
+        std::vector<double> h_data(size);
+        HIP_CHECK(hipMemcpy(h_data.data(), d_data, size * sizeof(double), hipMemcpyDeviceToHost));
+        double norm_sq = 0.0;
+        for (size_t i = 0; i < size; i++) {
+            norm_sq += h_data[i] * h_data[i];
+        }
+        double norm = std::sqrt(norm_sq);
+        std::cerr << "  ||" << name << "|| = " << norm << " (size=" << size << ")" << std::endl;
+
+        // Print first few elements
+        std::cerr << "  " << name << "[0:5] = ";
+        for (size_t i = 0; i < std::min(size_t(5), size); i++) {
+            std::cerr << h_data[i] << " ";
+        }
+        std::cerr << std::endl;
+    };
+
+    compute_norm(d_theta, chi_L * d * d * chi_R, "theta");
+    compute_norm(d_L, D_mpo * chi_L * chi_L, "L");
+    compute_norm(d_W1, D_mpo * d * d * D_mpo, "W1");
+    compute_norm(d_W2, D_mpo * d * d * D_mpo, "W2");
+    compute_norm(d_R, D_mpo * chi_R * chi_R, "R");
+
     // Step 1: T1 = L × theta
+    std::cerr << "\nStep 1: T1 = L × theta" << std::endl;
     void* workspace_1 = workspace_cache.count("plan_1") > 0 ?
                         workspace_cache["plan_1"].d_workspace : nullptr;
     uint64_t workspace_size_1 = workspace_cache.count("plan_1") > 0 ?
@@ -462,8 +491,11 @@ void OptimizedHeff::apply(
         workspace_1, workspace_size_1,
         stream
     ));
+    HIP_CHECK(hipStreamSynchronize(stream));
+    compute_norm(d_T1, D_mpo * chi_L * d * d * chi_R, "T1");
 
     // Step 2: T2 = W1 × T1
+    std::cerr << "\nStep 2: T2 = W1 × T1" << std::endl;
     void* workspace_2 = workspace_cache.count("plan_2") > 0 ?
                         workspace_cache["plan_2"].d_workspace : nullptr;
     uint64_t workspace_size_2 = workspace_cache.count("plan_2") > 0 ?
@@ -477,8 +509,11 @@ void OptimizedHeff::apply(
         workspace_2, workspace_size_2,
         stream
     ));
+    HIP_CHECK(hipStreamSynchronize(stream));
+    compute_norm(d_T2, chi_L * d * d * chi_R * D_mpo, "T2");
 
     // Step 3: T3 = W2 × T2
+    std::cerr << "\nStep 3: T3 = W2 × T2" << std::endl;
     void* workspace_3 = workspace_cache.count("plan_3") > 0 ?
                         workspace_cache["plan_3"].d_workspace : nullptr;
     uint64_t workspace_size_3 = workspace_cache.count("plan_3") > 0 ?
@@ -492,8 +527,11 @@ void OptimizedHeff::apply(
         workspace_3, workspace_size_3,
         stream
     ));
+    HIP_CHECK(hipStreamSynchronize(stream));
+    compute_norm(d_T3, chi_L * d * d * chi_R * D_mpo, "T3");
 
     // Step 4: result = T3 × R
+    std::cerr << "\nStep 4: result = T3 × R" << std::endl;
     void* workspace_4 = workspace_cache.count("plan_4") > 0 ?
                         workspace_cache["plan_4"].d_workspace : nullptr;
     uint64_t workspace_size_4 = workspace_cache.count("plan_4") > 0 ?
@@ -507,6 +545,9 @@ void OptimizedHeff::apply(
         workspace_4, workspace_size_4,
         stream
     ));
+    HIP_CHECK(hipStreamSynchronize(stream));
+    compute_norm(d_result, chi_L * d * d * chi_R, "result");
+    std::cerr << "=== END DEBUG ===" << std::endl;
 }
 
 size_t OptimizedHeff::get_workspace_size() const {
