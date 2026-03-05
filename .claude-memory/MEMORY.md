@@ -205,3 +205,34 @@ All orchestration layers working, core algorithms validated. ~2,500 lines writte
 
 ### Checkpoint
 Full details in `gpu-port/PHASE2_CHECKPOINT.md`
+
+## 2026-03-05: Phase 2 QR/LQ Sweeps and Boundary Extraction Complete ✅
+
+Successfully implemented and tested Priorities 1 & 2 on MI300X:
+
+**Completed:**
+- QR sweep (rocsolver_dgeqrf): Left-to-right canonization with bond dimension updates
+- LQ sweep (rocsolver_dgelqf): Right-to-left canonization with bond dimension updates
+- Boundary tensor extraction: Copy MPS edges, environments, MPO to BoundaryData
+- Dimension compatibility checks: Handle dynamic bond dimension changes
+- test_stream_coordinator: PASS on MI300X with 2 segments, 8 sites
+
+**Key Fixes:**
+- Made extract_boundary_tensors() public for coordinator access
+- Fixed environment dimension mismatches (L_env at correct positions)
+- Added dimension checks in recompute_boundary_v() for post-sweep changes
+- Removed incorrect cross-boundary tensor copies (complementary structure)
+
+**Architecture Status:**
+- Phase 2 core pipeline working: sweeps → merges → energy collection
+- BoundaryMergeGPU integrates correctly with StreamSegment/Coordinator
+- Exact SVD boundary reconciliation operational (no more NaN!)
+
+**Remaining:**
+- Priority 3: Environment contractions (rebuild_*_boundary_env) - deferred
+- Full validation vs Quimb reference (< 1e-10 tolerance test)
+
+**Technical Debt:**
+- Destructor warnings (noexcept with HIP_CHECK throws) - non-critical
+- Proper V computation from SVD (placeholder uses V=1.0 for now)
+
