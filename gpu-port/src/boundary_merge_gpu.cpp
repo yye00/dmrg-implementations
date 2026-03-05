@@ -745,18 +745,19 @@ void BoundaryMergeGPU::lanczos_eigensolver(
         throw std::runtime_error("rocsolver_dsyev failed with info = " + std::to_string(h_info));
     }
 
-    // Minimum eigenvalue is now in d_T_evals[0] (eigenvalues are sorted ascending)
-    HIP_CHECK(hipMemcpy(&energy, d_T_evals, sizeof(double), hipMemcpyDeviceToHost));
-
-    // DEBUG: Print eigenvalue info
-    std::vector<double> h_evals(niter);
-    HIP_CHECK(hipMemcpy(h_evals.data(), d_T_evals, niter * sizeof(double),
+    // DEBUG: Print eigenvalues IMMEDIATELY after rocSOLVER call
+    std::vector<double> h_evals_check(niter);
+    HIP_CHECK(hipMemcpy(h_evals_check.data(), d_T_evals, niter * sizeof(double),
                         hipMemcpyDeviceToHost));
-    printf("DEBUG Lanczos: niter=%d, eigenvalues: [", niter);
-    for (int i = 0; i < std::min(5, niter); i++) {
-        printf("%.6f%s", h_evals[i], (i < std::min(4, niter-1) ? ", " : ""));
+    printf("DEBUG After rocsolver_dsyev: eigenvalues = [");
+    for (int i = 0; i < niter; i++) {
+        printf("%.10f%s", h_evals_check[i], (i < niter-1 ? ", " : ""));
     }
-    printf("%s]\n", (niter > 5 ? ", ..." : "]"));
+    printf("]\n");
+
+    // Minimum eigenvalue is now in d_T_evals[0] (eigenvalues are sorted ascending)
+    energy = h_evals_check[0];  // Use the value we just read
+    printf("DEBUG Minimum eigenvalue (ground state energy): %.10f\n", energy);
 
     // Eigenvector corresponding to minimum eigenvalue is in first column of d_T_matrix
     // Reconstruct ground state: |psi> = sum_i evec[i] * |v_i> = V * evec
