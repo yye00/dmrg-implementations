@@ -326,3 +326,29 @@ target_link_libraries(test_boundary_merge
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
 )
+
+# Phase 2: StreamCoordinator test
+add_executable(test_stream_coordinator
+    src/test_stream_coordinator.cpp
+    src/stream_coordinator.cpp
+    src/boundary_merge_gpu.cpp
+    src/stream_segment.cpp
+    src/accurate_svd_gpu.cpp
+    src/heff_optimized_gpu.cpp
+)
+set_source_files_properties(src/test_stream_coordinator.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/stream_coordinator.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/boundary_merge_gpu.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/stream_segment.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/accurate_svd_gpu.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/heff_optimized_gpu.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(test_stream_coordinator PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(test_stream_coordinator
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+)
