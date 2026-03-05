@@ -639,6 +639,12 @@ void BoundaryMergeGPU::lanczos_eigensolver(
 
     int niter = iter;
 
+    // DEBUG: Print first few alpha and beta values
+    printf("DEBUG Lanczos: niter=%d, alpha=[%.6f, %.6f, %.6f, ...], beta=[%.6f, %.6f, ...]\n",
+           niter,
+           h_alpha[0], (niter > 1 ? h_alpha[1] : 0.0), (niter > 2 ? h_alpha[2] : 0.0),
+           (niter > 1 ? h_beta[0] : 0.0), (niter > 2 ? h_beta[1] : 0.0));
+
     // ==================================================================
     // Solve tridiagonal eigenvalue problem on GPU using rocSOLVER
     // ==================================================================
@@ -705,6 +711,16 @@ void BoundaryMergeGPU::lanczos_eigensolver(
 
     // Minimum eigenvalue is now in d_T_evals[0] (eigenvalues are sorted ascending)
     HIP_CHECK(hipMemcpy(&energy, d_T_evals, sizeof(double), hipMemcpyDeviceToHost));
+
+    // DEBUG: Print eigenvalue info
+    std::vector<double> h_evals(niter);
+    HIP_CHECK(hipMemcpy(h_evals.data(), d_T_evals, niter * sizeof(double),
+                        hipMemcpyDeviceToHost));
+    printf("DEBUG Lanczos: niter=%d, eigenvalues: [", niter);
+    for (int i = 0; i < std::min(5, niter); i++) {
+        printf("%.6f%s", h_evals[i], (i < std::min(4, niter-1) ? ", " : ""));
+    }
+    printf("%s]\n", (niter > 5 ? ", ..." : "]"));
 
     // Eigenvector corresponding to minimum eigenvalue is in first column of d_T_matrix
     // Reconstruct ground state: |psi> = sum_i evec[i] * |v_i> = V * evec
