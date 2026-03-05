@@ -260,3 +260,23 @@ target_link_libraries(pdmrg2_gpu
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
 )
+
+# Phase 1 Tests - AccurateSVD_GPU and OptimizedHeff
+add_executable(test_phase1
+    src/test_phase1.cpp
+    src/accurate_svd_gpu.cpp
+    src/heff_optimized_gpu.cpp
+)
+set_source_files_properties(src/test_phase1.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/accurate_svd_gpu.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/heff_optimized_gpu.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(test_phase1 PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(test_phase1
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+)
