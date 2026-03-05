@@ -254,6 +254,15 @@ double StreamCoordinator::merge_boundary(int left_idx, int right_idx) {
         throw std::runtime_error("StreamCoordinator::merge_boundary: null boundary data");
     }
 
+    // Debug: Print boundary dimensions
+    std::cout << "  Boundary " << left_idx << "↔" << right_idx << " dimensions:" << std::endl;
+    std::cout << "    Left boundary: chi_L=" << left_boundary->chi_L
+              << ", chi_bond=" << left_boundary->chi_bond
+              << ", chi_R=" << left_boundary->chi_R << std::endl;
+    std::cout << "    Right boundary: chi_L=" << right_boundary->chi_L
+              << ", chi_bond=" << right_boundary->chi_bond
+              << ", chi_R=" << right_boundary->chi_R << std::endl;
+
     // The extract_boundary_tensors() copied:
     // - left_boundary->d_psi_left from left segment's rightmost tensor
     // - right_boundary->d_psi_right from right segment's leftmost tensor
@@ -262,15 +271,23 @@ double StreamCoordinator::merge_boundary(int left_idx, int right_idx) {
     // - left segment's rightmost -> right boundary's psi_left
     // - right segment's leftmost -> left boundary's psi_right
 
-    // Copy left segment's edge tensor to right boundary's psi_left
-    size_t psi_left_size = left_boundary->chi_L * d_ * left_boundary->chi_bond * sizeof(double);
-    HIP_CHECK(hipMemcpy(right_boundary->d_psi_left, left_boundary->d_psi_left,
-                       psi_left_size, hipMemcpyDeviceToDevice));
+    // Check if dimensions are compatible for copying
+    if (left_boundary->chi_bond != right_boundary->chi_L) {
+        std::cerr << "WARNING: Bond dimension mismatch at boundary " << left_idx << "↔" << right_idx
+                  << ": left chi_bond=" << left_boundary->chi_bond
+                  << ", right chi_L=" << right_boundary->chi_L << std::endl;
+        // For now, skip the cross-boundary copies
+    } else {
+        // Copy left segment's edge tensor to right boundary's psi_left
+        size_t psi_left_size = left_boundary->chi_L * d_ * left_boundary->chi_bond * sizeof(double);
+        HIP_CHECK(hipMemcpy(right_boundary->d_psi_left, left_boundary->d_psi_left,
+                           psi_left_size, hipMemcpyDeviceToDevice));
 
-    // Copy right segment's edge tensor to left boundary's psi_right
-    size_t psi_right_size = right_boundary->chi_bond * d_ * right_boundary->chi_R * sizeof(double);
-    HIP_CHECK(hipMemcpy(left_boundary->d_psi_right, right_boundary->d_psi_right,
-                       psi_right_size, hipMemcpyDeviceToDevice));
+        // Copy right segment's edge tensor to left boundary's psi_right
+        size_t psi_right_size = right_boundary->chi_bond * d_ * right_boundary->chi_R * sizeof(double);
+        HIP_CHECK(hipMemcpy(left_boundary->d_psi_right, right_boundary->d_psi_right,
+                           psi_right_size, hipMemcpyDeviceToDevice));
+    }
 
     // Perform merge using the appropriate merger
     double energy = 0.0;
