@@ -479,6 +479,15 @@ void BoundaryMergeGPU::apply_heff(
     HIP_CHECK(hipMemcpy(hW2.data(), d_W_right, W_size * sizeof(double), hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(hTheta.data(), d_theta, psi_size * sizeof(double), hipMemcpyDeviceToHost));
 
+    // DEBUG: Check if environments are identity
+    double L_norm = 0.0, R_norm = 0.0, W1_norm = 0.0;
+    for (int i = 0; i < L_size; i++) L_norm += hL[i] * hL[i];
+    for (int i = 0; i < R_size; i++) R_norm += hR[i] * hR[i];
+    for (int i = 0; i < W_size; i++) W1_norm += hW1[i] * hW1[i];
+    printf("DEBUG H_eff: ||L||=%.6f, ||R||=%.6f, ||W1||=%.6f, ||theta||=%.6f\n",
+           sqrt(L_norm), sqrt(R_norm), sqrt(W1_norm),
+           sqrt(hTheta[0]*hTheta[0] + hTheta[1]*hTheta[1] + hTheta[2]*hTheta[2]));
+
     std::vector<double> hResult(psi_size, 0.0);
 
     // Step 1: T1[w, ap, s1, s2, b] = sum_a L[a, w, ap] * theta[a, s1, s2, b]
