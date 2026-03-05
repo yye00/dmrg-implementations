@@ -142,6 +142,15 @@ public:
      */
     void recompute_boundary_v(bool left_boundary);
 
+    /**
+     * Extract boundary MPS tensors into BoundaryData struct
+     *
+     * Copies edge MPS tensors, environments, and MPO tensors from the segment
+     * into the BoundaryData structures. Must be called before merge operations
+     * to ensure boundary data is up to date.
+     */
+    void extract_boundary_tensors();
+
     // ============================================================================
     // Getters
     // ============================================================================
@@ -236,11 +245,6 @@ private:
      * Initialize environments for local sweeps
      */
     void initialize_environments();
-
-    /**
-     * Extract boundary MPS tensors into BoundaryData struct
-     */
-    void extract_boundary_tensors();
 
     /**
      * Allocate memory for all tensors
