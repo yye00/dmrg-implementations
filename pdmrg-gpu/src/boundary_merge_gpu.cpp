@@ -586,6 +586,7 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     hipStream_t stream
 ) {
     int n = chi_L * d * d * chi_R;
+    printf("DEBUG Lanczos: Hilbert space dim n=%d (chi_L=%d, d=%d, chi_R=%d)\n", n, chi_L, d, chi_R);
 
     // Allocate Lanczos vectors if needed
     if (!d_lanczos_v_) {
