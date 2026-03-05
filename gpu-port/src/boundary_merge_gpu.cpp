@@ -721,6 +721,38 @@ void BoundaryMergeGPU::lanczos_eigensolver(
         printf("%s\n", (niter > 5 ? "..." : ""));
     }
 
+    // ========================================================================
+    // CPU VERIFICATION: Check matrix properties before GPU
+    // ========================================================================
+    // Verify the matrix makes sense (not all zeros, has correct structure)
+    double trace = 0.0;
+    double frobenius_norm = 0.0;
+    for (int i = 0; i < niter; i++) {
+        trace += h_T_matrix[i + i * niter];  // Sum of diagonal
+        for (int j = 0; j < niter; j++) {
+            double val = h_T_matrix[i + j * niter];
+            frobenius_norm += val * val;
+        }
+    }
+    printf("DEBUG CPU Matrix check: trace=%.6f, ||T||_F=%.6f\n", trace, sqrt(frobenius_norm));
+
+    // Check tridiagonal structure: off-off-diagonals should be zero
+    bool is_tridiagonal = true;
+    for (int i = 0; i < niter; i++) {
+        for (int j = 0; j < niter; j++) {
+            if (abs(i - j) > 1) {
+                if (fabs(h_T_matrix[i + j * niter]) > 1e-14) {
+                    printf("WARNING: Non-tridiagonal element at (%d,%d) = %.6e\n",
+                           i, j, h_T_matrix[i + j * niter]);
+                    is_tridiagonal = false;
+                }
+            }
+        }
+    }
+    if (is_tridiagonal) {
+        printf("DEBUG: Matrix has correct tridiagonal structure ✓\n");
+    }
+
     // Re-copy to GPU with full symmetric matrix
     HIP_CHECK(hipMemcpy(d_T_matrix, h_T_matrix.data(), niter * niter * sizeof(double),
                         hipMemcpyHostToDevice));
