@@ -71,8 +71,7 @@ struct AccurateSVDResult {
  */
 class AccurateSVD_GPU {
 private:
-    rocblas_handle rocblas_h;
-    rocsolver_handle rocsolver_h;
+    rocblas_handle rocblas_h;  // ROCm 7.2.0: rocsolver uses rocblas_handle
 
     double epsilon;                // Degradation threshold (default 1e-4)
     int max_recursion_depth;       // Maximum recursion levels (default 5)

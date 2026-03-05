@@ -79,12 +79,11 @@ AccurateSVD_GPU::AccurateSVD_GPU(double eps, int max_depth)
     : epsilon(eps), max_recursion_depth(max_depth)
 {
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h));
-    ROCSOLVER_CHECK(rocsolver_create_handle(&rocsolver_h));
+    // ROCm 7.2.0: rocsolver functions use rocblas_handle directly
 }
 
 AccurateSVD_GPU::~AccurateSVD_GPU() {
     rocblas_destroy_handle(rocblas_h);
-    rocsolver_destroy_handle(rocsolver_h);
 }
 
 int AccurateSVD_GPU::find_degradation_threshold(double* d_S, int k) {
@@ -121,34 +120,29 @@ AccurateSVDResult AccurateSVD_GPU::standard_svd(double* d_M, int m, int n) {
     HIP_CHECK(hipMalloc(&result.d_S, k * sizeof(double)));
     HIP_CHECK(hipMalloc(&result.d_Vh, k * n * sizeof(double)));
 
-    // Query workspace size
-    size_t lwork;
-    ROCSOLVER_CHECK(rocsolver_dgesvd_bufferSize(
-        rocsolver_h,
-        rocblas_svect_singular,  // left singular vectors
-        rocblas_svect_singular,  // right singular vectors
-        m, n,
-        &lwork
-    ));
+    // Allocate E vector for superdiagonal elements (required but not used)
+    double* d_E;
+    HIP_CHECK(hipMalloc(&d_E, (k - 1) * sizeof(double)));
 
-    // Allocate workspace
-    workspace.allocate(lwork, 5 * std::min(m, n));
+    // Allocate info on device
+    if (!workspace.d_info) {
+        HIP_CHECK(hipMalloc(&workspace.d_info, sizeof(int)));
+    }
 
-    // Compute SVD
+    // Compute SVD (ROCm 7.2.0 API - no separate buffer size query)
     // Note: rocsolver_dgesvd modifies the input matrix d_M
     ROCSOLVER_CHECK(rocsolver_dgesvd(
-        rocsolver_h,
+        rocblas_h,               // Note: use rocblas_handle, not rocsolver_handle
         rocblas_svect_singular,  // Compute U
-        rocblas_svect_singular,  // Compute Vh
+        rocblas_svect_singular,  // Compute V (will be transposed to Vh)
         m, n,
         d_M, m,                  // Input matrix (will be destroyed)
         result.d_S,              // Singular values output
         result.d_U, m,           // Left singular vectors output
-        result.d_Vh, k,          // Right singular vectors output
-        (double*)workspace.d_work,
-        lwork,
-        workspace.d_rwork,
-        workspace.d_info
+        result.d_Vh, k,          // Right singular vectors output (V, not Vh!)
+        d_E,                     // Superdiagonal elements (not used)
+        rocblas_outofplace,      // Workspace mode
+        workspace.d_info         // Info output
     ));
 
     // Check for errors
@@ -156,8 +150,11 @@ AccurateSVDResult AccurateSVD_GPU::standard_svd(double* d_M, int m, int n) {
     HIP_CHECK(hipMemcpy(&info, workspace.d_info, sizeof(int), hipMemcpyDeviceToHost));
     if (info != 0) {
         std::cerr << "rocsolver_dgesvd failed with info = " << info << std::endl;
+        HIP_CHECK(hipFree(d_E));
         throw std::runtime_error("SVD computation failed");
     }
+
+    HIP_CHECK(hipFree(d_E));
 
     return result;
 }
