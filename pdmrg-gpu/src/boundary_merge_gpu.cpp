@@ -273,6 +273,9 @@ void BoundaryMergeGPU::merge(BoundaryData* left, BoundaryData* right,
         throw std::runtime_error("BoundaryMergeGPU::merge: chi_bond mismatch");
     }
 
+    printf("DEBUG merge: chi_L=%d, chi_R=%d, chi_bond=%d, d=%d, D_mpo=%d\n",
+           chi_L, chi_R, chi_bond, d, D_mpo);
+
     // Allocate workspace if needed
     allocate_workspace(chi_L, d, chi_R, D_mpo);
 
