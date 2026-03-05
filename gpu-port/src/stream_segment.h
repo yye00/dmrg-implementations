@@ -214,9 +214,14 @@ private:
     // AccurateSVD for exact SVD operations
     AccurateSVD_GPU* svd_;
 
+    // rocBLAS handle for QR/LQ operations
+    rocblas_handle rocblas_h_;
+
     // Workspace for intermediate operations
     double* d_workspace_;
     size_t workspace_size_;
+    double* d_tau_;           // Tau vector for QR/LQ
+    size_t tau_size_;
 
     // ============================================================================
     // Helper Methods

@@ -1,11 +1,13 @@
 #include "stream_segment.h"
 #include <hip/hip_runtime.h>
 #include <hipblas/hipblas.h>
+#include <rocblas/rocblas.h>
 #include <rocsolver/rocsolver.h>
 #include <cstdio>
 #include <cstring>
 #include <stdexcept>
 #include <cmath>
+#include <algorithm>
 
 // Error checking macros
 #define HIP_CHECK(call) \
@@ -35,6 +37,16 @@
             fprintf(stderr, "rocBLAS error in %s:%d - status %d\n", \
                     __FILE__, __LINE__, status); \
             throw std::runtime_error("rocBLAS error"); \
+        } \
+    } while(0)
+
+#define ROCSOLVER_CHECK(call) \
+    do { \
+        rocblas_status status = call; \
+        if (status != rocblas_status_success) { \
+            fprintf(stderr, "rocSOLVER error in %s:%d - status %d\n", \
+                    __FILE__, __LINE__, status); \
+            throw std::runtime_error("rocSOLVER error"); \
         } \
     } while(0)
 
@@ -120,12 +132,17 @@ StreamSegment::StreamSegment(int segment_id, int start_site, int end_site,
       d_L_envs_(nullptr), d_R_envs_(nullptr), d_mpo_tensors_(nullptr),
       has_left_boundary_(segment_id > 0),
       has_right_boundary_(true),  // Will be set correctly by coordinator
-      heff_(nullptr), svd_(nullptr),
-      d_workspace_(nullptr), workspace_size_(0)
+      heff_(nullptr), svd_(nullptr), rocblas_h_(nullptr),
+      d_workspace_(nullptr), workspace_size_(0),
+      d_tau_(nullptr), tau_size_(0)
 {
     if (num_sites_ < 1) {
         throw std::runtime_error("StreamSegment must have at least 1 site");
     }
+
+    // Create rocBLAS handle for QR/LQ operations
+    ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
+    ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
 
     // Allocate memory for all tensors
     allocate_memory();
@@ -133,6 +150,10 @@ StreamSegment::StreamSegment(int segment_id, int start_site, int end_site,
     // Initialize MPS and environments
     initialize_mps();
     initialize_environments();
+
+    // Allocate tau workspace for QR/LQ (max size needed)
+    tau_size_ = chi_max_;
+    HIP_CHECK(hipMalloc(&d_tau_, tau_size_ * sizeof(double)));
 
     // Create OptimizedHeff for local two-site operations
     // Note: Will be created lazily when needed, since dimensions may vary
@@ -146,6 +167,9 @@ StreamSegment::~StreamSegment() {
 
     if (heff_) delete heff_;
     if (svd_) delete svd_;
+
+    if (d_tau_) HIP_CHECK(hipFree(d_tau_));
+    if (rocblas_h_) ROCBLAS_CHECK(rocblas_destroy_handle(rocblas_h_));
 }
 
 void StreamSegment::allocate_memory() {
@@ -304,33 +328,227 @@ void StreamSegment::initialize_environments() {
 void StreamSegment::sweep_left_to_right() {
     // QR sweep to move orthogonality center left-to-right
     // Each site is left-canonized (QR decomposition), R absorbed to right
+    //
+    // For site i with tensor psi[chi_L, d, chi_R]:
+    //   1. Reshape to matrix M[chi_L*d, chi_R]
+    //   2. Compute QR: M = Q*R
+    //   3. Store Q reshaped as psi[chi_L, d, k] at site i
+    //   4. Contract R into next site: psi[i+1] = R * psi[i+1]
 
     for (int i = 0; i < num_sites_ - 1; i++) {
-        int chi_left = mps_chi_left_[i];
-        int chi_right = mps_chi_right_[i];
+        int chi_L = mps_chi_left_[i];
+        int chi_R = mps_chi_right_[i];
+        int m = chi_L * d_;     // Rows of reshaped matrix
+        int n = chi_R;          // Columns of reshaped matrix
+        int k = std::min(m, n); // Rank of Q and R
 
-        // TODO: Implement QR decomposition on GPU
-        // M = QR where M is (chi_left * d, chi_right)
-        // Update this site with Q, absorb R into next site
+        double* d_psi = d_mps_tensors_[i];
 
-        // For now: placeholder
+        // Allocate temporary workspace for QR
+        double* d_M_qr;
+        HIP_CHECK(hipMalloc(&d_M_qr, m * n * sizeof(double)));
+
+        // Copy MPS tensor to workspace (rocsolver modifies in-place)
+        HIP_CHECK(hipMemcpy(d_M_qr, d_psi, m * n * sizeof(double), hipMemcpyDeviceToDevice));
+
+        // Compute QR factorization: M = Q*R
+        // After this call: R is in upper triangle of d_M_qr, Q is implicit (stored with tau)
+        ROCSOLVER_CHECK(rocsolver_dgeqrf(
+            rocblas_h_,
+            m, n,           // Matrix dimensions
+            d_M_qr, m,      // Matrix (column-major), leading dimension
+            d_tau_          // Output: tau vector for implicit Q
+        ));
+
+        // Extract R from upper triangle (k x n matrix)
+        double* d_R;
+        HIP_CHECK(hipMalloc(&d_R, k * n * sizeof(double)));
+
+        // Copy R: upper triangle of d_M_qr to d_R
+        // For column-major storage, R[i,j] = d_M_qr[i + j*m] for i <= j
+        std::vector<double> h_M_qr(m * n);
+        HIP_CHECK(hipMemcpy(h_M_qr.data(), d_M_qr, m * n * sizeof(double), hipMemcpyDeviceToHost));
+        std::vector<double> h_R(k * n, 0.0);
+        for (int col = 0; col < n; col++) {
+            for (int row = 0; row < std::min(k, col + 1); row++) {
+                h_R[row + col * k] = h_M_qr[row + col * m];
+            }
+        }
+        HIP_CHECK(hipMemcpy(d_R, h_R.data(), k * n * sizeof(double), hipMemcpyHostToDevice));
+
+        // Generate explicit Q matrix (m x k)
+        // Note: dorgqr overwrites d_M_qr with Q
+        ROCSOLVER_CHECK(rocsolver_dorgqr(
+            rocblas_h_,
+            m, k, k,        // m, n, k for Q generation
+            d_M_qr, m,      // Matrix to overwrite with Q
+            d_tau_          // tau from QR factorization
+        ));
+
+        // Update site i with Q (reshaped to chi_L x d x k)
+        // Q has shape (chi_L*d, k) = (m, k)
+        // Need to store first m*k elements
+        if (k != chi_R) {
+            // Bond dimension changed - reallocate
+            HIP_CHECK(hipFree(d_psi));
+            HIP_CHECK(hipMalloc(&d_psi, chi_L * d_ * k * sizeof(double)));
+            d_mps_tensors_[i] = d_psi;
+            mps_chi_right_[i] = k;
+        }
+        HIP_CHECK(hipMemcpy(d_psi, d_M_qr, chi_L * d_ * k * sizeof(double), hipMemcpyDeviceToDevice));
+
+        // Contract R into next site: psi[i+1] = R * psi[i+1]
+        // R is (k, chi_R), psi[i+1] is (chi_R, d, chi_R_next)
+        // Result is (k, d, chi_R_next)
+        int chi_R_next = mps_chi_right_[i + 1];
+        double* d_psi_next = d_mps_tensors_[i + 1];
+        double* d_psi_next_new;
+        HIP_CHECK(hipMalloc(&d_psi_next_new, k * d_ * chi_R_next * sizeof(double)));
+
+        // Contract: C[k, d*chi_R_next] = R[k, chi_R] * psi_next[chi_R, d*chi_R_next]
+        double alpha = 1.0, beta = 0.0;
+        ROCBLAS_CHECK(rocblas_dgemm(
+            rocblas_h_,
+            rocblas_operation_none,
+            rocblas_operation_none,
+            k, d_ * chi_R_next, chi_R,  // M, N, K
+            &alpha,
+            d_R, k,                     // A (k x chi_R)
+            d_psi_next, chi_R,          // B (chi_R x d*chi_R_next)
+            &beta,
+            d_psi_next_new, k           // C (k x d*chi_R_next)
+        ));
+
+        // Update next site
+        HIP_CHECK(hipFree(d_psi_next));
+        d_mps_tensors_[i + 1] = d_psi_next_new;
+        mps_chi_left_[i + 1] = k;
+
+        // Cleanup
+        HIP_CHECK(hipFree(d_M_qr));
+        HIP_CHECK(hipFree(d_R));
     }
+
+    // Synchronize stream after sweep
+    HIP_CHECK(hipStreamSynchronize(stream_));
 }
 
 void StreamSegment::sweep_right_to_left() {
     // LQ sweep to move orthogonality center right-to-left
     // Each site is right-canonized (LQ decomposition), L absorbed to left
+    //
+    // For site i with tensor psi[chi_L, d, chi_R]:
+    //   1. Reshape to matrix M[chi_L, d*chi_R]
+    //   2. Compute LQ: M = L*Q
+    //   3. Store Q reshaped as psi[k, d, chi_R] at site i
+    //   4. Contract L into previous site: psi[i-1] = psi[i-1] * L
 
     for (int i = num_sites_ - 1; i > 0; i--) {
-        int chi_left = mps_chi_left_[i];
-        int chi_right = mps_chi_right_[i];
+        int chi_L = mps_chi_left_[i];
+        int chi_R = mps_chi_right_[i];
+        int m = chi_L;          // Rows of reshaped matrix
+        int n = d_ * chi_R;     // Columns of reshaped matrix
+        int k = std::min(m, n); // Rank of L and Q
 
-        // TODO: Implement LQ decomposition on GPU
-        // M = LQ where M is (chi_left, d * chi_right)
-        // Update this site with Q, absorb L into previous site
+        double* d_psi = d_mps_tensors_[i];
 
-        // For now: placeholder
+        // Allocate temporary workspace for LQ
+        double* d_M_lq;
+        HIP_CHECK(hipMalloc(&d_M_lq, m * n * sizeof(double)));
+
+        // Copy MPS tensor to workspace (rocsolver modifies in-place)
+        HIP_CHECK(hipMemcpy(d_M_lq, d_psi, m * n * sizeof(double), hipMemcpyDeviceToDevice));
+
+        // Compute LQ factorization: M = L*Q
+        // After this call: L is in lower triangle of d_M_lq, Q is implicit (stored with tau)
+        ROCSOLVER_CHECK(rocsolver_dgelqf(
+            rocblas_h_,
+            m, n,           // Matrix dimensions
+            d_M_lq, m,      // Matrix (column-major), leading dimension
+            d_tau_          // Output: tau vector for implicit Q
+        ));
+
+        // Extract L from lower triangle (m x k matrix)
+        double* d_L;
+        HIP_CHECK(hipMalloc(&d_L, m * k * sizeof(double)));
+
+        // Copy L: lower triangle of d_M_lq to d_L
+        // For column-major storage, L[i,j] = d_M_lq[i + j*m] for i >= j
+        std::vector<double> h_M_lq(m * n);
+        HIP_CHECK(hipMemcpy(h_M_lq.data(), d_M_lq, m * n * sizeof(double), hipMemcpyDeviceToHost));
+        std::vector<double> h_L(m * k, 0.0);
+        for (int col = 0; col < k; col++) {
+            for (int row = col; row < m; row++) {
+                h_L[row + col * m] = h_M_lq[row + col * m];
+            }
+        }
+        HIP_CHECK(hipMemcpy(d_L, h_L.data(), m * k * sizeof(double), hipMemcpyHostToDevice));
+
+        // Generate explicit Q matrix (k x n)
+        // Note: dorglq overwrites d_M_lq with Q
+        ROCSOLVER_CHECK(rocsolver_dorglq(
+            rocblas_h_,
+            k, n, k,        // m, n, k for Q generation
+            d_M_lq, m,      // Matrix to overwrite with Q (note: lda is still m)
+            d_tau_          // tau from LQ factorization
+        ));
+
+        // Update site i with Q (reshaped to k x d x chi_R)
+        // Q has shape (k, d*chi_R) = (k, n)
+        // Need to extract first k rows and n columns
+        if (k != chi_L) {
+            // Bond dimension changed - reallocate
+            HIP_CHECK(hipFree(d_psi));
+            HIP_CHECK(hipMalloc(&d_psi, k * d_ * chi_R * sizeof(double)));
+            d_mps_tensors_[i] = d_psi;
+            mps_chi_left_[i] = k;
+        }
+
+        // Copy Q (first k rows of d_M_lq, which has leading dimension m)
+        // Need to copy column by column
+        std::vector<double> h_Q(k * n);
+        HIP_CHECK(hipMemcpy(h_M_lq.data(), d_M_lq, m * n * sizeof(double), hipMemcpyDeviceToHost));
+        for (int col = 0; col < n; col++) {
+            for (int row = 0; row < k; row++) {
+                h_Q[row + col * k] = h_M_lq[row + col * m];
+            }
+        }
+        HIP_CHECK(hipMemcpy(d_psi, h_Q.data(), k * d_ * chi_R * sizeof(double), hipMemcpyHostToDevice));
+
+        // Contract L into previous site: psi[i-1] = psi[i-1] * L
+        // psi[i-1] is (chi_L_prev, d, chi_L), L is (chi_L, k)
+        // Result is (chi_L_prev, d, k)
+        int chi_L_prev = mps_chi_left_[i - 1];
+        double* d_psi_prev = d_mps_tensors_[i - 1];
+        double* d_psi_prev_new;
+        HIP_CHECK(hipMalloc(&d_psi_prev_new, chi_L_prev * d_ * k * sizeof(double)));
+
+        // Contract: C[chi_L_prev*d, k] = psi_prev[chi_L_prev*d, chi_L] * L[chi_L, k]
+        double alpha = 1.0, beta = 0.0;
+        ROCBLAS_CHECK(rocblas_dgemm(
+            rocblas_h_,
+            rocblas_operation_none,
+            rocblas_operation_none,
+            chi_L_prev * d_, k, chi_L,  // M, N, K
+            &alpha,
+            d_psi_prev, chi_L_prev * d_, // A (chi_L_prev*d x chi_L)
+            d_L, chi_L,                  // B (chi_L x k)
+            &beta,
+            d_psi_prev_new, chi_L_prev * d_  // C (chi_L_prev*d x k)
+        ));
+
+        // Update previous site
+        HIP_CHECK(hipFree(d_psi_prev));
+        d_mps_tensors_[i - 1] = d_psi_prev_new;
+        mps_chi_right_[i - 1] = k;
+
+        // Cleanup
+        HIP_CHECK(hipFree(d_M_lq));
+        HIP_CHECK(hipFree(d_L));
     }
+
+    // Synchronize stream after sweep
+    HIP_CHECK(hipStreamSynchronize(stream_));
 }
 
 //==============================================================================
