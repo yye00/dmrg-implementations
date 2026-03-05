@@ -1,27 +1,34 @@
 #include "stream_coordinator.h"
+#include "heisenberg_mpo_real.h"
 #include <hip/hip_runtime.h>
 #include <iostream>
 #include <iomanip>
 #include <vector>
+#include <cmath>
 
 int main() {
     std::cout << "========================================" << std::endl;
     std::cout << "Testing Phase 2 Multi-Stream Iterative DMRG" << std::endl;
+    std::cout << "Heisenberg Chain with Real Hamiltonian" << std::endl;
     std::cout << "========================================\n" << std::endl;
 
     // System parameters
     const int L = 8;          // Chain length
     const int d = 2;          // Physical dimension
-    const int chi_max = 16;   // Max bond dimension
+    const int chi_max = 32;   // Max bond dimension (increased for real physics)
     const int n_streams = 2;  // Number of parallel streams
-    const int D_mpo = 3;      // MPO bond dimension
+    const int D_mpo = 5;      // MPO bond dimension (Heisenberg)
+
+    // Get exact reference energy
+    double E_exact = heisenberg_exact_energy_real(L);
 
     std::cout << "Parameters:" << std::endl;
     std::cout << "  L = " << L << " sites" << std::endl;
     std::cout << "  d = " << d << std::endl;
     std::cout << "  chi_max = " << chi_max << std::endl;
     std::cout << "  n_streams = " << n_streams << std::endl;
-    std::cout << "  D_mpo = " << D_mpo << " (identity)" << std::endl;
+    std::cout << "  D_mpo = " << D_mpo << " (Heisenberg)" << std::endl;
+    std::cout << "  E_exact = " << std::fixed << std::setprecision(12) << E_exact << std::endl;
     std::cout << std::endl;
 
     try {
@@ -36,23 +43,9 @@ int main() {
         int max_bond = chi_max;  // Maximum bond dimension for merges
         StreamCoordinator coordinator(n_streams, L, chi_max, d, D_mpo, max_bond);
 
-        // Create simple identity MPO (for now - full Hamiltonian needs proper interface)
-        std::cout << "Creating identity MPO..." << std::endl;
-        std::vector<double*> d_mpo_tensors(L);
-        for (int site = 0; site < L; site++) {
-            size_t mpo_size = D_mpo * d * d * D_mpo;
-            hipMalloc(&d_mpo_tensors[site], mpo_size * sizeof(double));
-
-            // Initialize to identity
-            std::vector<double> h_mpo(mpo_size, 0.0);
-            for (int i = 0; i < d; i++) {
-                for (int w = 0; w < D_mpo; w++) {
-                    h_mpo[w + i * D_mpo + i * D_mpo * d + w * D_mpo * d * d] = 1.0;
-                }
-            }
-            hipMemcpy(d_mpo_tensors[site], h_mpo.data(),
-                     mpo_size * sizeof(double), hipMemcpyHostToDevice);
-        }
+        // Create Heisenberg Hamiltonian MPO
+        std::cout << "Building Heisenberg MPO..." << std::endl;
+        std::vector<double*> d_mpo_tensors = build_heisenberg_mpo_real_gpu(L);
 
         // Set MPO
         std::cout << "Setting MPO..." << std::endl;
@@ -93,8 +86,24 @@ int main() {
                       << energies[i] << std::endl;
         }
 
-        // Note: With identity MPO, energy should stay constant (no optimization)
-        // TODO: Implement proper Hamiltonian MPO interface for physics testing
+        // Compute accuracy
+        double E_final = energies.back();
+        double error = std::abs(E_final - E_exact);
+        double rel_error = error / std::abs(E_exact);
+
+        std::cout << "\n" << std::string(50, '=') << std::endl;
+        std::cout << "Accuracy vs Exact:" << std::endl;
+        std::cout << "  E_DMRG  = " << std::fixed << std::setprecision(12) << E_final << std::endl;
+        std::cout << "  E_exact = " << std::fixed << std::setprecision(12) << E_exact << std::endl;
+        std::cout << "  |Error| = " << std::scientific << std::setprecision(3) << error << std::endl;
+        std::cout << "  Rel err = " << std::scientific << std::setprecision(3) << rel_error << std::endl;
+
+        // Validate accuracy
+        bool accuracy_pass = (error < 1e-6);  // Should be < 1e-6 for chi=32
+        std::cout << "\n  Accuracy test: " << (accuracy_pass ? "✅ PASS" : "❌ FAIL") << std::endl;
+        if (accuracy_pass) {
+            std::cout << "  (Error < 1e-6 threshold)" << std::endl;
+        }
 
         // Cleanup
         for (int site = 0; site < L; site++) {
