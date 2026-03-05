@@ -437,17 +437,17 @@ void BoundaryMergeGPU::split_with_svd(
     AccurateSVDResult result = svd_->decompose(d_M_reshaped, m, n);
 
     // Truncate to max_bond
-    int k = std::min((int)result.k, max_bond_);
+    int k = std::min(result.rank, max_bond_);
     k = std::max(k, 1);
     k_out = k;
 
     // Compute truncation error
-    std::vector<double> h_S(result.k);
-    HIP_CHECK(hipMemcpy(h_S.data(), result.d_S, result.k * sizeof(double),
+    std::vector<double> h_S(result.rank);
+    HIP_CHECK(hipMemcpy(h_S.data(), result.d_S, result.rank * sizeof(double),
                         hipMemcpyDeviceToHost));
 
     trunc_err = 0.0;
-    for (int i = k; i < (int)result.k; i++) {
+    for (int i = k; i < result.rank; i++) {
         trunc_err += h_S[i] * h_S[i];
     }
 
@@ -456,13 +456,13 @@ void BoundaryMergeGPU::split_with_svd(
                         hipMemcpyDeviceToDevice));
 
     // Form A_left = U[:, :k].reshape(chi_L, d, k)
-    // U is (m, k), we want first k columns
-    // Just copy since U is already (m, result.k) and we want (m, k)
+    // U is (m, rank), we want first k columns
+    // Just copy since U is already (m, result.rank) and we want (m, k)
     HIP_CHECK(hipMemcpy(d_A_left_new, result.d_U, m * k * sizeof(double),
                         hipMemcpyDeviceToDevice));
 
     // Form A_right = (S @ Vh)[:k, :].reshape(k, d, chi_R)
-    // Vh is (result.k, n), we want (k, n)
+    // Vh is (result.rank, n), we want (k, n)
     // Multiply S into Vh: Vh[i, :] *= S[i]
 
     // For simplicity: copy Vh first, then scale rows
