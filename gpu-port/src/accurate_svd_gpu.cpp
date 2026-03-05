@@ -76,10 +76,11 @@ void launch_invert_with_clipping(
 // ============================================================================
 
 AccurateSVD_GPU::AccurateSVD_GPU(double eps, int max_depth)
-    : epsilon(eps), max_recursion_depth(max_depth)
+    : epsilon(eps), max_recursion_depth(0)  // TEMP: Disable recursion for debugging
 {
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h));
     // ROCm 7.2.0: rocsolver functions use rocblas_handle directly
+    std::cerr << "DEBUG: AccurateSVD_GPU created with max_depth=0 (recursion disabled for debugging)" << std::endl;
 }
 
 AccurateSVD_GPU::~AccurateSVD_GPU() {
