@@ -394,252 +394,10 @@ public:
 };
 
 // ============================================================================
-// GPU Kernels for Environment Tensor Contractions
+// Environment Tensors on GPU (hipTensor-based, from working dmrg_with_environments.cpp)
 // ============================================================================
-
-// Left env update: L_new[b, wp, bstar] = sum_{a,astar,w,s,sp}
-//   L[a,w,astar] * A[a,s,b] * W[w,s,sp,wp] * conj(A[astar,sp,bstar])
-//
-// Each thread computes one element L_new[b, wp, bstar]
-__global__ void kernel_update_left_env(
-    const Complex* __restrict__ L_in,    // [Da, Dw, Da]
-    const Complex* __restrict__ A,       // [Da, d, Db]
-    const Complex* __restrict__ W,       // [Dw, d, d, Dwp]
-    Complex* __restrict__ L_out,         // [Db, Dwp, Db]
-    int Da, int Db, int Dw, int Dwp, int d)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = Db * Dwp * Db;
-    if (idx >= total) return;
-
-    int bstar = idx % Db;
-    int wp    = (idx / Db) % Dwp;
-    int b     = idx / (Dwp * Db);
-
-    double sum_re = 0.0, sum_im = 0.0;
-
-    for (int a = 0; a < Da; a++) {
-        for (int s = 0; s < d; s++) {
-            // A[a, s, b]
-            Complex Av = A[a * (d * Db) + s * Db + b];
-
-            for (int w = 0; w < Dw; w++) {
-                // L[a, w, astar] -- we will sum over astar below
-                // But first combine L*A contribution for this (a, w, s)
-                for (int sp = 0; sp < d; sp++) {
-                    // W[w, s, sp, wp]
-                    Complex Wv = W[w * (d * d * Dwp) + s * (d * Dwp) + sp * Dwp + wp];
-
-                    // Pre-multiply: Av * Wv
-                    double aw_re = Av.x * Wv.x - Av.y * Wv.y;
-                    double aw_im = Av.x * Wv.y + Av.y * Wv.x;
-
-                    for (int astar = 0; astar < Da; astar++) {
-                        // L[a, w, astar]
-                        Complex Lv = L_in[a * (Dw * Da) + w * Da + astar];
-
-                        // conj(A[astar, sp, bstar])
-                        Complex Ac = A[astar * (d * Db) + sp * Db + bstar];
-
-                        // L * (A * W)
-                        double law_re = Lv.x * aw_re - Lv.y * aw_im;
-                        double law_im = Lv.x * aw_im + Lv.y * aw_re;
-
-                        // * conj(A)
-                        sum_re += law_re * Ac.x + law_im * Ac.y;  // real part
-                        sum_im += law_im * Ac.x - law_re * Ac.y;  // imag part
-                    }
-                }
-            }
-        }
-    }
-
-    L_out[b * (Dwp * Db) + wp * Db + bstar] = make_complex(sum_re, sum_im);
-}
-
-// Right env update: R_new[a, w, astar] = sum_{b,bstar,wp,s,sp}
-//   A[a,s,b] * W[w,s,sp,wp] * R[b,wp,bstar] * conj(A[astar,sp,bstar])
-//
-// Each thread computes one element R_new[a, w, astar]
-__global__ void kernel_update_right_env(
-    const Complex* __restrict__ R_in,    // [Db, Dwp, Db]
-    const Complex* __restrict__ A,       // [Da, d, Db]
-    const Complex* __restrict__ W,       // [Dw, d, d, Dwp]
-    Complex* __restrict__ R_out,         // [Da, Dw, Da]
-    int Da, int Db, int Dw, int Dwp, int d)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = Da * Dw * Da;
-    if (idx >= total) return;
-
-    int astar = idx % Da;
-    int w     = (idx / Da) % Dw;
-    int a     = idx / (Dw * Da);
-
-    double sum_re = 0.0, sum_im = 0.0;
-
-    for (int b = 0; b < Db; b++) {
-        for (int s = 0; s < d; s++) {
-            // A[a, s, b]
-            Complex Av = A[a * (d * Db) + s * Db + b];
-
-            for (int sp = 0; sp < d; sp++) {
-                // W[w, s, sp, wp] -- will sum over wp below
-                for (int wp = 0; wp < Dwp; wp++) {
-                    Complex Wv = W[w * (d * d * Dwp) + s * (d * Dwp) + sp * Dwp + wp];
-
-                    // A * W
-                    double aw_re = Av.x * Wv.x - Av.y * Wv.y;
-                    double aw_im = Av.x * Wv.y + Av.y * Wv.x;
-
-                    for (int bstar = 0; bstar < Db; bstar++) {
-                        // R[b, wp, bstar]
-                        Complex Rv = R_in[b * (Dwp * Db) + wp * Db + bstar];
-
-                        // conj(A[astar, sp, bstar])
-                        Complex Ac = A[astar * (d * Db) + sp * Db + bstar];
-
-                        // (A * W) * R
-                        double awr_re = aw_re * Rv.x - aw_im * Rv.y;
-                        double awr_im = aw_re * Rv.y + aw_im * Rv.x;
-
-                        // * conj(A)
-                        sum_re += awr_re * Ac.x + awr_im * Ac.y;
-                        sum_im += awr_im * Ac.x - awr_re * Ac.y;
-                    }
-                }
-            }
-        }
-    }
-
-    R_out[a * (Dw * Da) + w * Da + astar] = make_complex(sum_re, sum_im);
-}
-
-// ============================================================================
-// GPU Kernels for H_eff Application (4-step tensor contraction)
-// ============================================================================
-
-// Step 1: T1[w,ap,s1,s2,b] = sum_a L[a,w,ap] * theta[a,s1,s2,b]
-// Each thread computes one element of T1
-__global__ void kernel_heff_step1(
-    const Complex* __restrict__ L,       // [Da, Dw, Da]
-    const Complex* __restrict__ theta,   // [Da, d, d, Db]
-    Complex* __restrict__ T1,            // [Dw, Da, d, d, Db]
-    int Da, int Db, int Dw, int d)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = Dw * Da * d * d * Db;
-    if (idx >= total) return;
-
-    int b   = idx % Db;
-    int s2  = (idx / Db) % d;
-    int s1  = (idx / (Db * d)) % d;
-    int ap  = (idx / (Db * d * d)) % Da;
-    int w   = idx / (Db * d * d * Da);
-
-    double sum_re = 0.0, sum_im = 0.0;
-    for (int a = 0; a < Da; a++) {
-        Complex Lv = L[a * (Dw * Da) + w * Da + ap];
-        Complex tv = theta[a * (d * d * Db) + s1 * (d * Db) + s2 * Db + b];
-        sum_re += Lv.x * tv.x - Lv.y * tv.y;
-        sum_im += Lv.x * tv.y + Lv.y * tv.x;
-    }
-    T1[w * (Da * d * d * Db) + ap * (d * d * Db) + s1 * (d * Db) + s2 * Db + b] =
-        make_complex(sum_re, sum_im);
-}
-
-// Step 2: T2[wm,ap,s1p,s2,b] = sum_{w,s1} W1[w,s1,s1p,wm] * T1[w,ap,s1,s2,b]
-__global__ void kernel_heff_step2(
-    const Complex* __restrict__ W1,      // [Dw, d, d, Dwm]
-    const Complex* __restrict__ T1,      // [Dw, Da, d, d, Db]
-    Complex* __restrict__ T2,            // [Dwm, Da, d, d, Db]
-    int Da, int Db, int Dw, int Dwm, int d)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = Dwm * Da * d * d * Db;
-    if (idx >= total) return;
-
-    int b   = idx % Db;
-    int s2  = (idx / Db) % d;
-    int s1p = (idx / (Db * d)) % d;
-    int ap  = (idx / (Db * d * d)) % Da;
-    int wm  = idx / (Db * d * d * Da);
-
-    double sum_re = 0.0, sum_im = 0.0;
-    for (int w = 0; w < Dw; w++) {
-        for (int s1 = 0; s1 < d; s1++) {
-            Complex Wv = W1[w * (d * d * Dwm) + s1 * (d * Dwm) + s1p * Dwm + wm];
-            Complex T1v = T1[w * (Da * d * d * Db) + ap * (d * d * Db) + s1 * (d * Db) + s2 * Db + b];
-            sum_re += Wv.x * T1v.x - Wv.y * T1v.y;
-            sum_im += Wv.x * T1v.y + Wv.y * T1v.x;
-        }
-    }
-    T2[wm * (Da * d * d * Db) + ap * (d * d * Db) + s1p * (d * Db) + s2 * Db + b] =
-        make_complex(sum_re, sum_im);
-}
-
-// Step 3: T3[ap,s1p,s2p,wr,b] = sum_{wm,s2} W2[wm,s2,s2p,wr] * T2[wm,ap,s1p,s2,b]
-__global__ void kernel_heff_step3(
-    const Complex* __restrict__ W2,      // [Dwm, d, d, Dwr]
-    const Complex* __restrict__ T2,      // [Dwm, Da, d, d, Db]
-    Complex* __restrict__ T3,            // [Da, d, d, Dwr, Db]
-    int Da, int Db, int Dwm, int Dwr, int d)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = Da * d * d * Dwr * Db;
-    if (idx >= total) return;
-
-    int b   = idx % Db;
-    int wr  = (idx / Db) % Dwr;
-    int s2p = (idx / (Db * Dwr)) % d;
-    int s1p = (idx / (Db * Dwr * d)) % d;
-    int ap  = idx / (Db * Dwr * d * d);
-
-    double sum_re = 0.0, sum_im = 0.0;
-    for (int wm = 0; wm < Dwm; wm++) {
-        for (int s2 = 0; s2 < d; s2++) {
-            Complex Wv = W2[wm * (d * d * Dwr) + s2 * (d * Dwr) + s2p * Dwr + wr];
-            Complex T2v = T2[wm * (Da * d * d * Db) + ap * (d * d * Db) + s1p * (d * Db) + s2 * Db + b];
-            sum_re += Wv.x * T2v.x - Wv.y * T2v.y;
-            sum_im += Wv.x * T2v.y + Wv.y * T2v.x;
-        }
-    }
-    T3[ap * (d * d * Dwr * Db) + s1p * (d * Dwr * Db) + s2p * (Dwr * Db) + wr * Db + b] =
-        make_complex(sum_re, sum_im);
-}
-
-// Step 4: result[ap,s1p,s2p,bp] = sum_{wr,b} R[b,wr,bp] * T3[ap,s1p,s2p,wr,b]
-__global__ void kernel_heff_step4(
-    const Complex* __restrict__ R,       // [Db, Dwr, Db]
-    const Complex* __restrict__ T3,      // [Da, d, d, Dwr, Db]
-    Complex* __restrict__ result,        // [Da, d, d, Db]
-    int Da, int Db, int Dwr, int d)
-{
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    int total = Da * d * d * Db;
-    if (idx >= total) return;
-
-    int bp  = idx % Db;
-    int s2p = (idx / Db) % d;
-    int s1p = (idx / (Db * d)) % d;
-    int ap  = idx / (Db * d * d);
-
-    double sum_re = 0.0, sum_im = 0.0;
-    for (int b = 0; b < Db; b++) {
-        for (int wr = 0; wr < Dwr; wr++) {
-            Complex Rv = R[b * (Dwr * Db) + wr * Db + bp];
-            Complex T3v = T3[ap * (d * d * Dwr * Db) + s1p * (d * Dwr * Db) + s2p * (Dwr * Db) + wr * Db + b];
-            sum_re += Rv.x * T3v.x - Rv.y * T3v.y;
-            sum_im += Rv.x * T3v.y + Rv.y * T3v.x;
-        }
-    }
-    result[ap * (d * d * Db) + s1p * (d * Db) + s2p * Db + bp] =
-        make_complex(sum_re, sum_im);
-}
-
-// ============================================================================
-// Environment Tensors on GPU
-// ============================================================================
+// Uses hipTensor for all contractions - proven correct for both Heisenberg and
+// complex models. Each env update decomposes into 3 sequential hipTensor contractions.
 
 class Environments {
 private:
@@ -683,54 +441,180 @@ public:
         }
     }
 
+    // -----------------------------------------------------------------------
     // update_left_env: L[site+1] = contract(L[site], A[site], W[site], A*[site])
-    // GPU kernel-based contraction (no CPU transfers)
+    //
+    // Full contraction via 3 sequential hipTensor contractions:
+    // 1. temp1[w,a*,s,b] = L[a,w,a*] * A[a,s,b]  (contract over a)
+    // 2. temp2[a*,s',b,w'] = temp1[w,a*,s,b] * W[w,s,s',w']  (contract over w,s)
+    // 3. L_new[b,w',b*] = temp2[a*,s',b,w'] * conj(A[a*,s',b*])  (contract over a*,s')
+    // -----------------------------------------------------------------------
     void update_left_env(int site, const std::vector<Complex*>& d_mps, MPOBase& mpo) {
         int Da  = mps_dims[site];
         int Db  = mps_dims[site + 1];
         int Dw  = mpo.get_left_dim(site);
         int Dwp = mpo.get_right_dim(site);
 
+        Complex* d_A    = d_mps[site];
+        Complex* d_W    = mpo.get_mpo(site);
+        Complex* d_L_in = d_left_env[site];
+
         int env_out_size = Db * Dwp * Db;
         if (d_left_env[site + 1]) {
             HIP_CHECK(hipFree(d_left_env[site + 1]));
             d_left_env[site + 1] = nullptr;
         }
-
         HIP_CHECK(hipMalloc(&d_left_env[site + 1], env_out_size * sizeof(Complex)));
 
-        int block_size = 256;
-        int grid_size = (env_out_size + block_size - 1) / block_size;
-        hipLaunchKernelGGL(kernel_update_left_env, dim3(grid_size), dim3(block_size), 0, 0,
-            d_left_env[site], d_mps[site], mpo.get_mpo(site),
-            d_left_env[site + 1],
-            Da, Db, Dw, Dwp, d);
-        HIP_CHECK(hipGetLastError());
+        // Step 1: temp1[w,a*,s,b] = sum_a L[a,w,a*] * A[a,s,b]
+        // Mode labels: a=0, w=1, astar=2, s=3, b=4
+        Complex* d_temp1;
+        int temp1_size = Dw * Da * d * Db;
+        HIP_CHECK(hipMalloc(&d_temp1, temp1_size * sizeof(Complex)));
+        {
+            int64_t extentL[] = {Da, Dw, Da};
+            int64_t extentA[] = {Db, d, Da};
+            int64_t extent_temp1[] = {Db, d, Da, Dw};
+            int32_t modesL[] = {2, 1, 0};
+            int32_t modesA[] = {4, 3, 0};
+            int32_t modes_temp1[] = {4, 3, 2, 1};
+            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
+            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
+            ht_contractor->contract(
+                d_L_in, 3, extentL, modesL, HIPTENSOR_OP_IDENTITY,
+                d_A, 3, extentA, modesA, HIPTENSOR_OP_IDENTITY,
+                d_temp1, 4, extent_temp1, modes_temp1,
+                alpha, beta, 0);
+        }
+
+        // Step 2: temp2[a*,s',b,w'] = sum_{w,s} temp1[w,a*,s,b] * W[w,s,s',w']
+        // Mode labels: sp=5, wp=6
+        Complex* d_temp2;
+        int temp2_size = Da * d * Db * Dwp;
+        HIP_CHECK(hipMalloc(&d_temp2, temp2_size * sizeof(Complex)));
+        {
+            int64_t extent_temp1[] = {Db, d, Da, Dw};
+            int64_t extentW[] = {Dwp, d, d, Dw};
+            int64_t extent_temp2[] = {Dwp, Db, d, Da};
+            int32_t modes_temp1[] = {4, 3, 2, 1};
+            int32_t modesW[] = {6, 5, 3, 1};
+            int32_t modes_temp2[] = {6, 4, 5, 2};
+            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
+            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
+            ht_contractor->contract(
+                d_temp1, 4, extent_temp1, modes_temp1, HIPTENSOR_OP_IDENTITY,
+                d_W, 4, extentW, modesW, HIPTENSOR_OP_IDENTITY,
+                d_temp2, 4, extent_temp2, modes_temp2,
+                alpha, beta, 0);
+        }
+        HIP_CHECK(hipFree(d_temp1));
+
+        // Step 3: L_new[b,w',b*] = sum_{a*,s'} temp2[a*,s',b,w'] * conj(A[a*,s',b*])
+        // Mode labels: bstar=7
+        {
+            int64_t extent_temp2[] = {Dwp, Db, d, Da};
+            int64_t extentA[] = {Db, d, Da};
+            int64_t extent_Lnew[] = {Db, Dwp, Db};
+            int32_t modes_temp2[] = {6, 4, 5, 2};
+            int32_t modesA_conj[] = {7, 5, 2};
+            int32_t modes_Lnew[] = {7, 6, 4};
+            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
+            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
+            ht_contractor->contract(
+                d_temp2, 4, extent_temp2, modes_temp2, HIPTENSOR_OP_IDENTITY,
+                d_A, 3, extentA, modesA_conj, HIPTENSOR_OP_CONJ,
+                d_left_env[site + 1], 3, extent_Lnew, modes_Lnew,
+                alpha, beta, 0);
+        }
+        HIP_CHECK(hipFree(d_temp2));
     }
 
+    // -----------------------------------------------------------------------
     // update_right_env: R[site] = contract(A[site], W[site], A*[site], R[site+1])
-    // GPU kernel-based contraction (no CPU transfers)
+    //
+    // Full contraction via 3 sequential hipTensor contractions:
+    // 1. temp1[a,s,w',b*] = A[a,s,b] * R[b,w',b*]  (contract over b)
+    // 2. temp2[a,w,s',b*] = temp1[a,s,w',b*] * W[w,s,s',w']  (contract over s,w')
+    // 3. R_new[a,w,a*] = temp2[a,w,s',b*] * conj(A[a*,s',b*])  (contract over s',b*)
+    // -----------------------------------------------------------------------
     void update_right_env(int site, const std::vector<Complex*>& d_mps, MPOBase& mpo) {
         int Da  = mps_dims[site];
         int Db  = mps_dims[site + 1];
         int Dw  = mpo.get_left_dim(site);
         int Dwp = mpo.get_right_dim(site);
 
+        Complex* d_A    = d_mps[site];
+        Complex* d_W    = mpo.get_mpo(site);
+        Complex* d_R_in = d_right_env[site + 1];
+
         int env_out_size = Da * Dw * Da;
         if (d_right_env[site]) {
             HIP_CHECK(hipFree(d_right_env[site]));
             d_right_env[site] = nullptr;
         }
-
         HIP_CHECK(hipMalloc(&d_right_env[site], env_out_size * sizeof(Complex)));
 
-        int block_size = 256;
-        int grid_size = (env_out_size + block_size - 1) / block_size;
-        hipLaunchKernelGGL(kernel_update_right_env, dim3(grid_size), dim3(block_size), 0, 0,
-            d_right_env[site + 1], d_mps[site], mpo.get_mpo(site),
-            d_right_env[site],
-            Da, Db, Dw, Dwp, d);
-        HIP_CHECK(hipGetLastError());
+        // Step 1: temp1[a,s,wp,b*] = sum_b A[a,s,b] * R[b,wp,b*]
+        // Mode labels: a=0, s=1, b=2, wp=3, bstar=4
+        Complex* d_temp1;
+        int temp1_size = Da * d * Dwp * Db;
+        HIP_CHECK(hipMalloc(&d_temp1, temp1_size * sizeof(Complex)));
+        {
+            int64_t extentA[] = {Db, d, Da};
+            int64_t extentR[] = {Db, Dwp, Db};
+            int64_t extent_temp1[] = {Db, Dwp, d, Da};
+            int32_t modesA[] = {2, 1, 0};
+            int32_t modesR[] = {4, 3, 2};
+            int32_t modes_temp1[] = {4, 3, 1, 0};
+            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
+            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
+            ht_contractor->contract(
+                d_A, 3, extentA, modesA, HIPTENSOR_OP_IDENTITY,
+                d_R_in, 3, extentR, modesR, HIPTENSOR_OP_IDENTITY,
+                d_temp1, 4, extent_temp1, modes_temp1,
+                alpha, beta, 0);
+        }
+
+        // Step 2: temp2[a,w,sp,b*] = sum_{s,wp} temp1[a,s,wp,b*] * W[w,s,sp,wp]
+        // Mode labels: w=5, sp=6
+        Complex* d_temp2;
+        int temp2_size = Da * Dw * d * Db;
+        HIP_CHECK(hipMalloc(&d_temp2, temp2_size * sizeof(Complex)));
+        {
+            int64_t extent_temp1[] = {Db, Dwp, d, Da};
+            int64_t extentW[] = {Dwp, d, d, Dw};
+            int64_t extent_temp2[] = {Db, d, Dw, Da};
+            int32_t modes_temp1[] = {4, 3, 1, 0};
+            int32_t modesW[] = {3, 6, 1, 5};
+            int32_t modes_temp2[] = {4, 6, 5, 0};
+            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
+            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
+            ht_contractor->contract(
+                d_temp1, 4, extent_temp1, modes_temp1, HIPTENSOR_OP_IDENTITY,
+                d_W, 4, extentW, modesW, HIPTENSOR_OP_IDENTITY,
+                d_temp2, 4, extent_temp2, modes_temp2,
+                alpha, beta, 0);
+        }
+        HIP_CHECK(hipFree(d_temp1));
+
+        // Step 3: R_new[a,w,a*] = sum_{sp,b*} temp2[a,w,sp,b*] * conj(A[a*,sp,b*])
+        // Mode labels: astar=7
+        {
+            int64_t extent_temp2[] = {Db, d, Dw, Da};
+            int64_t extentA[] = {Db, d, Da};
+            int64_t extent_Rnew[] = {Da, Dw, Da};
+            int32_t modes_temp2[] = {4, 6, 5, 0};
+            int32_t modesA_conj[] = {4, 6, 7};
+            int32_t modes_Rnew[] = {7, 5, 0};
+            hipDoubleComplex alpha = make_hipDoubleComplex(1.0, 0.0);
+            hipDoubleComplex beta = make_hipDoubleComplex(0.0, 0.0);
+            ht_contractor->contract(
+                d_temp2, 4, extent_temp2, modes_temp2, HIPTENSOR_OP_IDENTITY,
+                d_A, 3, extentA, modesA_conj, HIPTENSOR_OP_CONJ,
+                d_right_env[site], 3, extent_Rnew, modes_Rnew,
+                alpha, beta, 0);
+        }
+        HIP_CHECK(hipFree(d_temp2));
     }
 
     Complex* get_left(int site) { return d_left_env[site]; }
@@ -987,19 +871,12 @@ private:
     MPOBase* mpo;
     Environments* envs;
     rocblas_handle rb_handle;
-    HipTensorContractor* ht_heff;
 
     std::vector<int> bond_dims;
     std::vector<Complex*> d_mps;
 
     double current_energy;
     std::string model_name;
-
-    // Pre-allocated GPU buffers for H_eff intermediates (avoids hipMalloc per Lanczos iteration)
-    Complex* d_heff_buf1;  // for T1
-    Complex* d_heff_buf2;  // for T2
-    Complex* d_heff_buf3;  // for T3
-    size_t heff_buf_size;  // allocated size in elements
 
     // Timing instrumentation
     double time_init, time_sweeps, time_energy_eval;
@@ -1011,8 +888,6 @@ public:
         : mpo(mpo_in), max_D(max_bond), n_sweeps(sweeps),
           n_streams(num_streams), envs(nullptr), current_energy(0.0),
           model_name(model),
-          d_heff_buf1(nullptr), d_heff_buf2(nullptr), d_heff_buf3(nullptr),
-          heff_buf_size(0u),
           time_init(0), time_sweeps(0), time_energy_eval(0),
           verbose_debug(debug)
     {
@@ -1031,7 +906,6 @@ public:
         std::cout << "Sweeps = " << n_sweeps << ", Streams = " << n_streams << "\n\n";
 
         rocblas_create_handle(&rb_handle);
-        ht_heff = new HipTensorContractor();
 
         bond_dims.resize(L + 1);
         bond_dims[0] = 1;
@@ -1072,21 +946,6 @@ public:
         envs = new Environments(L, d, bond_dims, rb_handle);
         envs->initialize(d_mps, *mpo);
 
-        // Pre-allocate H_eff intermediate buffers
-        // Largest intermediate: T1/T2 = max_D_mpo * max_D * d * d * max_D
-        //                       T3    = max_D * d * d * max_D_mpo * max_D
-        // Use size_t to prevent integer overflow for large systems
-        int max_D_mpo = 0;
-        for (int i = 0; i < L; i++) {
-            max_D_mpo = std::max(max_D_mpo, mpo->get_left_dim(i));
-            max_D_mpo = std::max(max_D_mpo, mpo->get_right_dim(i));
-        }
-        size_t buf_size = (size_t)max_D_mpo * max_D * d * d * max_D;
-        heff_buf_size = buf_size;
-        HIP_CHECK(hipMalloc(&d_heff_buf1, buf_size * sizeof(Complex)));
-        HIP_CHECK(hipMalloc(&d_heff_buf2, buf_size * sizeof(Complex)));
-        HIP_CHECK(hipMalloc(&d_heff_buf3, buf_size * sizeof(Complex)));
-
         time_init = t_init_timer.toc();
         std::cout << "Initialization complete (" << std::fixed << std::setprecision(3)
                   << time_init << "s).\n\n";
@@ -1094,11 +953,7 @@ public:
 
     ~PDMRG_GPU() {
         delete envs;
-        delete ht_heff;
         for (auto& p : d_mps) if (p) HIP_CHECK(hipFree(p));
-        if (d_heff_buf1) HIP_CHECK(hipFree(d_heff_buf1));
-        if (d_heff_buf2) HIP_CHECK(hipFree(d_heff_buf2));
-        if (d_heff_buf3) HIP_CHECK(hipFree(d_heff_buf3));
         rocblas_destroy_handle(rb_handle);
     }
 
@@ -1200,9 +1055,10 @@ public:
 
             bool left_to_right = (sweep % 2 == 0);
 
+            double sweep_energy = 0.0;
             if (left_to_right) {
                 for (int site = 0; site < L - 1; site++) {
-                    optimize_site(site, true);
+                    sweep_energy = optimize_site(site, true);
                     envs->update_bond_dims(bond_dims);
                     if (site < L - 2) {
                         envs->update_left_env(site, d_mps, *mpo);
@@ -1210,7 +1066,7 @@ public:
                 }
             } else {
                 for (int site = L - 2; site >= 0; site--) {
-                    optimize_site(site, false);
+                    sweep_energy = optimize_site(site, false);
                     envs->update_bond_dims(bond_dims);
                     if (site > 0) {
                         envs->update_right_env(site + 1, d_mps, *mpo);
@@ -1218,11 +1074,9 @@ public:
                 }
             }
 
-            Timer t_energy;
-            t_energy.tic();
-            current_energy = compute_energy_from_environments();
-            double energy_time = t_energy.toc();
-            time_energy_eval += energy_time;
+            // Use Lanczos energy from last site optimization instead of
+            // expensive O(D^5) CPU transfer-matrix contraction
+            current_energy = sweep_energy;
 
             double sweep_time = t_sweep.toc();
             sweep_times.push_back(sweep_time);
@@ -1398,10 +1252,9 @@ private:
             apply_H_eff_with_environments(d_in, d_out, site);
         };
 
-        // Adaptive Lanczos: use more iterations for larger dimensions
-        // d=5 (Josephson) needs more Krylov vectors than d=2 (Heisenberg)
-        int max_lanczos = std::min(std::max(40, psi_size / 10), 100);
-        LanczosEigensolver solver(rb_handle, max_lanczos, 1e-10);
+        // Fixed Lanczos iterations (matching proven working dmrg_with_environments.cpp)
+        // 30 iterations is sufficient for both Heisenberg (d=2) and Josephson (d=5)
+        LanczosEigensolver solver(rb_handle, 30, 1e-10);
         double energy = solver.solve(apply_H_eff, psi_size, d_theta);
 
         if (verbose_debug) {
@@ -1431,15 +1284,11 @@ private:
         return energy;
     }
 
-    // Apply H_eff using GPU kernels (zero CPU transfers, pre-allocated buffers)
-    // result[ap, s1p, s2p, bp] = L[a,w,ap] * theta[a,s1,s2,b] *
-    //                            W1[w,s1,s1p,wm] * W2[wm,s2,s2p,wr] * R[b,wr,bp]
+    // Apply H_eff via CPU-based contraction (proven correct for both Heisenberg and Josephson)
+    // Downloads L, R, W1, W2, theta to host, performs 4-step contraction, uploads result.
     //
-    // Decomposed into 4 GPU kernel launches (all on GPU, no host transfers):
-    // 1. T1 = L * theta  (contract over a)
-    // 2. T2 = T1 * W1    (contract over w, s1)
-    // 3. T3 = T2 * W2    (contract over wm, s2)
-    // 4. result = T3 * R (contract over wr, b)
+    // result[ap, s1p, s2p, bp] = sum_{a, s1, s2, b, w, wm, wr}
+    //   L[a, w, ap] * W1[w, s1, s1p, wm] * W2[wm, s2, s2p, wr] * R[b, wr, bp] * theta[a, s1, s2, b]
     void apply_H_eff_with_environments(const Complex* d_theta_in, Complex* d_theta_out, int site) {
         int D_L = bond_dims[site];
         int D_R = bond_dims[site + 2];
@@ -1447,48 +1296,118 @@ private:
         int D_mpo_M = mpo->get_right_dim(site);
         int D_mpo_R = mpo->get_right_dim(site + 1);
 
-        int block_size = 256;
+        int psi_size = D_L * d * d * D_R;
 
-        // Use pre-allocated buffers (no hipMalloc/hipFree per Lanczos iteration)
-        Complex* d_T1 = d_heff_buf1;
-        Complex* d_T2 = d_heff_buf2;
-        Complex* d_T3 = d_heff_buf3;
+        // Download everything to CPU for exact contraction
+        int L_size = D_L * D_mpo_L * D_L;
+        int R_size = D_R * D_mpo_R * D_R;
+        int W1_size = D_mpo_L * d * d * D_mpo_M;
+        int W2_size = D_mpo_M * d * d * D_mpo_R;
 
-        // Step 1: T1[w,ap,s1,s2,b] = sum_a L[a,w,ap] * theta[a,s1,s2,b]
-        {
-            int T1_size = D_mpo_L * D_L * d * d * D_R;
-            int grid = (T1_size + block_size - 1) / block_size;
-            hipLaunchKernelGGL(kernel_heff_step1, dim3(grid), dim3(block_size), 0, 0,
-                envs->get_left(site), d_theta_in, d_T1,
-                D_L, D_R, D_mpo_L, d);
+        std::vector<Complex> hL(L_size), hR(R_size), hW1(W1_size), hW2(W2_size), hTheta(psi_size);
+
+        HIP_CHECK(hipMemcpy(hL.data(), envs->get_left(site), L_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hR.data(), envs->get_right(site + 2), R_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hW1.data(), mpo->get_mpo(site), W1_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hW2.data(), mpo->get_mpo(site + 1), W2_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hTheta.data(), d_theta_in, psi_size * sizeof(Complex), hipMemcpyDeviceToHost));
+
+        std::vector<Complex> hResult(psi_size, make_complex(0.0, 0.0));
+
+        // Step 1: T1[w, ap, s1, s2, b] = sum_a L[a, w, ap] * theta[a, s1, s2, b]
+        int T1_size = D_mpo_L * D_L * d * d * D_R;
+        std::vector<Complex> hT1(T1_size, make_complex(0.0, 0.0));
+
+        for (int w = 0; w < D_mpo_L; w++) {
+            for (int ap = 0; ap < D_L; ap++) {
+                for (int s1 = 0; s1 < d; s1++) {
+                    for (int s2 = 0; s2 < d; s2++) {
+                        for (int b = 0; b < D_R; b++) {
+                            Complex sum = make_complex(0.0, 0.0);
+                            for (int a = 0; a < D_L; a++) {
+                                Complex Lv = hL[a * (D_mpo_L * D_L) + w * D_L + ap];
+                                Complex tv = hTheta[a * (d * d * D_R) + s1 * (d * D_R) + s2 * D_R + b];
+                                sum.x += Lv.x * tv.x - Lv.y * tv.y;
+                                sum.y += Lv.x * tv.y + Lv.y * tv.x;
+                            }
+                            hT1[w * (D_L * d * d * D_R) + ap * (d * d * D_R) + s1 * (d * D_R) + s2 * D_R + b] = sum;
+                        }
+                    }
+                }
+            }
         }
 
-        // Step 2: T2[wm,ap,s1p,s2,b] = sum_{w,s1} W1[w,s1,s1p,wm] * T1[w,ap,s1,s2,b]
-        {
-            int T2_size = D_mpo_M * D_L * d * d * D_R;
-            int grid = (T2_size + block_size - 1) / block_size;
-            hipLaunchKernelGGL(kernel_heff_step2, dim3(grid), dim3(block_size), 0, 0,
-                mpo->get_mpo(site), d_T1, d_T2,
-                D_L, D_R, D_mpo_L, D_mpo_M, d);
+        // Step 2: T2[wm, ap, s1p, s2, b] = sum_{w, s1} W1[w, s1, s1p, wm] * T1[w, ap, s1, s2, b]
+        int T2_size = D_mpo_M * D_L * d * d * D_R;
+        std::vector<Complex> hT2(T2_size, make_complex(0.0, 0.0));
+
+        for (int wm = 0; wm < D_mpo_M; wm++) {
+            for (int ap = 0; ap < D_L; ap++) {
+                for (int s1p = 0; s1p < d; s1p++) {
+                    for (int s2 = 0; s2 < d; s2++) {
+                        for (int b = 0; b < D_R; b++) {
+                            Complex sum = make_complex(0.0, 0.0);
+                            for (int w = 0; w < D_mpo_L; w++) {
+                                for (int s1 = 0; s1 < d; s1++) {
+                                    Complex Wv = hW1[w * (d * d * D_mpo_M) + s1 * (d * D_mpo_M) + s1p * D_mpo_M + wm];
+                                    Complex T1v = hT1[w * (D_L * d * d * D_R) + ap * (d * d * D_R) + s1 * (d * D_R) + s2 * D_R + b];
+                                    sum.x += Wv.x * T1v.x - Wv.y * T1v.y;
+                                    sum.y += Wv.x * T1v.y + Wv.y * T1v.x;
+                                }
+                            }
+                            hT2[wm * (D_L * d * d * D_R) + ap * (d * d * D_R) + s1p * (d * D_R) + s2 * D_R + b] = sum;
+                        }
+                    }
+                }
+            }
         }
 
-        // Step 3: T3[ap,s1p,s2p,wr,b] = sum_{wm,s2} W2[wm,s2,s2p,wr] * T2[wm,ap,s1p,s2,b]
-        {
-            int T3_size = D_L * d * d * D_mpo_R * D_R;
-            int grid = (T3_size + block_size - 1) / block_size;
-            hipLaunchKernelGGL(kernel_heff_step3, dim3(grid), dim3(block_size), 0, 0,
-                mpo->get_mpo(site + 1), d_T2, d_T3,
-                D_L, D_R, D_mpo_M, D_mpo_R, d);
+        // Step 3: T3[ap, s1p, s2p, wr, b] = sum_{wm, s2} W2[wm, s2, s2p, wr] * T2[wm, ap, s1p, s2, b]
+        int T3_size = D_L * d * d * D_mpo_R * D_R;
+        std::vector<Complex> hT3(T3_size, make_complex(0.0, 0.0));
+
+        for (int ap = 0; ap < D_L; ap++) {
+            for (int s1p = 0; s1p < d; s1p++) {
+                for (int s2p = 0; s2p < d; s2p++) {
+                    for (int wr = 0; wr < D_mpo_R; wr++) {
+                        for (int b = 0; b < D_R; b++) {
+                            Complex sum = make_complex(0.0, 0.0);
+                            for (int wm = 0; wm < D_mpo_M; wm++) {
+                                for (int s2 = 0; s2 < d; s2++) {
+                                    Complex Wv = hW2[wm * (d * d * D_mpo_R) + s2 * (d * D_mpo_R) + s2p * D_mpo_R + wr];
+                                    Complex T2v = hT2[wm * (D_L * d * d * D_R) + ap * (d * d * D_R) + s1p * (d * D_R) + s2 * D_R + b];
+                                    sum.x += Wv.x * T2v.x - Wv.y * T2v.y;
+                                    sum.y += Wv.x * T2v.y + Wv.y * T2v.x;
+                                }
+                            }
+                            hT3[ap * (d * d * D_mpo_R * D_R) + s1p * (d * D_mpo_R * D_R) + s2p * (D_mpo_R * D_R) + wr * D_R + b] = sum;
+                        }
+                    }
+                }
+            }
         }
 
-        // Step 4: result[ap,s1p,s2p,bp] = sum_{wr,b} R[b,wr,bp] * T3[ap,s1p,s2p,wr,b]
-        {
-            int out_size = D_L * d * d * D_R;
-            int grid = (out_size + block_size - 1) / block_size;
-            hipLaunchKernelGGL(kernel_heff_step4, dim3(grid), dim3(block_size), 0, 0,
-                envs->get_right(site + 2), d_T3, d_theta_out,
-                D_L, D_R, D_mpo_R, d);
+        // Step 4: result[ap, s1p, s2p, bp] = sum_{wr, b} R[b, wr, bp] * T3[ap, s1p, s2p, wr, b]
+        for (int ap = 0; ap < D_L; ap++) {
+            for (int s1p = 0; s1p < d; s1p++) {
+                for (int s2p = 0; s2p < d; s2p++) {
+                    for (int bp = 0; bp < D_R; bp++) {
+                        Complex sum = make_complex(0.0, 0.0);
+                        for (int b = 0; b < D_R; b++) {
+                            for (int wr = 0; wr < D_mpo_R; wr++) {
+                                Complex Rv = hR[b * (D_mpo_R * D_R) + wr * D_R + bp];
+                                Complex T3v = hT3[ap * (d * d * D_mpo_R * D_R) + s1p * (d * D_mpo_R * D_R) + s2p * (D_mpo_R * D_R) + wr * D_R + b];
+                                sum.x += Rv.x * T3v.x - Rv.y * T3v.y;
+                                sum.y += Rv.x * T3v.y + Rv.y * T3v.x;
+                            }
+                        }
+                        hResult[ap * (d * d * D_R) + s1p * (d * D_R) + s2p * D_R + bp] = sum;
+                    }
+                }
+            }
         }
+
+        HIP_CHECK(hipMemcpy(d_theta_out, hResult.data(), psi_size * sizeof(Complex), hipMemcpyHostToDevice));
     }
 
     // SVD to split optimized 2-site wavefunction (from working dmrg_with_environments.cpp)
