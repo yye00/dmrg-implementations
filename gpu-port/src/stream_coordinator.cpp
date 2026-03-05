@@ -158,6 +158,14 @@ double StreamCoordinator::run_iteration(int iter) {
     // Compute full-chain energy (scales boundary energy to all bonds)
     total_energy_ = compute_full_chain_energy();
 
+    // DEBUG: Show segment energies
+    std::cout << "  DEBUG segment_energies_: [";
+    for (size_t i = 0; i < segment_energies_.size(); i++) {
+        std::cout << segment_energies_[i];
+        if (i < segment_energies_.size() - 1) std::cout << ", ";
+    }
+    std::cout << "]" << std::endl;
+
     std::cout << "  Total energy: " << total_energy_ << std::endl;
 
     return total_energy_;
