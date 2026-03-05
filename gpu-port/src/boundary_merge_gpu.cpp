@@ -442,13 +442,111 @@ void BoundaryMergeGPU::apply_heff(
     int chi_L, int d, int chi_R, int D_mpo,
     hipStream_t stream
 ) {
-    // For now: simple placeholder that returns identity
-    // Full OptimizedHeff integration requires dimension tracking
-    // TODO: Add dimension fields to BoundaryMergeGPU or OptimizedHeff getters
+    // Apply H_eff = L_env * W_left * W_right * R_env to theta
+    //
+    // result[ap, s1p, s2p, bp] = sum_{a, s1, s2, b, w, wm, wr}
+    //   L[a, w, ap] * W1[w, s1, s1p, wm] * W2[wm, s2, s2p, wr] * R[b, wr, bp] * theta[a, s1, s2, b]
+    //
+    // CPU contraction for now (can be GPU-optimized with hipTensor later)
 
-    int n = chi_L * d * d * chi_R;
-    HIP_CHECK(hipMemcpyAsync(d_result, d_theta, n * sizeof(double),
-                             hipMemcpyDeviceToDevice, stream));
+    int psi_size = chi_L * d * d * chi_R;
+    int L_size = chi_L * D_mpo * chi_L;
+    int R_size = chi_R * D_mpo * chi_R;
+    int W_size = D_mpo * d * d * D_mpo;
+
+    // Copy to host
+    std::vector<double> hL(L_size), hR(R_size), hW1(W_size), hW2(W_size), hTheta(psi_size);
+    HIP_CHECK(hipMemcpy(hL.data(), d_L_env, L_size * sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(hR.data(), d_R_env, R_size * sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(hW1.data(), d_W_left, W_size * sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(hW2.data(), d_W_right, W_size * sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(hTheta.data(), d_theta, psi_size * sizeof(double), hipMemcpyDeviceToHost));
+
+    std::vector<double> hResult(psi_size, 0.0);
+
+    // Step 1: T1[w, ap, s1, s2, b] = sum_a L[a, w, ap] * theta[a, s1, s2, b]
+    int T1_size = D_mpo * chi_L * d * d * chi_R;
+    std::vector<double> hT1(T1_size, 0.0);
+    for (int w = 0; w < D_mpo; w++) {
+        for (int ap = 0; ap < chi_L; ap++) {
+            for (int s1 = 0; s1 < d; s1++) {
+                for (int s2 = 0; s2 < d; s2++) {
+                    for (int b = 0; b < chi_R; b++) {
+                        double sum = 0.0;
+                        for (int a = 0; a < chi_L; a++) {
+                            sum += hL[a + w*chi_L + ap*chi_L*D_mpo] * hTheta[a + s1*chi_L + s2*chi_L*d + b*chi_L*d*d];
+                        }
+                        hT1[w + ap*D_mpo + s1*D_mpo*chi_L + s2*D_mpo*chi_L*d + b*D_mpo*chi_L*d*d] = sum;
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 2: T2[wm, ap, s1p, s2, b] = sum_{w,s1} W1[w, s1, s1p, wm] * T1[w, ap, s1, s2, b]
+    int T2_size = D_mpo * chi_L * d * d * chi_R;
+    std::vector<double> hT2(T2_size, 0.0);
+    for (int wm = 0; wm < D_mpo; wm++) {
+        for (int ap = 0; ap < chi_L; ap++) {
+            for (int s1p = 0; s1p < d; s1p++) {
+                for (int s2 = 0; s2 < d; s2++) {
+                    for (int b = 0; b < chi_R; b++) {
+                        double sum = 0.0;
+                        for (int w = 0; w < D_mpo; w++) {
+                            for (int s1 = 0; s1 < d; s1++) {
+                                sum += hW1[w + s1*D_mpo + s1p*D_mpo*d + wm*D_mpo*d*d] *
+                                       hT1[w + ap*D_mpo + s1*D_mpo*chi_L + s2*D_mpo*chi_L*d + b*D_mpo*chi_L*d*d];
+                            }
+                        }
+                        hT2[wm + ap*D_mpo + s1p*D_mpo*chi_L + s2*D_mpo*chi_L*d + b*D_mpo*chi_L*d*d] = sum;
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 3: T3[ap, s1p, s2p, wr, b] = sum_{wm,s2} W2[wm, s2, s2p, wr] * T2[wm, ap, s1p, s2, b]
+    int T3_size = chi_L * d * d * D_mpo * chi_R;
+    std::vector<double> hT3(T3_size, 0.0);
+    for (int ap = 0; ap < chi_L; ap++) {
+        for (int s1p = 0; s1p < d; s1p++) {
+            for (int s2p = 0; s2p < d; s2p++) {
+                for (int wr = 0; wr < D_mpo; wr++) {
+                    for (int b = 0; b < chi_R; b++) {
+                        double sum = 0.0;
+                        for (int wm = 0; wm < D_mpo; wm++) {
+                            for (int s2 = 0; s2 < d; s2++) {
+                                sum += hW2[wm + s2*D_mpo + s2p*D_mpo*d + wr*D_mpo*d*d] *
+                                       hT2[wm + ap*D_mpo + s1p*D_mpo*chi_L + s2*D_mpo*chi_L*d + b*D_mpo*chi_L*d*d];
+                            }
+                        }
+                        hT3[ap + s1p*chi_L + s2p*chi_L*d + wr*chi_L*d*d + b*chi_L*d*d*D_mpo] = sum;
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 4: result[ap, s1p, s2p, bp] = sum_{wr,b} R[b, wr, bp] * T3[ap, s1p, s2p, wr, b]
+    for (int ap = 0; ap < chi_L; ap++) {
+        for (int s1p = 0; s1p < d; s1p++) {
+            for (int s2p = 0; s2p < d; s2p++) {
+                for (int bp = 0; bp < chi_R; bp++) {
+                    double sum = 0.0;
+                    for (int wr = 0; wr < D_mpo; wr++) {
+                        for (int b = 0; b < chi_R; b++) {
+                            sum += hR[b + wr*chi_R + bp*chi_R*D_mpo] *
+                                   hT3[ap + s1p*chi_L + s2p*chi_L*d + wr*chi_L*d*d + b*chi_L*d*d*D_mpo];
+                        }
+                    }
+                    hResult[ap + s1p*chi_L + s2p*chi_L*d + bp*chi_L*d*d] = sum;
+                }
+            }
+        }
+    }
+
+    // Copy back to device
+    HIP_CHECK(hipMemcpy(d_result, hResult.data(), psi_size * sizeof(double), hipMemcpyHostToDevice));
 }
 
 void BoundaryMergeGPU::lanczos_eigensolver(
