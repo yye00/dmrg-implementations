@@ -668,13 +668,25 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     HIP_CHECK(hipMemset(d_T_matrix, 0, niter * niter * sizeof(double)));
 
     // Build tridiagonal matrix on CPU first (it's small)
+    // Using rocblas_fill_upper, so only need to fill upper triangle + diagonal
     std::vector<double> h_T_matrix(niter * niter, 0.0);
     for (int i = 0; i < niter; i++) {
-        h_T_matrix[i + i * niter] = h_alpha[i];  // Diagonal
-        if (i > 0) {
-            h_T_matrix[i + (i-1) * niter] = h_beta[i-1];  // Lower off-diagonal
-            h_T_matrix[(i-1) + i * niter] = h_beta[i-1];  // Upper off-diagonal
+        // Diagonal element (i, i)
+        h_T_matrix[i + i * niter] = h_alpha[i];
+
+        // Upper off-diagonal (i, i+1)
+        if (i < niter - 1) {
+            h_T_matrix[i + (i+1) * niter] = h_beta[i];
         }
+    }
+
+    // DEBUG: Print tridiagonal matrix
+    printf("DEBUG Tridiagonal matrix (%dx%d):\n", niter, niter);
+    for (int i = 0; i < std::min(5, niter); i++) {
+        for (int j = 0; j < std::min(5, niter); j++) {
+            printf("%8.4f ", h_T_matrix[i + j * niter]);
+        }
+        printf("%s\n", (niter > 5 ? "..." : ""));
     }
 
     // Copy to GPU
