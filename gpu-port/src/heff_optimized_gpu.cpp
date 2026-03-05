@@ -76,10 +76,10 @@ OptimizedHeff::~OptimizedHeff() {
         hiptensorDestroyPlan(plan_4);
 
         // Destroy contraction descriptors
-        hiptensorDestroyContractionDescriptor(contraction_1);
-        hiptensorDestroyContractionDescriptor(contraction_2);
-        hiptensorDestroyContractionDescriptor(contraction_3);
-        hiptensorDestroyContractionDescriptor(contraction_4);
+        hiptensorDestroyOperationDescriptor(contraction_1);
+        hiptensorDestroyOperationDescriptor(contraction_2);
+        hiptensorDestroyOperationDescriptor(contraction_3);
+        hiptensorDestroyOperationDescriptor(contraction_4);
 
         // Destroy tensor descriptors
         hiptensorDestroyTensorDescriptor(desc_L);
@@ -105,7 +105,7 @@ void OptimizedHeff::initialize_descriptors() {
                                       static_cast<int64_t>(chi_L)};
     std::vector<int32_t> mode_L = {'w', 'p', 'a'};
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(
-        handle, &desc_L,
+        *handle, &desc_L,
         extent_L.size(), extent_L.data(),
         nullptr,  // strides = nullptr means column-major
         HIP_R_64F,  // Double precision for < 1e-10 validation
@@ -118,7 +118,7 @@ void OptimizedHeff::initialize_descriptors() {
                                       static_cast<int64_t>(chi_R)};
     std::vector<int32_t> mode_R = {'y', 'b', 'q'};
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(
-        handle, &desc_R,
+        *handle, &desc_R,
         extent_R.size(), extent_R.data(),
         nullptr,
         HIP_R_64F,
@@ -132,7 +132,7 @@ void OptimizedHeff::initialize_descriptors() {
                                        static_cast<int64_t>(D_mpo)};
     std::vector<int32_t> mode_W1 = {'w', 's', 'r', 'x'};
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(
-        handle, &desc_W1,
+        *handle, &desc_W1,
         extent_W1.size(), extent_W1.data(),
         nullptr,
         HIP_R_64F,
@@ -146,7 +146,7 @@ void OptimizedHeff::initialize_descriptors() {
                                        static_cast<int64_t>(D_mpo)};
     std::vector<int32_t> mode_W2 = {'x', 't', 'u', 'y'};
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(
-        handle, &desc_W2,
+        *handle, &desc_W2,
         extent_W2.size(), extent_W2.data(),
         nullptr,
         HIP_R_64F,
@@ -160,7 +160,7 @@ void OptimizedHeff::initialize_descriptors() {
                                           static_cast<int64_t>(chi_R)};
     std::vector<int32_t> mode_theta = {'a', 's', 't', 'b'};
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(
-        handle, &desc_theta,
+        *handle, &desc_theta,
         extent_theta.size(), extent_theta.data(),
         nullptr,
         HIP_R_64F,
@@ -175,7 +175,7 @@ void OptimizedHeff::initialize_descriptors() {
                                        static_cast<int64_t>(chi_R)};
     std::vector<int32_t> mode_T1 = {'w', 'p', 's', 't', 'b'};
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(
-        handle, &desc_T1,
+        *handle, &desc_T1,
         extent_T1.size(), extent_T1.data(),
         nullptr,
         HIP_R_64F,
@@ -191,7 +191,7 @@ void OptimizedHeff::initialize_descriptors() {
                                        static_cast<int64_t>(D_mpo)};
     std::vector<int32_t> mode_T2 = {'p', 'r', 't', 'b', 'x'};
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(
-        handle, &desc_T2,
+        *handle, &desc_T2,
         extent_T2.size(), extent_T2.data(),
         nullptr,
         HIP_R_64F,
@@ -206,7 +206,7 @@ void OptimizedHeff::initialize_descriptors() {
                                        static_cast<int64_t>(D_mpo)};
     std::vector<int32_t> mode_T3 = {'p', 'r', 'u', 'b', 'y'};
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(
-        handle, &desc_T3,
+        *handle, &desc_T3,
         extent_T3.size(), extent_T3.data(),
         nullptr,
         HIP_R_64F,
@@ -220,7 +220,7 @@ void OptimizedHeff::initialize_descriptors() {
                                            static_cast<int64_t>(chi_R)};
     std::vector<int32_t> mode_result = {'p', 'r', 'u', 'q'};
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(
-        handle, &desc_result,
+        *handle, &desc_result,
         extent_result.size(), extent_result.data(),
         nullptr,
         HIP_R_64F,
@@ -240,13 +240,13 @@ void OptimizedHeff::create_contractions() {
     int32_t modesT1_1[] = {'w', 'p', 's', 't', 'b'};
 
     HIPTENSOR_CHECK(hiptensorCreateContraction(
-        handle,
+        *handle,
         &contraction_1,
-        desc_L, 3, modesL_1, HIPTENSOR_OP_IDENTITY,
-        desc_theta, 4, modesTheta_1, HIPTENSOR_OP_IDENTITY,
-        desc_T1, 5, modesT1_1,
-        desc_T1, 5, modesT1_1,
-        HIPTENSOR_COMPUTE_64F
+        desc_L, modesL_1, HIPTENSOR_OP_IDENTITY,
+        desc_theta, modesTheta_1, HIPTENSOR_OP_IDENTITY,
+        desc_T1, modesT1_1, HIPTENSOR_OP_IDENTITY,
+        desc_T1, modesT1_1,
+        HIPTENSOR_COMPUTE_DESC_64F
     ));
 
     // Contraction 2: T2[p, r, t, b, x] = W1[w, s, r, x] * T1[w, p, s, t, b]
@@ -258,13 +258,13 @@ void OptimizedHeff::create_contractions() {
     int32_t modesT2_2[] = {'p', 'r', 't', 'b', 'x'};
 
     HIPTENSOR_CHECK(hiptensorCreateContraction(
-        handle,
+        *handle,
         &contraction_2,
-        desc_W1, 4, modesW1_2, HIPTENSOR_OP_IDENTITY,
-        desc_T1, 5, modesT1_2, HIPTENSOR_OP_IDENTITY,
-        desc_T2, 5, modesT2_2,
-        desc_T2, 5, modesT2_2,
-        HIPTENSOR_COMPUTE_64F
+        desc_W1, modesW1_2, HIPTENSOR_OP_IDENTITY,
+        desc_T1, modesT1_2, HIPTENSOR_OP_IDENTITY,
+        desc_T2, modesT2_2, HIPTENSOR_OP_IDENTITY,
+        desc_T2, modesT2_2,
+        HIPTENSOR_COMPUTE_DESC_64F
     ));
 
     // Contraction 3: T3[p, r, u, b, y] = W2[x, t, u, y] * T2[p, r, t, b, x]
@@ -276,13 +276,13 @@ void OptimizedHeff::create_contractions() {
     int32_t modesT3_3[] = {'p', 'r', 'u', 'b', 'y'};
 
     HIPTENSOR_CHECK(hiptensorCreateContraction(
-        handle,
+        *handle,
         &contraction_3,
-        desc_W2, 4, modesW2_3, HIPTENSOR_OP_IDENTITY,
-        desc_T2, 5, modesT2_3, HIPTENSOR_OP_IDENTITY,
-        desc_T3, 5, modesT3_3,
-        desc_T3, 5, modesT3_3,
-        HIPTENSOR_COMPUTE_64F
+        desc_W2, modesW2_3, HIPTENSOR_OP_IDENTITY,
+        desc_T2, modesT2_3, HIPTENSOR_OP_IDENTITY,
+        desc_T3, modesT3_3, HIPTENSOR_OP_IDENTITY,
+        desc_T3, modesT3_3,
+        HIPTENSOR_COMPUTE_DESC_64F
     ));
 
     // Contraction 4: result[p, r, u, q] = T3[p, r, u, b, y] * R[y, b, q]
@@ -294,13 +294,13 @@ void OptimizedHeff::create_contractions() {
     int32_t modesResult_4[] = {'p', 'r', 'u', 'q'};
 
     HIPTENSOR_CHECK(hiptensorCreateContraction(
-        handle,
+        *handle,
         &contraction_4,
-        desc_T3, 5, modesT3_4, HIPTENSOR_OP_IDENTITY,
-        desc_R, 3, modesR_4, HIPTENSOR_OP_IDENTITY,
-        desc_result, 4, modesResult_4,
-        desc_result, 4, modesResult_4,
-        HIPTENSOR_COMPUTE_64F
+        desc_T3, modesT3_4, HIPTENSOR_OP_IDENTITY,
+        desc_R, modesR_4, HIPTENSOR_OP_IDENTITY,
+        desc_result, modesResult_4, HIPTENSOR_OP_IDENTITY,
+        desc_result, modesResult_4,
+        HIPTENSOR_COMPUTE_DESC_64F
     ));
 }
 
@@ -308,7 +308,7 @@ void OptimizedHeff::create_plans() {
     // Plan preferences: Use greedy algorithm for contraction path optimization
     hiptensorPlanPreference_t pref;
     HIPTENSOR_CHECK(hiptensorCreatePlanPreference(
-        handle,
+        *handle,
         &pref,
         HIPTENSOR_ALGO_DEFAULT,  // or HIPTENSOR_ALGO_ACTOR_CRITIC for optimization
         HIPTENSOR_JIT_MODE_NONE
@@ -317,7 +317,7 @@ void OptimizedHeff::create_plans() {
     // Plan 1: L × theta
     uint64_t workspace_size_1 = 0;
     HIPTENSOR_CHECK(hiptensorEstimateWorkspaceSize(
-        handle,
+        *handle,
         contraction_1,
         pref,
         HIPTENSOR_WORKSPACE_RECOMMENDED,
@@ -332,7 +332,7 @@ void OptimizedHeff::create_plans() {
     }
 
     HIPTENSOR_CHECK(hiptensorCreatePlan(
-        handle,
+        *handle,
         &plan_1,
         contraction_1,
         pref,
@@ -342,7 +342,7 @@ void OptimizedHeff::create_plans() {
     // Plan 2: W1 × T1
     uint64_t workspace_size_2 = 0;
     HIPTENSOR_CHECK(hiptensorEstimateWorkspaceSize(
-        handle,
+        *handle,
         contraction_2,
         pref,
         HIPTENSOR_WORKSPACE_RECOMMENDED,
@@ -357,7 +357,7 @@ void OptimizedHeff::create_plans() {
     }
 
     HIPTENSOR_CHECK(hiptensorCreatePlan(
-        handle,
+        *handle,
         &plan_2,
         contraction_2,
         pref,
@@ -367,7 +367,7 @@ void OptimizedHeff::create_plans() {
     // Plan 3: W2 × T2
     uint64_t workspace_size_3 = 0;
     HIPTENSOR_CHECK(hiptensorEstimateWorkspaceSize(
-        handle,
+        *handle,
         contraction_3,
         pref,
         HIPTENSOR_WORKSPACE_RECOMMENDED,
@@ -382,7 +382,7 @@ void OptimizedHeff::create_plans() {
     }
 
     HIPTENSOR_CHECK(hiptensorCreatePlan(
-        handle,
+        *handle,
         &plan_3,
         contraction_3,
         pref,
@@ -392,7 +392,7 @@ void OptimizedHeff::create_plans() {
     // Plan 4: T3 × R
     uint64_t workspace_size_4 = 0;
     HIPTENSOR_CHECK(hiptensorEstimateWorkspaceSize(
-        handle,
+        *handle,
         contraction_4,
         pref,
         HIPTENSOR_WORKSPACE_RECOMMENDED,
@@ -407,7 +407,7 @@ void OptimizedHeff::create_plans() {
     }
 
     HIPTENSOR_CHECK(hiptensorCreatePlan(
-        handle,
+        *handle,
         &plan_4,
         contraction_4,
         pref,
@@ -455,7 +455,7 @@ void OptimizedHeff::apply(
                                 workspace_cache["plan_1"].size : 0;
 
     HIPTENSOR_CHECK(hiptensorContract(
-        handle,
+        *handle,
         plan_1,
         (void*)&alpha, (void*)d_L, (void*)d_theta,
         (void*)&beta, (void*)d_T1, (void*)d_T1,
@@ -470,7 +470,7 @@ void OptimizedHeff::apply(
                                 workspace_cache["plan_2"].size : 0;
 
     HIPTENSOR_CHECK(hiptensorContract(
-        handle,
+        *handle,
         plan_2,
         (void*)&alpha, (void*)d_W1, (void*)d_T1,
         (void*)&beta, (void*)d_T2, (void*)d_T2,
@@ -485,7 +485,7 @@ void OptimizedHeff::apply(
                                 workspace_cache["plan_3"].size : 0;
 
     HIPTENSOR_CHECK(hiptensorContract(
-        handle,
+        *handle,
         plan_3,
         (void*)&alpha, (void*)d_W2, (void*)d_T2,
         (void*)&beta, (void*)d_T3, (void*)d_T3,
@@ -500,7 +500,7 @@ void OptimizedHeff::apply(
                                 workspace_cache["plan_4"].size : 0;
 
     HIPTENSOR_CHECK(hiptensorContract(
-        handle,
+        *handle,
         plan_4,
         (void*)&alpha, (void*)d_T3, (void*)d_R,
         (void*)&beta, (void*)d_result, (void*)d_result,

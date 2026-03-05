@@ -55,11 +55,11 @@ private:
     hiptensorTensorDescriptor_t desc_T3;
     hiptensorTensorDescriptor_t desc_result;
 
-    // Contraction descriptors
-    hiptensorContractionDescriptor_t contraction_1;  // L × theta
-    hiptensorContractionDescriptor_t contraction_2;  // W1 × T1
-    hiptensorContractionDescriptor_t contraction_3;  // W2 × T2
-    hiptensorContractionDescriptor_t contraction_4;  // T3 × R
+    // Contraction descriptors (use OperationDescriptor in ROCm 7.2.0)
+    hiptensorOperationDescriptor_t contraction_1;  // L × theta
+    hiptensorOperationDescriptor_t contraction_2;  // W1 × T1
+    hiptensorOperationDescriptor_t contraction_3;  // W2 × T2
+    hiptensorOperationDescriptor_t contraction_4;  // T3 × R
 
     // Contraction plans (pre-optimized)
     hiptensorPlan_t plan_1;

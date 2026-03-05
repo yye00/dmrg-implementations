@@ -188,7 +188,7 @@ bool test_optimized_heff() {
         std::cout << "Total memory: " << heff->get_total_memory() << " bytes" << std::endl;
     } catch (const std::exception& e) {
         std::cerr << "Failed to create OptimizedHeff: " << e.what() << std::endl;
-        hiptensorDestroy(&handle);
+        hiptensorDestroy(handle);
         return false;
     }
 
@@ -247,7 +247,7 @@ bool test_optimized_heff() {
     } catch (const std::exception& e) {
         std::cerr << "Failed to apply H_eff: " << e.what() << std::endl;
         delete heff;
-        hiptensorDestroy(&handle);
+        hiptensorDestroy(handle);
         return false;
     }
 
@@ -281,7 +281,7 @@ bool test_optimized_heff() {
     HIP_CHECK(hipFree(d_diff));
 
     delete heff;
-    hiptensorDestroy(&handle);
+    hiptensorDestroy(handle);
 
     // Success criterion: relative error < 1e-6 (loose tolerance for identity test)
     bool success = (rel_error < 1e-6);
