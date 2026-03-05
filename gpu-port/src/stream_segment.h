@@ -259,4 +259,14 @@ private:
      * Free all allocated memory
      */
     void free_memory();
+
+    /**
+     * Helper: Perform hipTensor contraction
+     * C = alpha * A * B + beta * C
+     */
+    void hiptensor_contract(
+        const double* A, int nmodeA, const int64_t* extentA, const int32_t* modesA,
+        const double* B, int nmodeB, const int64_t* extentB, const int32_t* modesB,
+        double* C, int nmodeC, const int64_t* extentC, const int32_t* modesC,
+        double alpha, double beta);
 };

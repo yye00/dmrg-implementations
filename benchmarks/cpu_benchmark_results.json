@@ -69,69 +69,48 @@
       }
     }
   },
-  "josephson": {
+  "josephson_INVALIDATED": {
+    "_note": "Previous results were computed with WRONG MODEL (Bose-Hubbard d=3 instead of Josephson d=5). Regenerate with corrected cpu_gpu_benchmark.py using build_josephson_mpo (charge basis d=2*n_max+1=5).",
+    "_exact_diag_references": {
+      "L=4": -1.189062745816723,
+      "L=5": -1.600909407517144,
+      "L=6": -2.014365276550813,
+      "L=7": -2.428776421004023,
+      "L=8": -2.843801043291333
+    },
+    "_gpu_pdmrg_results": {
+      "L=8_D=50": -2.843801043139
+    },
     "Josephson-Small": {
       "L": 8,
       "D": 50,
-      "d": 3,
+      "d": 5,
       "n_max": 2,
       "model": "josephson",
-      "DMRG1": {
-        "energy": -22.078742222023976,
-        "wall_time_s": 0.17257976531982422,
-        "n_sweeps": 4,
-        "memory_mb": 439.65625,
-        "converged": true
-      },
-      "DMRG2": {
-        "energy": -22.078742222023934,
-        "wall_time_s": 1.3466839790344238,
-        "n_sweeps": 4,
-        "memory_mb": 439.65625,
-        "converged": true
-      }
+      "reference_energy": -2.843801043291333,
+      "DMRG1": null,
+      "DMRG2": null,
+      "_status": "needs_regeneration"
     },
     "Josephson-Medium": {
       "L": 12,
       "D": 50,
-      "d": 3,
+      "d": 5,
       "n_max": 2,
       "model": "josephson",
-      "DMRG1": {
-        "energy": -33.56385557343519,
-        "wall_time_s": 1.4853229522705078,
-        "n_sweeps": 13,
-        "memory_mb": 439.65625,
-        "converged": true
-      },
-      "DMRG2": {
-        "energy": -33.56385557342896,
-        "wall_time_s": 24.41458511352539,
-        "n_sweeps": 13,
-        "memory_mb": 439.65625,
-        "converged": true
-      }
+      "DMRG1": null,
+      "DMRG2": null,
+      "_status": "needs_regeneration"
     },
     "Josephson-Large": {
       "L": 16,
       "D": 100,
-      "d": 3,
+      "d": 5,
       "n_max": 2,
       "model": "josephson",
-      "DMRG1": {
-        "energy": -45.14055226350585,
-        "wall_time_s": 25.068730115890503,
-        "n_sweeps": 5,
-        "memory_mb": 439.65625,
-        "converged": true
-      },
-      "DMRG2": {
-        "energy": -45.14055226350576,
-        "wall_time_s": 54.11677670478821,
-        "n_sweeps": 5,
-        "memory_mb": 439.65625,
-        "converged": true
-      }
+      "DMRG1": null,
+      "DMRG2": null,
+      "_status": "needs_regeneration"
     }
   },
   "total_benchmark_time_s": 759.1322071552277

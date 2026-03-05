@@ -1257,3 +1257,66 @@ double* StreamSegment::get_mpo_tensor(int site) {
     if (local_idx < 0 || local_idx >= num_sites_) return nullptr;
     return d_mpo_tensors_[local_idx];
 }
+
+//==============================================================================
+// hipTensor Helper
+//==============================================================================
+
+void StreamSegment::hiptensor_contract(
+    const double* A, int nmodeA, const int64_t* extentA, const int32_t* modesA,
+    const double* B, int nmodeB, const int64_t* extentB, const int32_t* modesB,
+    double* C, int nmodeC, const int64_t* extentC, const int32_t* modesC,
+    double alpha, double beta)
+{
+    // Create tensor descriptors
+    hiptensorTensorDescriptor_t descA, descB, descC;
+    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descA, nmodeA, extentA,
+                    nullptr, HIPTENSOR_R_64F, 16));
+    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descB, nmodeB, extentB,
+                    nullptr, HIPTENSOR_R_64F, 16));
+    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descC, nmodeC, extentC,
+                    nullptr, HIPTENSOR_R_64F, 16));
+
+    // Create contraction operation descriptor
+    hiptensorOperationDescriptor_t opDesc;
+    HIPTENSOR_CHECK(hiptensorCreateContraction(hiptensor_h_, &opDesc,
+        descA, modesA, HIPTENSOR_OP_IDENTITY,
+        descB, modesB, HIPTENSOR_OP_IDENTITY,
+        descC, modesC, HIPTENSOR_OP_IDENTITY,
+        descC, modesC,
+        HIPTENSOR_COMPUTE_DESC_64F));
+
+    // Create plan preference
+    hiptensorPlanPreference_t pref;
+    HIPTENSOR_CHECK(hiptensorCreatePlanPreference(hiptensor_h_, &pref,
+        HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_NONE));
+
+    // Estimate workspace size
+    uint64_t workspaceSize = 0;
+    HIPTENSOR_CHECK(hiptensorEstimateWorkspaceSize(hiptensor_h_, opDesc, pref,
+        HIPTENSOR_WORKSPACE_DEFAULT, &workspaceSize));
+
+    // Allocate workspace
+    void* workspace = nullptr;
+    if (workspaceSize > 0) {
+        HIP_CHECK(hipMalloc(&workspace, workspaceSize));
+    }
+
+    // Create plan
+    hiptensorPlan_t plan;
+    HIPTENSOR_CHECK(hiptensorCreatePlan(hiptensor_h_, &plan, opDesc, pref, workspaceSize));
+
+    // Execute contraction
+    HIPTENSOR_CHECK(hiptensorContract(hiptensor_h_, plan,
+        &alpha, A, B, &beta, C, C,
+        workspace, workspaceSize, stream_));
+
+    // Cleanup
+    if (workspace) HIP_CHECK(hipFree(workspace));
+    HIPTENSOR_CHECK(hiptensorDestroyPlan(plan));
+    HIPTENSOR_CHECK(hiptensorDestroyPlanPreference(pref));
+    HIPTENSOR_CHECK(hiptensorDestroyOperationDescriptor(opDesc));
+    HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(descA));
+    HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(descB));
+    HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(descC));
+}

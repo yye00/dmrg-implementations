@@ -181,14 +181,16 @@ public:
             if (site == 0) {
                 // Left boundary: W[0] = [0, Sx, Sy, Sz, I] (row vector D_L=1, D_R=5)
                 // This is row 4 of the bulk transfer matrix (the Hamiltonian row)
+                // MPO convention: W[wl, s_ket, s_bra, wr] stores <s_bra|op|s_ket>
+                // So we store op[sp*d + s] (transposed) at position W[wl, s, sp, wr]
                 for (int s = 0; s < d; s++) {
                     for (int sp = 0; sp < d; sp++) {
                         int base = s * d * D_R + sp * D_R;
                         // wr=0: zero (no contribution)
-                        h_mpo[base + 1] = Sx[s*d + sp];
-                        h_mpo[base + 2] = Sy[s*d + sp];
-                        h_mpo[base + 3] = Sz[s*d + sp];
-                        h_mpo[base + 4] = eye[s*d + sp];
+                        h_mpo[base + 1] = Sx[sp*d + s];
+                        h_mpo[base + 2] = Sy[sp*d + s];
+                        h_mpo[base + 3] = Sz[sp*d + s];
+                        h_mpo[base + 4] = eye[sp*d + s];
                     }
                 }
             } else if (site == L-1) {
@@ -196,10 +198,10 @@ public:
                 for (int s = 0; s < d; s++) {
                     for (int sp = 0; sp < d; sp++) {
                         int base_s = s * d * D_R + sp * D_R;
-                        h_mpo[0 * d * d * D_R + base_s] = eye[s*d + sp];
-                        h_mpo[1 * d * d * D_R + base_s] = Sx[s*d + sp];
-                        h_mpo[2 * d * d * D_R + base_s] = Sy[s*d + sp];
-                        h_mpo[3 * d * d * D_R + base_s] = Sz[s*d + sp];
+                        h_mpo[0 * d * d * D_R + base_s] = eye[sp*d + s];
+                        h_mpo[1 * d * d * D_R + base_s] = Sx[sp*d + s];
+                        h_mpo[2 * d * d * D_R + base_s] = Sy[sp*d + s];
+                        h_mpo[3 * d * d * D_R + base_s] = Sz[sp*d + s];
                     }
                 }
             } else {
@@ -209,14 +211,14 @@ public:
                         for (int wl = 0; wl < D_L; wl++) {
                             for (int wr = 0; wr < D_R; wr++) {
                                 int idx = wl * d * d * D_R + s * d * D_R + sp * D_R + wr;
-                                if (wl == 0 && wr == 0) h_mpo[idx] = eye[s*d + sp];
-                                else if (wl == 1 && wr == 0) h_mpo[idx] = Sx[s*d + sp];
-                                else if (wl == 2 && wr == 0) h_mpo[idx] = Sy[s*d + sp];
-                                else if (wl == 3 && wr == 0) h_mpo[idx] = Sz[s*d + sp];
-                                else if (wl == 4 && wr == 1) h_mpo[idx] = Sx[s*d + sp];
-                                else if (wl == 4 && wr == 2) h_mpo[idx] = Sy[s*d + sp];
-                                else if (wl == 4 && wr == 3) h_mpo[idx] = Sz[s*d + sp];
-                                else if (wl == 4 && wr == 4) h_mpo[idx] = eye[s*d + sp];
+                                if (wl == 0 && wr == 0) h_mpo[idx] = eye[sp*d + s];
+                                else if (wl == 1 && wr == 0) h_mpo[idx] = Sx[sp*d + s];
+                                else if (wl == 2 && wr == 0) h_mpo[idx] = Sy[sp*d + s];
+                                else if (wl == 3 && wr == 0) h_mpo[idx] = Sz[sp*d + s];
+                                else if (wl == 4 && wr == 1) h_mpo[idx] = Sx[sp*d + s];
+                                else if (wl == 4 && wr == 2) h_mpo[idx] = Sy[sp*d + s];
+                                else if (wl == 4 && wr == 3) h_mpo[idx] = Sz[sp*d + s];
+                                else if (wl == 4 && wr == 4) h_mpo[idx] = eye[sp*d + s];
                             }
                         }
                     }

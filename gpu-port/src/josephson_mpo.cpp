@@ -149,10 +149,13 @@ public:
 
             auto set_op = [&](int wl, int wr, const std::vector<Complex>& op,
                               Complex coeff = make_complex(1.0, 0.0)) {
+                // MPO stores W[wl, s_ket, s_bra, wr] where operator acts as
+                // <s_bra|op|s_ket>. The operator matrix op[row][col] = <row|op|col>,
+                // so we need: W[wl, s_ket, s_bra, wr] = op[s_bra * d + s_ket].
                 for (int s = 0; s < d; s++) {
                     for (int sp = 0; sp < d; sp++) {
                         int idx = wl * d * d * D_R + s * d * D_R + sp * D_R + wr;
-                        Complex val = op[s * d + sp];
+                        Complex val = op[sp * d + s];  // transposed: <sp|op|s>
                         // h_mpo[idx] += coeff * val
                         h_mpo[idx].x += coeff.x * val.x - coeff.y * val.y;
                         h_mpo[idx].y += coeff.x * val.y + coeff.y * val.x;

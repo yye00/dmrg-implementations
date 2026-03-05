@@ -116,21 +116,69 @@ def run_quimb_dmrg2(mpo, bond_dim, max_sweeps, tol, cutoff=1e-14):
     }
 
 
-def build_bose_hubbard_mpo(L, t=1.0, U=4.0, mu=2.0, n_max=2, dtype='complex128'):
-    """Build Bose-Hubbard / Josephson junction MPO."""
-    d = n_max + 1
-    a_dag = np.zeros((d, d), dtype=dtype)
-    for n in range(d - 1):
-        a_dag[n + 1, n] = np.sqrt(n + 1)
-    a = a_dag.conj().T
-    n_op = a_dag @ a
+def build_josephson_mpo(L, E_J=1.0, E_C=0.5, mu=0.0, n_max=2, dtype='complex128'):
+    """Build Josephson junction array MPO in the charge basis.
 
-    builder = qtn.SpinHam1D(S=(d - 1) / 2)
-    builder.add_term(-t, a_dag, a)
-    builder.add_term(-t, a, a_dag)
+    Hamiltonian:
+        H = -E_J sum_<ij> cos(phi_i - phi_j + Phi_ext) + E_C sum_i n_i^2 - mu sum_i n_i
+
+    In the charge basis with external flux Phi_ext = pi/4:
+        cos(phi_i - phi_j + Phi_ext) = (e^{i*Phi_ext} e^{i*phi_i} e^{-i*phi_j} + h.c.) / 2
+
+    Parameters
+    ----------
+    L : int
+        Number of junctions (sites).
+    E_J : float
+        Josephson coupling energy.
+    E_C : float
+        Charging energy (capacitive).
+    mu : float
+        Chemical potential (gate charge offset).
+    n_max : int
+        Maximum charge number. Charge states: n in {-n_max, ..., +n_max}.
+    dtype : str
+        Data type (must be complex128 for phase operators).
+
+    Returns
+    -------
+    mpo : quimb MatrixProductOperator
+    """
+    d = 2 * n_max + 1  # Local Hilbert space dimension
+
+    # Charge number operator: n|n> = n|n>
+    # States indexed 0..d-1 correspond to charges -n_max..+n_max
+    charges = np.arange(-n_max, n_max + 1, dtype=np.float64)
+    n_op = np.diag(charges.astype(dtype))
+
+    # Phase shift operator: e^{i*phi}|n> = |n+1> (raises charge by 1)
+    exp_iphi = np.zeros((d, d), dtype=dtype)
+    for i in range(d - 1):
+        exp_iphi[i + 1, i] = 1.0 + 0j
+
+    # Conjugate: e^{-i*phi}|n> = |n-1> (lowers charge by 1)
+    exp_miphi = exp_iphi.conj().T
+
+    # Build with quimb SpinHam1D (S=(d-1)/2 gives local dimension d)
+    S = (d - 1) / 2
+    builder = qtn.SpinHam1D(S=S)
+
+    # External flux threading: Phi_ext = pi/4 (matching GPU implementation)
+    phi_ext = np.pi / 4
+    flux_phase = np.exp(1j * phi_ext)
+
+    # Josephson coupling with flux: -E_J/2 * (e^{i*Phi_ext} exp_iphi_i exp_miphi_j + h.c.)
+    builder.add_term(-E_J / 2 * flux_phase, exp_iphi, exp_miphi)
+    builder.add_term(-E_J / 2 * np.conj(flux_phase), exp_miphi, exp_iphi)
+
+    # Charging energy: E_C * n^2
     n2 = n_op @ n_op
-    onsite = (U / 2.0) * (n2 - n_op) - mu * n_op
-    builder.add_term(1.0, onsite)
+    builder.add_term(E_C, n2)
+
+    # Chemical potential: -mu * n
+    if mu != 0:
+        builder.add_term(-mu, n_op)
+
     return builder.build_mpo(L)
 
 
@@ -207,11 +255,11 @@ def run_josephson_benchmarks(cases, skip_large=False):
             results[name] = {"skipped": True}
             continue
 
-        d = n_max + 1
+        d = 2 * n_max + 1  # Charge basis: n in {-n_max, ..., +n_max}
         print(f"\n  === {name}: L={L}, D={D}, n_max={n_max} (d={d}) ===")
 
-        # Build Bose-Hubbard / Josephson MPO
-        mpo = build_bose_hubbard_mpo(L, n_max=n_max)
+        # Build Josephson junction MPO (charge basis with external flux)
+        mpo = build_josephson_mpo(L, n_max=n_max)
 
         # DMRG1
         print(f"    Running quimb DMRG1...", end="", flush=True)

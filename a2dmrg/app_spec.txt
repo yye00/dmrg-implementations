@@ -1,0 +1,851 @@
+<project_specification>
+  <project_name>Additive Two-Level Parallel DMRG (A2DMRG)</project_name>
+
+  <overview>
+    Implement the Additive Two-Level Parallel DMRG algorithm from Grigori & Hassan 
+    (arXiv:2505.23429). This algorithm achieves parallel speedup through an additive 
+    Schwarz approach: all TT-cores are updated independently in parallel, then combined
+    via a coarse-space minimization step.
+    
+    Key Innovation: Unlike sequential DMRG that updates one site at a time, A2DMRG
+    performs independent local micro-steps for ALL sites simultaneously, then finds
+    an optimal linear combination of all updated states via coarse-space minimization.
+    This is directly inspired by domain decomposition methods from numerical PDEs.
+    
+    The implementation must:
+    1. Achieve near-linear scaling for 2-8 processors
+    2. Converge to machine precision (match serial DMRG within 1e-10)
+    3. Work with complex128 (for Josephson junction problems)
+    4. Use mpi4py for parallelization, quimb for tensor operations
+    5. NOT use quimb's native DMRG inside A2DMRG (only for validation)
+    6. Generate scalability reports comparing np=1,2,4,8
+  </overview>
+
+  <references>
+    <paper>Grigori & Hassan, "An additive two-level parallel variant of the DMRG 
+           algorithm with coarse-space correction", arXiv:2505.23429v2 (2025)</paper>
+    <local_pdf>/home/captain/clawd/work/a2dmrg-autonomous/reference/a2dmrg.pdf</local_pdf>
+    <key_concepts>
+      <additive_schwarz>All local micro-steps performed independently in parallel</additive_schwarz>
+      <coarse_space>Optimal linear combination: min J(Σⱼ cⱼ Yⱼ)</coarse_space>
+      <compression>Project result back to low-rank manifold via truncated SVD</compression>
+    </key_concepts>
+  </references>
+
+  <technology_stack>
+    <language>Python 3.10+</language>
+    <parallel>mpi4py for MPI parallelization</parallel>
+    <tensor_network>quimb for MPS/MPO representation and tensor contraction</tensor_network>
+    <linear_algebra>scipy.sparse.linalg for eigsh (Lanczos/Davidson), numpy for SVD</linear_algebra>
+    <dtype>Support both float64 and complex128</dtype>
+    <mpi_module>module load openmpi (cluster environment)</mpi_module>
+  </technology_stack>
+
+  <!-- CRITICAL: Tensor Shape Conventions (IDENTICAL TO PDMRG) -->
+  <tensor_conventions>
+    <our_convention>
+      Throughout this spec, we use the physics convention:
+      - MPS tensor: A[i] has shape (left_bond, phys, right_bond) = (χ_L, d, χ_R)
+      - Two-site wavefunction: θ has shape (χ_L, d, d, χ_R)
+      - Environment: L/R have shape (bra_bond, MPO_bond, ket_bond)
+    </our_convention>
+    
+    <quimb_convention>
+      IMPORTANT: quimb may use different index ordering internally!
+      - quimb tensors use named indices ('k0', 'k1', etc. for physical)
+      - Access via tensor.inds to see actual ordering
+      - When extracting raw arrays, ALWAYS check and transpose if needed
+    </quimb_convention>
+    
+    <reconciliation>
+      When working with quimb tensors:
+      1. Access data: data = tensor.data
+      2. Check indices: inds = tensor.inds (e.g., ('_abc', 'k2', '_def'))
+      3. Physical index is named 'k{site}' (e.g., 'k2' for site 2)
+      4. If order doesn't match our convention, use np.transpose()
+      
+      Example:
+        # Our convention: (left, phys, right)
+        # If quimb gives: (left, right, phys)
+        data_correct = np.transpose(tensor.data, (0, 2, 1))
+    </reconciliation>
+  </tensor_conventions>
+
+  <!-- A2DMRG ALGORITHM - COMPLETELY DIFFERENT FROM PDMRG -->
+  <algorithm_overview>
+    <key_difference>
+      A2DMRG is fundamentally different from PDMRG (Stoudenmire-White):
+      - NO real-space partitioning
+      - NO V = Λ⁻¹ trick
+      - NO neighbor exchanges at boundaries
+      - NO staggered sweep directions
+      
+      Instead:
+      - ALL sites update in parallel (additive Schwarz)
+      - Coarse-space minimization combines results
+      - Truncated SVD for compression (standard, not "accurate")
+    </key_difference>
+
+    <phase name="0" title="Initialization">
+      <description>
+        Start with a left-orthogonal tensor train decomposition U^(0).
+        Can use random initialization or a few serial DMRG warmup sweeps.
+        Run initialization on rank 0, then broadcast to all ranks.
+      </description>
+      <outputs>Left-orthogonal MPS U^(0) = (U₁, U₂, ..., U_d)</outputs>
+      <left_orthogonal_property>
+        A TT decomposition is left-orthogonal if for all i &lt; d:
+        Σₛ Uᵢ(:,s,:)ᵀ Uᵢ(:,s,:) = I  (each slice is orthonormal)
+      </left_orthogonal_property>
+    </phase>
+
+    <phase name="1" title="Prepare Orthogonal Decompositions">
+      <description>
+        From left-orthogonal U^(n,d), construct d different i-orthogonal 
+        decompositions U^(n,i) for i = 1, 2, ..., d.
+        
+        An i-orthogonal decomposition has:
+        - Sites 1 to i-1: left-orthogonal
+        - Site i: the "orthogonality center" (contains the norm)
+        - Sites i+1 to d: right-orthogonal
+      </description>
+      <procedure>
+        Starting from U^(n,d) (left-orthogonal), sweep right-to-left:
+        For i = d, d-1, ..., 2:
+          1. LQ decomposition: W_i^(1) = L_i · Q_i
+          2. Update: W_{i-1}^(n) = U_{i-1}^(n) · L_i
+          3. Set: V_i^(n) = Q_i (right-orthogonal)
+        Result: d decompositions U^(n,i) ready for parallel local steps
+      </procedure>
+      <parallelization>
+        This preparation CAN be done sequentially on rank 0 OR distributed.
+        The decompositions are small tensors, so sequential is often fine.
+        Broadcast the d decompositions to all processors.
+      </parallelization>
+    </phase>
+
+    <phase name="2" title="Parallel Local DMRG Micro-Steps (CORE PARALLEL STEP)">
+      <description>
+        This is where parallelism happens. Each processor handles one or more
+        sites and performs independent DMRG micro-steps WITHOUT communication.
+        
+        For one-site DMRG: compute Vᵢ = Sᵢ(U^(n,i)) for each site i
+        For two-site DMRG: compute W_{i,i+1} = S_{i,i+1}(U^(n,i)) for each bond
+      </description>
+      <distribution>
+        With P processors and d sites:
+        - sites_per_proc = d // P
+        - Processor p handles sites [p * sites_per_proc, (p+1) * sites_per_proc)
+        - Remainder sites distributed to first (d % P) processors
+      </distribution>
+      <one_site_micro_step>
+        Given i-orthogonal decomposition U^(n,i):
+        1. Build left environment L_{i-1} from sites 1..i-1
+        2. Build right environment R_{i+1} from sites i+1..d
+        3. Build effective Hamiltonian H_eff at site i
+        4. Solve local eigenvalue problem: H_eff v = λ v
+        5. Set Vᵢ = v.reshape(r_{i-1}, n_i, r_i)
+        6. Construct updated TT decomposition Ũ^(n+1,i) using Vᵢ
+      </one_site_micro_step>
+      <two_site_micro_step>
+        Given i-orthogonal decomposition U^(n,i):
+        1. Build left environment L_{i-1}
+        2. Build right environment R_{i+2}
+        3. Build effective Hamiltonian H_eff for sites i, i+1
+        4. Solve: H_eff w = λ w
+        5. Reshape w to W_{i,i+1} with shape (r_{i-1}, n_i, n_{i+1}, r_{i+1})
+        6. Truncated SVD to split W_{i,i+1} back to two cores
+        7. Construct updated TT decomposition Ũ^(n+1,i)
+      </two_site_micro_step>
+      <no_communication>
+        CRITICAL: During this phase, there is NO MPI communication.
+        Each processor works completely independently on its assigned sites.
+        This is what makes A2DMRG embarrassingly parallel.
+      </no_communication>
+    </phase>
+
+    <phase name="3" title="Coarse-Space Minimization (CRITICAL STEP)">
+      <description>
+        After all processors complete their local micro-steps, we have d+1 
+        candidate tensors:
+        - Y^(0) = τ(U^(n,d))  (the original state)
+        - Y^(j) = τ(Ũ^(n+1,j)) for j = 1, ..., d (from local micro-steps)
+        
+        Find optimal linear combination that minimizes the energy:
+        
+        For one-site: min_{c₀,...,c_d} J(Σⱼ cⱼ Y^(j))
+        For two-site: min_{d₀,...,d_{d-1}} J(Σⱼ dⱼ Y^(j))
+      </description>
+      <coarse_space_problem>
+        This reduces to a small (d+1) × (d+1) generalized eigenvalue problem:
+        
+        Find c* such that: H_coarse c* = λ S_coarse c*
+        
+        Where:
+        - H_coarse[i,j] = ⟨Y^(i), A Y^(j)⟩  (Hamiltonian matrix)
+        - S_coarse[i,j] = ⟨Y^(i), Y^(j)⟩    (overlap/mass matrix)
+        
+        The optimal combination is: Ỹ = Σⱼ c*ⱼ Y^(j)
+      </coarse_space_problem>
+      <mpi_implementation>
+        1. Each processor computes its local contributions to H_coarse and S_coarse
+        2. Allreduce to sum contributions from all processors
+        3. Rank 0 solves the small eigenvalue problem (d+1 dimensional)
+        4. Broadcast coefficients c* to all processors
+      </mpi_implementation>
+      <numerical_considerations>
+        The mass matrix S_coarse may be ill-conditioned.
+        Use SVD-based pseudoinverse or regularization:
+        
+        S = U Σ V^H
+        S^(-1/2) = U Σ^(-1/2) V^H  (truncate small singular values < 1e-10)
+        
+        Transform to standard eigenvalue problem:
+        S^(-1/2) H S^(-1/2) c̃ = λ c̃
+        Then c* = S^(-1/2) c̃
+      </numerical_considerations>
+    </phase>
+
+    <phase name="4" title="Compression/Projection">
+      <description>
+        The optimal linear combination Ỹ = Σⱼ c*ⱼ Y^(j) may have increased
+        TT-ranks. Project back to the target rank manifold T_r.
+      </description>
+      <truncated_svd>
+        Use TT-SVD algorithm (standard, NOT recursive accurate SVD):
+        1. Start from leftmost core
+        2. For i = 1 to d-1:
+           a. Reshape: M = U_i.reshape(r_{i-1} * n_i, -1)
+           b. SVD: M = P Σ Q^H
+           c. Truncate: keep top r_i singular values (or use tolerance 1e-6)
+           d. Set: U_i = P[:, :r_i].reshape(r_{i-1}, n_i, r_i)
+           e. Propagate: U_{i+1} = (Σ[:r_i] @ Q[:r_i, :]) @ U_{i+1}
+        3. Result: compressed left-orthogonal TT with bounded ranks
+      </truncated_svd>
+      <rank_selection>
+        Option 1: Fixed maximum rank r_max
+        Option 2: Adaptive with truncation tolerance ε = 1e-6
+        Option 3: Dynamic based on singular value decay
+        
+        Paper uses: tolerance = 1e-6 for truncated SVD
+      </rank_selection>
+    </phase>
+
+    <phase name="5" title="Convergence Check and Iteration">
+      <description>
+        After compression, we have U^(n+1) with controlled ranks.
+        Check convergence and repeat if needed.
+      </description>
+      <convergence_criteria>
+        1. Energy difference: |E^(n+1) - E^(n)| &lt; tol (typically 1e-8 to 1e-10)
+        2. Relative energy: |E^(n+1) - E^(n)| / |E^(n)| &lt; rel_tol
+        3. Maximum iterations: n &lt; max_sweeps
+      </convergence_criteria>
+      <energy_computation>
+        E^(n+1) = ⟨τ(U^(n+1)), A τ(U^(n+1))⟩ / ∥τ(U^(n+1))∥²
+        
+        For efficiency, compute during coarse-space step (already have H and S).
+      </energy_computation>
+    </phase>
+  </algorithm_overview>
+
+  <data_structures>
+    <mps title="Matrix Product State">
+      <description>Wavefunction represented as product of site tensors</description>
+      <tensor_shape>
+        Our convention: A[i] has shape (χ_{i-1}, d, χ_i) = (left_bond, phys, right_bond)
+        NOTE: Check quimb's actual index ordering with tensor.inds
+      </tensor_shape>
+      <parameters>
+        <d>Local Hilbert space dimension (2 for spin-1/2)</d>
+        <chi>Bond dimension (controls accuracy, typically 100-5000)</chi>
+      </parameters>
+      <implementation>Use quimb.tensor.MatrixProductState</implementation>
+    </mps>
+
+    <mpo title="Matrix Product Operator">
+      <description>Hamiltonian represented as product of operator tensors</description>
+      <tensor_shape>W[i] has shape (D_{i-1}, D_i, d_up, d_down)</tensor_shape>
+      <parameters>
+        <D>MPO bond dimension (typically 5-50 depending on Hamiltonian)</D>
+      </parameters>
+      <implementation>Use quimb.tensor.MPO_ham_heis or SpinHam1D for custom</implementation>
+    </mpo>
+
+    <environment title="Environment Tensors">
+      <description>
+        L[i] = Left environment at bond i (encodes sites 0..i-1 contracted with Hamiltonian)
+        R[i] = Right environment at bond i (encodes sites i+1..L-1 contracted with Hamiltonian)
+      </description>
+      <tensor_shape>
+        L/R have shape (bra_bond, MPO_bond, ket_bond)
+        All three indices have different roles - use clear naming!
+      </tensor_shape>
+      <update_formulas>
+        Left environment update (sweeping right):
+          L_new[bra', mpo', ket'] = Σ L[bra, mpo, ket] * A[bra, s, bra'] * 
+                                     W[mpo, mpo', s, s'] * A*[ket, s', ket']
+        
+        Right environment update (sweeping left):
+          R_new[bra', mpo', ket'] = Σ R[bra, mpo, ket] * B[bra', s, bra] * 
+                                     W[mpo', mpo, s, s'] * B*[ket', s', ket]
+      </update_formulas>
+    </environment>
+
+    <coarse_space_matrices title="Coarse-Space Matrices">
+      <description>
+        H_coarse and S_coarse are the key data structures for the coarse-space step.
+        These are small (d+1) × (d+1) matrices built from inner products.
+      </description>
+      <h_coarse>
+        H_coarse[i,j] = ⟨Y^(i), H Y^(j)⟩
+        For MPS: can compute via expectation value with MPO
+      </h_coarse>
+      <s_coarse>
+        S_coarse[i,j] = ⟨Y^(i), Y^(j)⟩
+        For MPS: can compute via MPS overlap
+      </s_coarse>
+      <storage>
+        Each processor contributes to H_coarse and S_coarse.
+        Use Allreduce(MPI.SUM) to combine.
+      </storage>
+    </coarse_space_matrices>
+
+    <two_site_wavefunction title="Two-Site Wavefunction">
+      <description>
+        The wavefunction at a two-site block during optimization.
+      </description>
+      <shape>
+        θ has shape (χ_L, d, d, χ_R) = (left_bond, phys_left, phys_right, right_bond)
+        This is a 4D tensor, NOT 3D!
+      </shape>
+      <flattening>
+        For SVD: reshape to (χ_L * d, d * χ_R) matrix
+        For eigensolver: flatten to 1D vector of length χ_L * d * d * χ_R
+      </flattening>
+    </two_site_wavefunction>
+  </data_structures>
+
+  <numerical_methods>
+    <truncated_svd title="Standard Truncated SVD">
+      <description>
+        A2DMRG uses standard truncated SVD (NOT the recursive accurate SVD from PDMRG).
+        This is because A2DMRG does not invert singular values.
+      </description>
+      <tolerance>
+        Paper uses tolerance = 1e-6 for truncated SVD.
+        Truncate singular values σ_i where σ_i / σ_1 &lt; 1e-6.
+      </tolerance>
+      <implementation>
+        def truncated_svd(M, max_rank=None, tol=1e-6):
+            U, S, Vh = np.linalg.svd(M, full_matrices=False)
+            
+            # Truncate by tolerance
+            if tol > 0:
+                cutoff = S[0] * tol
+                keep = np.sum(S > cutoff)
+            else:
+                keep = len(S)
+            
+            # Truncate by max rank
+            if max_rank is not None:
+                keep = min(keep, max_rank)
+            
+            return U[:, :keep], S[:keep], Vh[:keep, :]
+      </implementation>
+    </truncated_svd>
+
+    <eigensolver title="Lanczos/Davidson for Effective Hamiltonian">
+      <effective_hamiltonian>
+        H_eff acts on one-site tensor (χ_L, d, χ_R) or two-site (χ_L, d, d, χ_R).
+        Built from: L_env, W_i, (W_{i+1}), R_env
+        
+        NEVER form H_eff as explicit matrix!
+        Use scipy.sparse.linalg.LinearOperator for matrix-free application.
+      </effective_hamiltonian>
+      
+      <usage>
+        from scipy.sparse.linalg import eigsh, LinearOperator
+        
+        def matvec(v):
+            θ = v.reshape(shape)
+            result = contract_Heff(L_env, R_env, W, θ)
+            return result.ravel()
+        
+        dim = np.prod(shape)
+        H_eff = LinearOperator((dim, dim), matvec=matvec, dtype=dtype)
+        E, v = eigsh(H_eff, k=1, v0=θ_init.ravel(), which='SA', tol=1e-10)
+        θ_opt = v[:, 0].reshape(shape)
+      </usage>
+    </eigensolver>
+
+    <coarse_eigenvalue title="Coarse-Space Eigenvalue Problem">
+      <description>
+        Solve the small generalized eigenvalue problem:
+        H_coarse c = λ S_coarse c
+      </description>
+      <implementation>
+        from scipy.linalg import eigh
+        
+        def solve_coarse_space(H_coarse, S_coarse, regularization=1e-10):
+            # Regularize S if ill-conditioned
+            U, s, Vh = np.linalg.svd(S_coarse)
+            s_inv_sqrt = np.where(s > regularization, 1.0 / np.sqrt(s), 0.0)
+            S_inv_sqrt = U @ np.diag(s_inv_sqrt) @ Vh
+            
+            # Transform to standard eigenvalue problem
+            H_transformed = S_inv_sqrt @ H_coarse @ S_inv_sqrt.T
+            
+            # Solve
+            eigenvalues, eigenvectors = eigh(H_transformed)
+            
+            # Transform back
+            c_star = S_inv_sqrt.T @ eigenvectors[:, 0]  # Lowest eigenvalue
+            
+            # Normalize
+            c_star = c_star / np.linalg.norm(c_star)
+            
+            return eigenvalues[0], c_star
+      </implementation>
+    </coarse_eigenvalue>
+
+    <canonical_forms title="MPS Canonical Forms">
+      <left_canonical>
+        All tensors except rightmost are left-isometric: Σ_s A^s† A^s = I
+        Achieved by: QR decomposition sweeping left to right
+      </left_canonical>
+      <right_canonical>
+        All tensors except leftmost are right-isometric: Σ_s B^s B^{s†} = I
+        Achieved by: LQ decomposition sweeping right to left
+      </right_canonical>
+      <i_orthogonal>
+        Sites 1..i-1 are left-orthogonal, sites i+1..d are right-orthogonal.
+        Site i is the orthogonality center.
+        This is what A2DMRG needs for local micro-steps.
+      </i_orthogonal>
+    </canonical_forms>
+  </numerical_methods>
+
+  <!-- Complex Number Handling (IDENTICAL TO PDMRG) -->
+  <complex_handling>
+    <overview>
+      For complex wavefunctions (e.g., Josephson junction), special care is needed
+      with conjugation operations.
+    </overview>
+    
+    <conjugation_rules>
+      <overlap>
+        Inner product: ⟨φ|ψ⟩ = φ.H @ ψ (Hermitian conjugate, not just transpose)
+        In quimb: overlap = psi_bra.H @ psi_ket
+      </overlap>
+      
+      <environments>
+        Environment update formulas use conjugate of ket tensor:
+        L_new = contract(L_prev, A, W, A.conj())  # Note: A.conj(), not A.T
+        R_new = contract(R_next, B, W, B.conj())
+      </environments>
+      
+      <coarse_matrices>
+        H_coarse and S_coarse must use Hermitian inner products:
+        H_coarse[i,j] = ⟨Y^(i), H Y^(j)⟩ = (Y^(i))† H Y^(j)
+        S_coarse[i,j] = ⟨Y^(i), Y^(j)⟩ = (Y^(i))† Y^(j)
+      </coarse_matrices>
+    </conjugation_rules>
+    
+    <dtype_handling>
+      Always propagate dtype consistently:
+      - If MPS is complex128, environments must be complex128
+      - If MPS is float64, can use float64 everywhere
+      - Check with: mps.dtype, tensor.dtype
+    </dtype_handling>
+  </complex_handling>
+
+  <mpi_communication>
+    <pattern>
+      A2DMRG has a different communication pattern than PDMRG:
+      - Phase 2 (local micro-steps): NO communication (embarrassingly parallel)
+      - Phase 3 (coarse-space): Allreduce to sum H_coarse and S_coarse contributions
+      - Phase 4 (compression): Can be done on rank 0, then broadcast, OR distributed
+    </pattern>
+    
+    <site_distribution>
+      def distribute_sites(d, n_procs, rank):
+          sites_per_proc = d // n_procs
+          remainder = d % n_procs
+          
+          if rank &lt; remainder:
+              start = rank * (sites_per_proc + 1)
+              count = sites_per_proc + 1
+          else:
+              start = remainder * (sites_per_proc + 1) + (rank - remainder) * sites_per_proc
+              count = sites_per_proc
+          
+          return list(range(start, start + count))
+    </site_distribution>
+
+    <coarse_space_communication>
+      # Each processor computes partial H_coarse and S_coarse
+      H_local = np.zeros((d+1, d+1), dtype=dtype)
+      S_local = np.zeros((d+1, d+1), dtype=dtype)
+      
+      for i in my_sites:
+          for j in range(d+1):
+              H_local[i, j] = compute_H_element(Y[i], Y[j])
+              S_local[i, j] = compute_overlap(Y[i], Y[j])
+      
+      # Allreduce to get global matrices
+      H_coarse = np.zeros_like(H_local)
+      S_coarse = np.zeros_like(S_local)
+      comm.Allreduce(H_local, H_coarse, op=MPI.SUM)
+      comm.Allreduce(S_local, S_coarse, op=MPI.SUM)
+      
+      # Rank 0 solves eigenvalue problem
+      if rank == 0:
+          E, c_star = solve_coarse_space(H_coarse, S_coarse)
+      else:
+          c_star = np.empty(d+1, dtype=dtype)
+      
+      # Broadcast solution
+      comm.Bcast(c_star, root=0)
+    </coarse_space_communication>
+
+    <updated_mps_distribution>
+      After coarse-space, need to form linear combination Ỹ = Σⱼ c*ⱼ Y^(j).
+      
+      Option 1 (Simple): Gather all Y^(j) to rank 0, form combination, compress, broadcast
+      Option 2 (Distributed): Each processor forms local contribution, Allreduce
+      
+      For moderate d (~100), Option 1 is simpler and sufficient.
+    </updated_mps_distribution>
+  </mpi_communication>
+
+  <quimb_integration>
+    <use_for>
+      - MPS/MPO creation and storage
+      - Tensor contraction (efficient einsum via opt_einsum)
+      - Canonical form transformations (mps.canonize())
+      - Computing overlaps and expectation values
+      - Building Hamiltonians (SpinHam1D, MPO_ham_heis)
+    </use_for>
+    
+    <do_not_use>
+      - quimb.tensor.DMRG1 / DMRG2 inside A2DMRG implementation
+      - Only use native DMRG for validation/comparison of final results
+    </do_not_use>
+
+    <index_conventions>
+      Physical indices: 'k0', 'k1', 'k2', ..., 'k{L-1}'
+      Site tags: 'I0', 'I1', 'I2', ..., 'I{L-1}'
+      
+      Access methods:
+        mps.site_ind(i)  → 'ki' (physical index name for site i)
+        mps.site_tag(i)  → 'Ii' (tag for site i)
+        mps.site_inds    → tuple of all physical index names
+        mps.site_tags    → tuple of all site tags
+    </index_conventions>
+
+    <key_patterns>
+      # Create MPS
+      mps = qtn.MPS_rand_state(L=40, bond_dim=50, dtype='float64')
+      mps = qtn.MPS_rand_state(L=40, bond_dim=50, dtype='complex128')  # For Josephson
+      
+      # Access site tensor and data
+      tensor = mps[i]           # quimb Tensor object
+      data = mps[i].data        # numpy array
+      inds = mps[i].inds        # tuple of index names
+      tags = mps[i].tags        # oset of tags
+      
+      # Modify tensor in place
+      mps[i].modify(data=new_array)
+      
+      # Canonize at site i (make i the orthogonality center)
+      mps.canonize(i)
+      
+      # Create Heisenberg Hamiltonian
+      H = qtn.MPO_ham_heis(L=L, j=1.0, bz=0.0, cyclic=False)
+      
+      # Compute overlap ⟨φ|ψ⟩
+      overlap = phi.H @ psi
+      
+      # Compute expectation value ⟨ψ|H|ψ⟩
+      energy = psi.expec(H)
+    </key_patterns>
+
+    <serialization_for_mpi>
+      To serialize a quimb Tensor for MPI:
+        def serialize_tensor(tensor):
+            return {
+                'data': tensor.data,
+                'inds': tensor.inds,
+                'tags': list(tensor.tags)
+            }
+        
+        def deserialize_tensor(d):
+            return qtn.Tensor(d['data'], inds=d['inds'], tags=d['tags'])
+      
+      To serialize an MPS:
+        def serialize_mps(mps):
+            return {
+                'arrays': [mps[i].data.copy() for i in range(mps.L)],
+                'site_ind_id': mps.site_ind_id,
+                'site_tag_id': mps.site_tag_id,
+                'L': mps.L
+            }
+        
+        def deserialize_mps(d):
+            return qtn.MatrixProductState(
+                d['arrays'],
+                site_ind_id=d['site_ind_id'],
+                site_tag_id=d['site_tag_id']
+            )
+    </serialization_for_mpi>
+  </quimb_integration>
+
+  <test_cases>
+    <heisenberg_chain title="Basic Validation">
+      <hamiltonian>H = J Σ_i (S^x_i S^x_{i+1} + S^y_i S^y_{i+1} + S^z_i S^z_{i+1})</hamiltonian>
+      <parameters>J=1.0, L=40, open boundary conditions</parameters>
+      <reference>E_0/L ≈ -0.4431... (infinite L limit for S=1/2)</reference>
+      <validation>
+        1. Run quimb serial DMRG to get E_serial
+        2. Run A2DMRG with np=1,2,4,8 to get E_a2dmrg
+        3. Verify |E_a2dmrg - E_serial| &lt; 1e-10 for ALL processor counts
+      </validation>
+    </heisenberg_chain>
+
+    <josephson_junction title="Complex128 Test">
+      <hamiltonian>H = -t Σ_i (a†_i a_{i+1} + h.c.) + (U/2) Σ_i n_i(n_i-1) - μ Σ_i n_i</hamiltonian>
+      <dtype>complex128 required for proper phase handling</dtype>
+      <parameters>t=1.0, U=4.0, μ=2.0, n_max=3 (truncated bosons)</parameters>
+      <validation>
+        1. Run quimb serial DMRG with complex128 to get E_serial
+        2. Run A2DMRG with np=1,2,4,8, complex128
+        3. Verify |E_a2dmrg - E_serial| &lt; 1e-10 for ALL processor counts
+      </validation>
+    </josephson_junction>
+
+    <scaling_test title="Parallel Efficiency">
+      <procedure>
+        1. Run A2DMRG with 1, 2, 4, 8 processors on same problem
+        2. Use L=80 or larger, bond_dim=200
+        3. Measure wall time to reach fixed accuracy (e.g., ΔE &lt; 1e-8)
+        4. Compute speedup = T_1 / T_n and efficiency = speedup / n
+      </procedure>
+      <target>
+        Near-linear scaling: efficiency > 70% for n=2,4,8 processors
+        Results must match serial DMRG to machine precision regardless of np
+      </target>
+      <report_format>
+        Generate scalability report as JSON and text:
+        {
+          "problem": "heisenberg_L40_m100",
+          "results": [
+            {"np": 1, "time_s": 120.5, "energy": -17.123456789012, "speedup": 1.0, "efficiency": 1.0},
+            {"np": 2, "time_s": 62.3, "energy": -17.123456789012, "speedup": 1.93, "efficiency": 0.97},
+            {"np": 4, "time_s": 33.1, "energy": -17.123456789012, "speedup": 3.64, "efficiency": 0.91},
+            {"np": 8, "time_s": 18.2, "energy": -17.123456789012, "speedup": 6.62, "efficiency": 0.83}
+          ],
+          "serial_dmrg_energy": -17.123456789012,
+          "max_energy_deviation": 1e-12
+        }
+      </report_format>
+    </scaling_test>
+  </test_cases>
+
+  <implementation_checklist>
+    <core_classes>
+      <class name="DistributedMPS">
+        MPS with site distribution information.
+        Attributes: mps, my_sites, rank, n_procs, comm
+        Methods: get_site(i), set_site(i, data), gather(), scatter()
+      </class>
+      <class name="DistributedMPO">
+        MPO with efficient environment caching.
+        Attributes: mpo, L_envs, R_envs
+        Methods: build_environments(mps), get_effective_H(site)
+      </class>
+      <class name="CoarseSpaceSolver">
+        Handles coarse-space eigenvalue problem.
+        Attributes: H_coarse, S_coarse, comm
+        Methods: add_contribution(i, j, H_ij, S_ij), solve(), get_coefficients()
+      </class>
+    </core_classes>
+
+    <algorithm_functions>
+      <function>initialize(L, bond_dim, dtype, comm) → DistributedMPS</function>
+      <function>prepare_orthogonal_decompositions(mps) → List[MPS]</function>
+      <function>local_micro_step(mps_i, mpo, site, one_site=True) → updated_mps</function>
+      <function>build_coarse_matrices(mps_list, mpo, comm) → H_coarse, S_coarse</function>
+      <function>solve_coarse_space(H_coarse, S_coarse) → energy, coefficients</function>
+      <function>form_linear_combination(mps_list, coefficients) → combined_mps</function>
+      <function>compress_mps(mps, max_rank, tol) → compressed_mps</function>
+      <function>a2dmrg_main(L, mpo, max_sweeps, bond_dim, tol, comm) → E, MPS</function>
+    </algorithm_functions>
+
+    <mpi_functions>
+      <function>distribute_sites(d, n_procs, rank) → List[int]</function>
+      <function>allreduce_coarse_matrices(H_local, S_local, comm) → H_global, S_global</function>
+      <function>broadcast_coefficients(coefficients, comm, root=0) → coefficients</function>
+      <function>gather_mps(local_mps, comm) → global_mps on rank 0</function>
+      <function>check_convergence(E_new, E_old, tol, comm) → bool</function>
+    </mpi_functions>
+  </implementation_checklist>
+
+  <success_criteria>
+    <accuracy>
+      Converge to same energy as quimb serial DMRG within 1e-10
+      This must hold for np=1, 2, 4, and 8 processors
+      Verify on Heisenberg chain with L=40, bond_dim=100
+    </accuracy>
+    <scaling>
+      Achieve near-linear scaling for 2, 4, 8 processors
+      Target: efficiency > 70%
+      Verify with L=80+, bond_dim=200+
+    </scaling>
+    <complex_numbers>
+      Work correctly with complex128 dtype
+      Verify on Josephson junction model
+    </complex_numbers>
+    <reproducibility>
+      Same results across multiple runs with identical parameters
+      Same results regardless of processor count (to machine precision)
+      No race conditions or non-deterministic behavior
+    </reproducibility>
+    <reports>
+      Generate scalability reports for each test run
+      Include timing, energy, speedup, efficiency
+      Compare to serial quimb DMRG baseline
+    </reports>
+  </success_criteria>
+
+  <common_pitfalls>
+    <pitfall name="Using PDMRG components">
+      WRONG: Reuse V matrix, neighbor exchange, staggered sweeps from PDMRG
+      CORRECT: A2DMRG is a completely different algorithm
+      WHY: A2DMRG uses additive Schwarz, not real-space partitioning
+    </pitfall>
+    
+    <pitfall name="Missing coarse-space step">
+      WRONG: Just combine local updates without optimization
+      CORRECT: Must solve coarse-space eigenvalue problem
+      WHY: Optimal linear combination is critical for convergence
+    </pitfall>
+    
+    <pitfall name="Ill-conditioned mass matrix">
+      WRONG: Direct inversion of S_coarse
+      CORRECT: Use SVD-based pseudoinverse with regularization
+      WHY: S_coarse can be nearly singular
+    </pitfall>
+    
+    <pitfall name="Wrong orthogonal form">
+      WRONG: Use arbitrary MPS for local micro-steps
+      CORRECT: Each site i needs i-orthogonal decomposition
+      WHY: Environments are only valid for specific orthogonality centers
+    </pitfall>
+    
+    <pitfall name="Communication during local steps">
+      WRONG: Synchronize or exchange data during Phase 2
+      CORRECT: Local micro-steps are completely independent
+      WHY: Embarrassingly parallel is the whole point of A2DMRG
+    </pitfall>
+    
+    <pitfall name="Forgetting to include original state">
+      WRONG: Only combine updated states Y^(1), ..., Y^(d)
+      CORRECT: Include Y^(0) = original state in coarse space
+      WHY: Original state is part of the coarse-space basis
+    </pitfall>
+    
+    <pitfall name="Two-site vs one-site indexing">
+      WRONG: Same loop for both one-site and two-site
+      CORRECT: Two-site has d-1 micro-steps (bonds), one-site has d (sites)
+      WHY: Two-site works on bonds, not sites
+    </pitfall>
+    
+    <pitfall name="Tensor shape confusion with quimb">
+      WRONG: Assume quimb uses (left, phys, right) ordering
+      CORRECT: Always check tensor.inds and transpose if needed
+      WHY: quimb may use different internal conventions
+    </pitfall>
+    
+    <pitfall name="Forgetting complex conjugation">
+      WRONG: Use A.T instead of A.conj() for complex wavefunctions
+      CORRECT: Inner products and environment updates use Hermitian conjugate
+      WHY: Quantum mechanics requires Hermitian conjugate, not transpose
+    </pitfall>
+    
+    <pitfall name="Not matching serial DMRG precision">
+      WRONG: Accept small deviations from serial DMRG
+      CORRECT: Results must match to machine precision (1e-10)
+      WHY: This validates that the parallel algorithm is correct
+    </pitfall>
+  </common_pitfalls>
+
+  <file_structure>
+    a2dmrg/
+    ├── __init__.py
+    ├── mps/
+    │   ├── __init__.py
+    │   ├── distributed_mps.py   # DistributedMPS class
+    │   └── canonical.py         # Canonical form utilities
+    ├── environments/
+    │   ├── __init__.py
+    │   ├── environment.py       # Environment tensor management
+    │   └── update.py            # Environment update functions
+    ├── numerics/
+    │   ├── __init__.py
+    │   ├── truncated_svd.py     # Standard truncated SVD (NOT accurate SVD)
+    │   ├── eigensolver.py       # Lanczos/Davidson wrappers
+    │   └── effective_ham.py     # Effective Hamiltonian construction
+    ├── parallel/
+    │   ├── __init__.py
+    │   ├── distribute.py        # Site distribution to processors
+    │   ├── coarse_space.py      # Coarse-space eigenvalue problem
+    │   ├── communication.py     # MPI wrapper utilities (Allreduce, Bcast)
+    │   └── linear_combination.py # Form Σⱼ cⱼ Y^(j)
+    ├── hamiltonians/
+    │   ├── __init__.py
+    │   ├── heisenberg.py        # Heisenberg model MPO
+    │   └── bose_hubbard.py      # Bose-Hubbard / Josephson MPO
+    ├── dmrg.py                  # Main A2DMRG algorithm entry point
+    └── tests/
+        ├── __init__.py
+        ├── test_heisenberg.py   # Validation against serial DMRG
+        ├── test_josephson.py    # Complex128 test
+        ├── test_scaling.py      # Parallel efficiency test (generates reports)
+        └── test_numerics.py     # Unit tests for SVD, eigensolver
+  </file_structure>
+
+  <run_instructions>
+    # Install dependencies
+    pip install numpy scipy quimb mpi4py
+    
+    # Load MPI module (cluster)
+    module load openmpi
+    
+    # Run tests (single process)
+    python -m pytest a2dmrg/tests/
+    
+    # Run A2DMRG single process (debugging)
+    python -m a2dmrg.dmrg --sites 40 --bond-dim 100 --sweeps 10
+    
+    # Run A2DMRG with 2 processors
+    mpirun -np 2 python -m a2dmrg.dmrg --sites 40 --bond-dim 100 --sweeps 10
+    
+    # Run A2DMRG with 4 processors
+    mpirun -np 4 python -m a2dmrg.dmrg --sites 60 --bond-dim 150 --sweeps 15
+    
+    # Run A2DMRG with 8 processors (larger system)
+    mpirun -np 8 python -m a2dmrg.dmrg --sites 100 --bond-dim 200 --sweeps 20
+    
+    # Run with complex128 for Josephson junction
+    mpirun -np 4 python -m a2dmrg.dmrg --model josephson --sites 40 --dtype complex128
+    
+    # Run scaling test and generate report
+    python -m a2dmrg.tests.test_scaling --output scaling_report.json
+    
+    # Full scaling test with all processor counts
+    for np in 1 2 4 8; do
+        mpirun -np $np python -m a2dmrg.dmrg --sites 80 --bond-dim 200 --sweeps 10 --timing
+    done
+  </run_instructions>
+</project_specification>
