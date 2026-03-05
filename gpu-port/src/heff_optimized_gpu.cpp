@@ -320,7 +320,7 @@ void OptimizedHeff::create_plans() {
         *handle,
         contraction_1,
         pref,
-        HIPTENSOR_WORKSPACE_RECOMMENDED,
+        HIPTENSOR_WORKSPACE_DEFAULT,
         &workspace_size_1
     ));
 
@@ -345,7 +345,7 @@ void OptimizedHeff::create_plans() {
         *handle,
         contraction_2,
         pref,
-        HIPTENSOR_WORKSPACE_RECOMMENDED,
+        HIPTENSOR_WORKSPACE_DEFAULT,
         &workspace_size_2
     ));
 
@@ -370,7 +370,7 @@ void OptimizedHeff::create_plans() {
         *handle,
         contraction_3,
         pref,
-        HIPTENSOR_WORKSPACE_RECOMMENDED,
+        HIPTENSOR_WORKSPACE_DEFAULT,
         &workspace_size_3
     ));
 
@@ -395,7 +395,7 @@ void OptimizedHeff::create_plans() {
         *handle,
         contraction_4,
         pref,
-        HIPTENSOR_WORKSPACE_RECOMMENDED,
+        HIPTENSOR_WORKSPACE_DEFAULT,
         &workspace_size_4
     ));
 
