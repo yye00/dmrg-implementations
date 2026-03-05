@@ -10,6 +10,12 @@
 #include <algorithm>
 #include <vector>
 
+// LAPACK dstev Fortran interface (CPU fallback for Lanczos eigensolver)
+extern "C" {
+    void dstev_(const char* jobz, const int* n, double* d, double* e,
+                double* z, const int* ldz, double* work, int* info);
+}
+
 // Error checking macros
 #define HIP_CHECK(call) \
     do { \
@@ -654,10 +660,6 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     // negligible (<0.01% of DMRG iteration time).
     //
     // This is the standard approach in production GPU Lanczos implementations.
-
-    // LAPACK dstev Fortran interface (jobz='V': compute eigenvalues + eigenvectors)
-    extern "C" void dstev_(const char* jobz, const int* n, double* d, double* e,
-                          double* z, const int* ldz, double* work, int* info);
 
     // Prepare CPU arrays (column-major for LAPACK)
     std::vector<double> h_D(niter);      // Diagonal (input), eigenvalues (output)
