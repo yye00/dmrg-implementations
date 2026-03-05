@@ -675,10 +675,15 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     HIP_CHECK(hipMemcpy(d_T_matrix, h_T_matrix.data(), niter * niter * sizeof(double),
                         hipMemcpyHostToDevice));
 
+    // Allocate workspace for off-diagonal elements
+    double* d_E;
+    HIP_CHECK(hipMalloc(&d_E, std::max(1, niter - 1) * sizeof(double)));
+
     // Solve symmetric eigenvalue problem on GPU
     // rocsolver_dsyev computes eigenvalues and eigenvectors
     // On return: d_T_matrix contains eigenvectors (column-major)
     //            d_T_evals contains eigenvalues (ascending order)
+    //            d_E contains off-diagonal elements (workspace)
     ROCSOLVER_CHECK(rocsolver_dsyev(
         rocblas_h_,
         rocblas_evect_original,  // Compute eigenvectors
@@ -687,6 +692,7 @@ void BoundaryMergeGPU::lanczos_eigensolver(
         d_T_matrix,              // Input: matrix, Output: eigenvectors
         niter,                   // Leading dimension
         d_T_evals,               // Output: eigenvalues (ascending)
+        d_E,                     // Workspace for off-diagonal
         d_info
     ));
 
@@ -734,6 +740,7 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     // Free GPU memory
     HIP_CHECK(hipFree(d_T_matrix));
     HIP_CHECK(hipFree(d_T_evals));
+    HIP_CHECK(hipFree(d_E));
     HIP_CHECK(hipFree(d_info));
 }
 
