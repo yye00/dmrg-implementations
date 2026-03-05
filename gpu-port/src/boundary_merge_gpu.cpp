@@ -702,6 +702,29 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     // On return: d_T_matrix contains eigenvectors (column-major)
     //            d_T_evals contains eigenvalues (ascending order)
     //            d_E contains off-diagonal elements (workspace)
+    //
+    // IMPORTANT: For symmetric matrix, we need FULL matrix (both triangles)
+    // Let's fill lower triangle as well (symmetric copy of upper)
+    for (int i = 0; i < niter; i++) {
+        for (int j = i + 1; j < niter; j++) {
+            // Copy upper triangle (i,j) to lower triangle (j,i)
+            h_T_matrix[j + i * niter] = h_T_matrix[i + j * niter];
+        }
+    }
+
+    // DEBUG: Print full symmetric matrix
+    printf("DEBUG Full symmetric matrix (%dx%d):\n", niter, niter);
+    for (int i = 0; i < std::min(5, niter); i++) {
+        for (int j = 0; j < std::min(5, niter); j++) {
+            printf("%8.4f ", h_T_matrix[i + j * niter]);
+        }
+        printf("%s\n", (niter > 5 ? "..." : ""));
+    }
+
+    // Re-copy to GPU with full symmetric matrix
+    HIP_CHECK(hipMemcpy(d_T_matrix, h_T_matrix.data(), niter * niter * sizeof(double),
+                        hipMemcpyHostToDevice));
+
     ROCSOLVER_CHECK(rocsolver_dsyev(
         rocblas_h_,
         rocblas_evect_original,  // Compute eigenvectors
