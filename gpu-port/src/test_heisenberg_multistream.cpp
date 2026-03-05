@@ -33,7 +33,8 @@ int main() {
 
         // Create StreamCoordinator
         std::cout << "Initializing StreamCoordinator..." << std::endl;
-        StreamCoordinator coordinator(L, d, chi_max, n_streams, streams);
+        int max_bond = chi_max;  // Maximum bond dimension for merges
+        StreamCoordinator coordinator(n_streams, L, chi_max, d, D_mpo, max_bond);
 
         // Create simple identity MPO (for now - full Hamiltonian needs proper interface)
         std::cout << "Creating identity MPO..." << std::endl;
