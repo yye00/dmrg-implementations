@@ -634,29 +634,36 @@ void StreamSegment::extract_boundary_tensors() {
     if (has_left_boundary_) {
         // Left boundary data (for merging with left neighbor)
         int site_idx = 0;  // Leftmost site in this segment
-        int chi_L = mps_chi_left_[site_idx];
-        int chi_R = mps_chi_right_[site_idx];  // This is chi_bond at the boundary
+        int chi_left_site = mps_chi_left_[site_idx];   // Left bond (= chi_bond at boundary)
+        int chi_right_site = mps_chi_right_[site_idx]; // Right bond
+
+        // For BoundaryData at left edge:
+        // - psi_right is this segment's leftmost site: (chi_left_site, d, chi_right_site)
+        // - R_env should be to the RIGHT of psi_right, with dimension chi_right_site
+        // - chi_R in BoundaryData = chi_right_site
+        // - chi_bond = chi_left_site
 
         // Check if BoundaryData needs reallocation
-        if (left_boundary_.chi_bond != chi_R ||
-            left_boundary_.chi_L != chi_L ||
-            left_boundary_.chi_R != chi_R) {
+        if (left_boundary_.chi_bond != chi_left_site ||
+            left_boundary_.chi_L != chi_left_site ||
+            left_boundary_.chi_R != chi_right_site) {
             // Reallocate with correct dimensions
             left_boundary_.free();
-            left_boundary_.allocate(chi_L, chi_R, chi_R, d_, D_mpo_);
+            left_boundary_.allocate(chi_left_site, chi_right_site, chi_left_site, d_, D_mpo_);
         }
 
         // Copy MPS tensor (this site is psi_right in the boundary merge)
-        size_t mps_size = chi_L * d_ * chi_R * sizeof(double);
+        size_t mps_size = chi_left_site * d_ * chi_right_site * sizeof(double);
         HIP_CHECK(hipMemcpy(left_boundary_.d_psi_right, d_mps_tensors_[site_idx],
                            mps_size, hipMemcpyDeviceToDevice));
 
         // For psi_left, we would need the rightmost tensor from the left neighbor
         // This will be set during the merge coordination by the coordinator
 
-        // Copy left environment (R_env at position 0)
-        size_t env_size = D_mpo_ * chi_R * chi_R * sizeof(double);
-        HIP_CHECK(hipMemcpy(left_boundary_.d_R_env, d_R_envs_[site_idx],
+        // Copy R_env: environment to the RIGHT of site_idx
+        // This is R_env at position site_idx+1 (not site_idx!)
+        size_t env_size = D_mpo_ * chi_right_site * chi_right_site * sizeof(double);
+        HIP_CHECK(hipMemcpy(left_boundary_.d_R_env, d_R_envs_[site_idx + 1],
                            env_size, hipMemcpyDeviceToDevice));
 
         // Copy MPO tensor
@@ -668,29 +675,36 @@ void StreamSegment::extract_boundary_tensors() {
     if (has_right_boundary_) {
         // Right boundary data (for merging with right neighbor)
         int site_idx = num_sites_ - 1;  // Rightmost site in this segment
-        int chi_L = mps_chi_left_[site_idx];  // This is chi_bond at the boundary
-        int chi_R = mps_chi_right_[site_idx];
+        int chi_left_site = mps_chi_left_[site_idx];   // Left bond of rightmost site
+        int chi_right_site = mps_chi_right_[site_idx]; // Right bond (= chi_bond at boundary)
+
+        // For BoundaryData at right edge:
+        // - psi_left is this segment's rightmost site: (chi_left_site, d, chi_right_site)
+        // - L_env should be to the LEFT of psi_left, with dimension chi_left_site
+        // - chi_L in BoundaryData = chi_left_site
+        // - chi_bond = chi_right_site
 
         // Check if BoundaryData needs reallocation
-        if (right_boundary_.chi_bond != chi_L ||
-            right_boundary_.chi_L != chi_L ||
-            right_boundary_.chi_R != chi_R) {
+        if (right_boundary_.chi_bond != chi_right_site ||
+            right_boundary_.chi_L != chi_left_site ||
+            right_boundary_.chi_R != chi_right_site) {
             // Reallocate with correct dimensions
             right_boundary_.free();
-            right_boundary_.allocate(chi_L, chi_R, chi_L, d_, D_mpo_);
+            right_boundary_.allocate(chi_left_site, chi_right_site, chi_right_site, d_, D_mpo_);
         }
 
         // Copy MPS tensor (this site is psi_left in the boundary merge)
-        size_t mps_size = chi_L * d_ * chi_R * sizeof(double);
+        size_t mps_size = chi_left_site * d_ * chi_right_site * sizeof(double);
         HIP_CHECK(hipMemcpy(right_boundary_.d_psi_left, d_mps_tensors_[site_idx],
                            mps_size, hipMemcpyDeviceToDevice));
 
         // For psi_right, we would need the leftmost tensor from the right neighbor
         // This will be set during the merge coordination by the coordinator
 
-        // Copy right environment (L_env at position num_sites_)
-        size_t env_size = D_mpo_ * chi_L * chi_L * sizeof(double);
-        HIP_CHECK(hipMemcpy(right_boundary_.d_L_env, d_L_envs_[num_sites_],
+        // Copy L_env: environment to the LEFT of site_idx
+        // This is L_env at position site_idx (not num_sites_!)
+        size_t env_size = D_mpo_ * chi_left_site * chi_left_site * sizeof(double);
+        HIP_CHECK(hipMemcpy(right_boundary_.d_L_env, d_L_envs_[site_idx],
                            env_size, hipMemcpyDeviceToDevice));
 
         // Copy MPO tensor
