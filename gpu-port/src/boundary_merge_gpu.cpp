@@ -654,148 +654,68 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     //
     // We need to find the minimum eigenvalue and corresponding eigenvector
 
-    // Build full tridiagonal matrix on GPU
-    // T is symmetric with alpha on diagonal, beta on off-diagonals
-    double* d_T_matrix;  // Full matrix (niter x niter)
-    double* d_T_evals;   // Eigenvalues
+    // ==================================================================
+    // Use TRIDIAGONAL eigensolver (rocsolver_dsteqr)
+    // ==================================================================
+    // For tridiagonal T, we only need diagonal D and off-diagonal E
+    double* d_D;         // Diagonal: alpha (input), eigenvalues (output)
+    double* d_E;         // Off-diagonal: beta (input, destroyed)
+    double* d_C;         // Eigenvectors (niter × niter)
     int* d_info;
 
-    HIP_CHECK(hipMalloc(&d_T_matrix, niter * niter * sizeof(double)));
-    HIP_CHECK(hipMalloc(&d_T_evals, niter * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_D, niter * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_E, niter * sizeof(double)));  // Allocate niter (last unused)
+    HIP_CHECK(hipMalloc(&d_C, niter * niter * sizeof(double)));
     HIP_CHECK(hipMalloc(&d_info, sizeof(int)));
 
-    // Initialize T matrix to zero
-    HIP_CHECK(hipMemset(d_T_matrix, 0, niter * niter * sizeof(double)));
-
-    // Build tridiagonal matrix on CPU first (it's small)
-    // Using rocblas_fill_upper, so only need to fill upper triangle + diagonal
-    std::vector<double> h_T_matrix(niter * niter, 0.0);
-    for (int i = 0; i < niter; i++) {
-        // Diagonal element (i, i)
-        h_T_matrix[i + i * niter] = h_alpha[i];
-
-        // Upper off-diagonal (i, i+1)
-        if (i < niter - 1) {
-            h_T_matrix[i + (i+1) * niter] = h_beta[i];
-        }
-    }
-
-    // DEBUG: Print tridiagonal matrix
-    printf("DEBUG Tridiagonal matrix (%dx%d):\n", niter, niter);
-    for (int i = 0; i < std::min(5, niter); i++) {
-        for (int j = 0; j < std::min(5, niter); j++) {
-            printf("%8.4f ", h_T_matrix[i + j * niter]);
-        }
-        printf("%s\n", (niter > 5 ? "..." : ""));
-    }
-
-    // Copy to GPU
-    HIP_CHECK(hipMemcpy(d_T_matrix, h_T_matrix.data(), niter * niter * sizeof(double),
+    // Copy alpha (diagonal) and beta (off-diagonal) to GPU
+    HIP_CHECK(hipMemcpy(d_D, h_alpha.data(), niter * sizeof(double),
+                        hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_E, h_beta.data(), niter * sizeof(double),
                         hipMemcpyHostToDevice));
 
-    // Allocate workspace for off-diagonal elements
-    double* d_E;
-    HIP_CHECK(hipMalloc(&d_E, std::max(1, niter - 1) * sizeof(double)));
-
-    // Solve symmetric eigenvalue problem on GPU
-    // rocsolver_dsyev computes eigenvalues and eigenvectors
-    // On return: d_T_matrix contains eigenvectors (column-major)
-    //            d_T_evals contains eigenvalues (ascending order)
-    //            d_E contains off-diagonal elements (workspace)
-    //
-    // IMPORTANT: For symmetric matrix, we need FULL matrix (both triangles)
-    // Let's fill lower triangle as well (symmetric copy of upper)
-    for (int i = 0; i < niter; i++) {
-        for (int j = i + 1; j < niter; j++) {
-            // Copy upper triangle (i,j) to lower triangle (j,i)
-            h_T_matrix[j + i * niter] = h_T_matrix[i + j * niter];
-        }
-    }
-
-    // DEBUG: Print full symmetric matrix
-    printf("DEBUG Full symmetric matrix (%dx%d):\n", niter, niter);
-    for (int i = 0; i < std::min(5, niter); i++) {
-        for (int j = 0; j < std::min(5, niter); j++) {
-            printf("%8.4f ", h_T_matrix[i + j * niter]);
-        }
-        printf("%s\n", (niter > 5 ? "..." : ""));
-    }
-
-    // ========================================================================
-    // CPU VERIFICATION: Check matrix properties before GPU
-    // ========================================================================
-    // Verify the matrix makes sense (not all zeros, has correct structure)
-    double trace = 0.0;
-    double frobenius_norm = 0.0;
-    for (int i = 0; i < niter; i++) {
-        trace += h_T_matrix[i + i * niter];  // Sum of diagonal
-        for (int j = 0; j < niter; j++) {
-            double val = h_T_matrix[i + j * niter];
-            frobenius_norm += val * val;
-        }
-    }
-    printf("DEBUG CPU Matrix check: trace=%.6f, ||T||_F=%.6f\n", trace, sqrt(frobenius_norm));
-
-    // Check tridiagonal structure: off-off-diagonals should be zero
-    bool is_tridiagonal = true;
-    for (int i = 0; i < niter; i++) {
-        for (int j = 0; j < niter; j++) {
-            if (abs(i - j) > 1) {
-                if (fabs(h_T_matrix[i + j * niter]) > 1e-14) {
-                    printf("WARNING: Non-tridiagonal element at (%d,%d) = %.6e\n",
-                           i, j, h_T_matrix[i + j * niter]);
-                    is_tridiagonal = false;
-                }
-            }
-        }
-    }
-    if (is_tridiagonal) {
-        printf("DEBUG: Matrix has correct tridiagonal structure ✓\n");
-    }
-
-    // Re-copy to GPU with full symmetric matrix
-    HIP_CHECK(hipMemcpy(d_T_matrix, h_T_matrix.data(), niter * niter * sizeof(double),
-                        hipMemcpyHostToDevice));
-
-    ROCSOLVER_CHECK(rocsolver_dsyev(
+    // ==================================================================
+    // Call rocSOLVER tridiagonal eigensolver (dsteqr)
+    // ==================================================================
+    // This is MUCH more efficient than dense syev for tridiagonal matrices
+    ROCSOLVER_CHECK(rocsolver_dsteqr(
         rocblas_h_,
         rocblas_evect_original,  // Compute eigenvectors
-        rocblas_fill_upper,      // Use upper triangle
         niter,                   // Matrix size
-        d_T_matrix,              // Input: matrix, Output: eigenvectors
-        niter,                   // Leading dimension
-        d_T_evals,               // Output: eigenvalues (ascending)
-        d_E,                     // Workspace for off-diagonal
+        d_D,                     // Input: diagonal, Output: eigenvalues (ascending)
+        d_E,                     // Input: off-diagonal (destroyed)
+        d_C,                     // Output: eigenvectors (niter × niter, column-major)
+        niter,                   // Leading dimension of C
         d_info
     ));
 
     // Check for errors
     int h_info;
     HIP_CHECK(hipMemcpy(&h_info, d_info, sizeof(int), hipMemcpyDeviceToHost));
-    printf("DEBUG rocsolver_dsyev: info = %d\n", h_info);
+    printf("DEBUG rocsolver_dsteqr: info = %d\n", h_info);
     if (h_info != 0) {
-        throw std::runtime_error("rocsolver_dsyev failed with info = " + std::to_string(h_info));
+        throw std::runtime_error("rocsolver_dsteqr failed with info = " + std::to_string(h_info));
     }
 
     // DEBUG: Print eigenvalues IMMEDIATELY after rocSOLVER call
     std::vector<double> h_evals_check(niter);
-    HIP_CHECK(hipMemcpy(h_evals_check.data(), d_T_evals, niter * sizeof(double),
+    HIP_CHECK(hipMemcpy(h_evals_check.data(), d_D, niter * sizeof(double),
                         hipMemcpyDeviceToHost));
-    printf("DEBUG After rocsolver_dsyev: eigenvalues = [");
+    printf("DEBUG After rocsolver_dsteqr: eigenvalues = [");
     for (int i = 0; i < niter; i++) {
         printf("%.10f%s", h_evals_check[i], (i < niter-1 ? ", " : ""));
     }
     printf("]\n");
 
-    // Minimum eigenvalue is now in d_T_evals[0] (eigenvalues are sorted ascending)
+    // Minimum eigenvalue is now in d_D[0] (eigenvalues are sorted ascending)
     energy = h_evals_check[0];  // Use the value we just read
     printf("DEBUG Minimum eigenvalue (ground state energy): %.10f\n", energy);
 
-    // Eigenvector corresponding to minimum eigenvalue is in first column of d_T_matrix
+    // Eigenvector corresponding to minimum eigenvalue is in first column of d_C
     // Reconstruct ground state: |psi> = sum_i evec[i] * |v_i> = V * evec
     // where V is matrix of Lanczos vectors (n × niter), evec is first column (niter × 1)
 
-    // Use GPU matrix-vector product: d_theta = d_lanczos_v_ * d_T_matrix[:, 0]
+    // Use GPU matrix-vector product: d_theta = d_lanczos_v_ * d_C[:, 0]
     // V is stored as [v0 v1 v2 ...] with each vi of length n
     // So V is n × niter in column-major format
     const double alpha_gemv = 1.0;
@@ -809,7 +729,7 @@ void BoundaryMergeGPU::lanczos_eigensolver(
         &alpha_gemv,              // Scale factor
         d_lanczos_v_,            // Matrix V (n × niter)
         n,                        // Leading dimension of V
-        d_T_matrix,              // Vector evec (first column of eigenvector matrix)
+        d_C,                     // Vector evec (first column of eigenvector matrix)
         1,                        // Stride
         &beta_gemv,               // Scale for d_theta (0 = overwrite)
         d_theta,                  // Output vector
@@ -823,9 +743,9 @@ void BoundaryMergeGPU::lanczos_eigensolver(
     ROCBLAS_CHECK(rocblas_dscal(rocblas_h_, n, &norm_scale, d_theta, 1));
 
     // Free GPU memory
-    HIP_CHECK(hipFree(d_T_matrix));
-    HIP_CHECK(hipFree(d_T_evals));
+    HIP_CHECK(hipFree(d_D));
     HIP_CHECK(hipFree(d_E));
+    HIP_CHECK(hipFree(d_C));
     HIP_CHECK(hipFree(d_info));
 }
 
