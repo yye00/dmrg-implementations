@@ -9,6 +9,8 @@
 #include <stdexcept>
 #include <cmath>
 #include <algorithm>
+#include <random>
+#include <vector>
 
 // Error checking macros
 #define HIP_CHECK(call) \
@@ -197,23 +199,46 @@ void StreamSegment::allocate_memory() {
     d_R_envs_ = new double*[num_sites_ + 1];
     d_mpo_tensors_ = new double*[num_sites_];
 
-    // Initialize chi values (will grow from boundaries)
-    // For now, use simple pattern: chi = min(d^site, chi_max)
+    // Initialize chi values to match CPU PDMRG exactly:
+    // - chi_max for all internal bonds
+    // - 1 only at chain edges (global site 0 and L-1)
     for (int i = 0; i < num_sites_; i++) {
-        int site_from_left = start_site_ + i;
-        int site_from_right = end_site_ - i;
+        int global_site = start_site_ + i;
 
-        // Left chi: grows exponentially from left, capped at chi_max
-        int chi_left = (i == 0) ? 1 : std::min(chi_max_, (int)std::pow(d_, i));
+        // Match CPU: chi_L = 1 if gi == 0 else chi
+        int chi_left = (global_site == 0) ? 1 : chi_max_;
 
-        // Right chi: similar from right
-        int chi_right = (i == num_sites_ - 1) ? 1 : std::min(chi_max_, (int)std::pow(d_, num_sites_ - 1 - i));
+        // Match CPU: chi_R = 1 if gi == L-1 else chi
+        // Note: end_site_ is the last site index in this segment (inclusive)
+        int chain_length = end_site_ + 1;  // Assumes end_site_ is last global site
+        int chi_right = (global_site == chain_length - 1) ? 1 : chi_max_;
 
         mps_chi_left_[i] = chi_left;
         mps_chi_right_[i] = chi_right;
 
         // Allocate MPS tensor: (chi_left, d, chi_right) in column-major
         HIP_CHECK(hipMalloc(&d_mps_tensors_[i], chi_left * d_ * chi_right * sizeof(double)));
+    }
+
+    // Initialize MPS tensors with random values matching CPU PDMRG
+    // CPU uses: np.random.seed(42 + rank); np.random.randn(chi_L, d, chi_R)
+    std::mt19937 rng(42 + id_);  // Match CPU seed (rank → segment_id)
+    std::normal_distribution<double> dist(0.0, 1.0);  // Standard normal (mean=0, std=1)
+
+    for (int i = 0; i < num_sites_; i++) {
+        int chi_left = mps_chi_left_[i];
+        int chi_right = mps_chi_right_[i];
+        int tensor_size = chi_left * d_ * chi_right;
+
+        // Generate random values on host
+        std::vector<double> h_tensor(tensor_size);
+        for (int j = 0; j < tensor_size; j++) {
+            h_tensor[j] = dist(rng);
+        }
+
+        // Copy to device
+        HIP_CHECK(hipMemcpy(d_mps_tensors_[i], h_tensor.data(),
+                            tensor_size * sizeof(double), hipMemcpyHostToDevice));
     }
 
     // Allocate environments
