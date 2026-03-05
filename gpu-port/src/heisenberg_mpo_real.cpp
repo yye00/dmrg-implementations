@@ -22,11 +22,16 @@
  * Column-major layout: W[w + s*D_mpo + sp*D_mpo*d + wp*D_mpo*d*d]
  */
 
-// Pauli matrices with NEGATIVE sign (antiferromagnetic coupling)
-const double Sx[2][2] = {{0.0, -1.0}, {-1.0, 0.0}};      // -σ^x
-const double Sy[2][2] = {{0.0, -1.0}, {-1.0, 0.0}};      // -σ^y (same as -σ^x in real basis)
-const double Sz[2][2] = {{-1.0, 0.0}, {0.0, 1.0}};       // -σ^z
+// Pauli matrices (positive - negation applied to sending operators in MPO)
+const double Sx[2][2] = {{0.0, 1.0}, {1.0, 0.0}};        // σ^x
+const double Sy[2][2] = {{0.0, 1.0}, {1.0, 0.0}};        // σ^y (same as σ^x in real basis)
+const double Sz[2][2] = {{1.0, 0.0}, {0.0, -1.0}};       // σ^z
 const double Id[2][2] = {{1.0, 0.0}, {0.0, 1.0}};        // Identity
+
+// Negative operators for antiferromagnetic coupling
+const double nSx[2][2] = {{0.0, -1.0}, {-1.0, 0.0}};     // -σ^x
+const double nSy[2][2] = {{0.0, -1.0}, {-1.0, 0.0}};     // -σ^y
+const double nSz[2][2] = {{-1.0, 0.0}, {0.0, 1.0}};      // -σ^z
 
 void build_heisenberg_mpo_real_site(int site, int L, double* h_mpo) {
     /**
@@ -77,15 +82,15 @@ void build_heisenberg_mpo_real_site(int site, int L, double* h_mpo) {
     };
 
     if (site == 0) {
-        // Left boundary: [S^x, S^y, S^z, I, 0]
-        set_operator(0, 0, Sx);  // Send S^x
-        set_operator(0, 1, Sy);  // Send S^y
-        set_operator(0, 2, Sz);  // Send S^z
-        set_operator(0, 3, Id);  // Send I
+        // Left boundary: [-S^x, -S^y, -S^z, I, 0]  (send negative for antiferromagnetic)
+        set_operator(0, 0, nSx);  // Send -S^x
+        set_operator(0, 1, nSy);  // Send -S^y
+        set_operator(0, 2, nSz);  // Send -S^z
+        set_operator(0, 3, Id);   // Send I
         // Position (0, 4) is already zero
 
     } else if (site == L - 1) {
-        // Right boundary: [I; S^x; S^y; S^z; 0]^T
+        // Right boundary: [I; S^x; S^y; S^z; 0]^T  (receive positive)
         set_operator(0, 0, Id);  // Receive I
         set_operator(1, 0, Sx);  // Receive S^x
         set_operator(2, 0, Sy);  // Receive S^y
@@ -97,20 +102,16 @@ void build_heisenberg_mpo_real_site(int site, int L, double* h_mpo) {
         // Row 0: [I, 0, 0, 0, 0]
         set_operator(0, 0, Id);
 
-        // Row 1: [S^x, 0, 0, 0, 0]
-        set_operator(1, 0, Sx);
+        // Rows 1-3: Receive operators (positive)
+        set_operator(1, 0, Sx);  // Row 1: [S^x, 0, 0, 0, 0]
+        set_operator(2, 0, Sy);  // Row 2: [S^y, 0, 0, 0, 0]
+        set_operator(3, 0, Sz);  // Row 3: [S^z, 0, 0, 0, 0]
 
-        // Row 2: [S^y, 0, 0, 0, 0]
-        set_operator(2, 0, Sy);
-
-        // Row 3: [S^z, 0, 0, 0, 0]
-        set_operator(3, 0, Sz);
-
-        // Row 4: [0, S^x, S^y, S^z, I]
-        set_operator(4, 1, Sx);
-        set_operator(4, 2, Sy);
-        set_operator(4, 3, Sz);
-        set_operator(4, 4, Id);
+        // Row 4: Send operators (negative for antiferromagnetic)
+        set_operator(4, 1, nSx);  // Send -S^x
+        set_operator(4, 2, nSy);  // Send -S^y
+        set_operator(4, 3, nSz);  // Send -S^z
+        set_operator(4, 4, Id);   // Identity propagates
     }
 }
 
