@@ -82,19 +82,19 @@ void build_heisenberg_mpo_real_site(int site, int L, double* h_mpo) {
     };
 
     if (site == 0) {
-        // Left boundary: [-S^x, -S^y, -S^z, I, 0]  (send negative for antiferromagnetic)
-        set_operator(0, 0, nSx);  // Send -S^x
-        set_operator(0, 1, nSy);  // Send -S^y
-        set_operator(0, 2, nSz);  // Send -S^z
-        set_operator(0, 3, Id);   // Send I
+        // Left boundary: [S^x, S^y, S^z, I, 0]  (send positive)
+        set_operator(0, 0, Sx);  // Send S^x
+        set_operator(0, 1, Sy);  // Send S^y
+        set_operator(0, 2, Sz);  // Send S^z
+        set_operator(0, 3, Id);  // Send I
         // Position (0, 4) is already zero
 
     } else if (site == L - 1) {
-        // Right boundary: [I; S^x; S^y; S^z; 0]^T  (receive positive)
-        set_operator(0, 0, Id);  // Receive I
-        set_operator(1, 0, Sx);  // Receive S^x
-        set_operator(2, 0, Sy);  // Receive S^y
-        set_operator(3, 0, Sz);  // Receive S^z
+        // Right boundary: [I; -S^x; -S^y; -S^z; 0]^T  (receive negative for antiferromagnetic)
+        set_operator(0, 0, Id);   // Receive I
+        set_operator(1, 0, nSx);  // Receive -S^x
+        set_operator(2, 0, nSy);  // Receive -S^y
+        set_operator(3, 0, nSz);  // Receive -S^z
         // Position (4, 0) is already zero
 
     } else {
@@ -102,16 +102,16 @@ void build_heisenberg_mpo_real_site(int site, int L, double* h_mpo) {
         // Row 0: [I, 0, 0, 0, 0]
         set_operator(0, 0, Id);
 
-        // Rows 1-3: Receive operators (positive)
-        set_operator(1, 0, Sx);  // Row 1: [S^x, 0, 0, 0, 0]
-        set_operator(2, 0, Sy);  // Row 2: [S^y, 0, 0, 0, 0]
-        set_operator(3, 0, Sz);  // Row 3: [S^z, 0, 0, 0, 0]
+        // Rows 1-3: Receive operators (negative for antiferromagnetic)
+        set_operator(1, 0, nSx);  // Row 1: [-S^x, 0, 0, 0, 0]
+        set_operator(2, 0, nSy);  // Row 2: [-S^y, 0, 0, 0, 0]
+        set_operator(3, 0, nSz);  // Row 3: [-S^z, 0, 0, 0, 0]
 
-        // Row 4: Send operators (negative for antiferromagnetic)
-        set_operator(4, 1, nSx);  // Send -S^x
-        set_operator(4, 2, nSy);  // Send -S^y
-        set_operator(4, 3, nSz);  // Send -S^z
-        set_operator(4, 4, Id);   // Identity propagates
+        // Row 4: Send operators (positive)
+        set_operator(4, 1, Sx);  // Send S^x
+        set_operator(4, 2, Sy);  // Send S^y
+        set_operator(4, 3, Sz);  // Send S^z
+        set_operator(4, 4, Id);  // Identity propagates
     }
 }
 
