@@ -128,14 +128,6 @@ public:
      * Rebuild R_env at left boundary for merge with left neighbor
      */
     void rebuild_left_boundary_env();
-    
-    /**
-     * Load MPS from binary file
-     * @param filename Path to binary file containing MPS tensors
-     * @param bond_dims Array of bond dimensions [chi_0, chi_1, ..., chi_L]
-     * @return true on success, false on failure
-     */
-    bool load_mps_from_binary(const char* filename, const int* bond_dims);
 
     // ============================================================================
     // V Matrix Updates (after canonization)
@@ -258,7 +250,6 @@ private:
      * Initialize environments for local sweeps
      */
     void initialize_environments();
-    void build_environments_from_mps();  // Build envs from loaded MPS
 
     /**
      * Allocate memory for all tensors

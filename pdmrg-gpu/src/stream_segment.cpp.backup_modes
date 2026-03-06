@@ -8,9 +8,6 @@
 #include <cstring>
 #include <stdexcept>
 #include <cmath>
-#include <fstream>
-#include <complex>
-#include <vector>
 #include <algorithm>
 #include <random>
 #include <vector>
@@ -169,7 +166,7 @@ StreamSegment::StreamSegment(int segment_id, int start_site, int end_site,
 
     // Initialize MPS and environments
     initialize_mps();
-    build_environments_from_mps();
+    initialize_environments();
 
     // Allocate tau workspace for QR/LQ (max size needed)
     tau_size_ = chi_max_;
@@ -684,7 +681,7 @@ void StreamSegment::rebuild_right_boundary_env() {
 
         int32_t modesL[] = {0, 1, 2};
         int32_t modesA[] = {0, 3, 4};
-        int32_t modes_temp1[] = {1, 2, 3, 4};
+        int32_t modes_temp1[] = {0, 1, 2, 3};
 
         hiptensor_contract(d_L_in, 3, extentL, modesL,
                            d_A, 3, extentA, modesA,
@@ -721,12 +718,12 @@ void StreamSegment::rebuild_right_boundary_env() {
     // Contract over modes 2(a') and 5(s')
     {
         int64_t extent_temp2[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R, (int64_t)D_mpo_};
-        int64_t extentA[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R};
+        int64_t extentA[] = {(int64_t)chi_R, (int64_t)d_, (int64_t)chi_R};
         int64_t extent_Lnew[] = {(int64_t)chi_R, (int64_t)D_mpo_, (int64_t)chi_R};
 
         int32_t modes_temp2[] = {1, 4, 3, 5};
-        int32_t modesA[] = {1, 4, 6};
-        int32_t modes_Lnew[] = {3, 5, 6};
+        int32_t modesA[] = {0, 3, 5};
+        int32_t modes_Lnew[] = {2, 4, 5};
 
         hiptensor_contract(d_temp2, 4, extent_temp2, modes_temp2,
                            d_A, 3, extentA, modesA,
@@ -1018,19 +1015,15 @@ void StreamSegment::hiptensor_contract(
 {
     // Create tensor descriptors
     hiptensorTensorDescriptor_t descA, descB, descC;
-    printf("DEBUG: Creating descA\n");
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descA, nmodeA, extentA,
-                    nullptr, HIPTENSOR_R_64F, 8));
-    printf("DEBUG: Creating descB\n");
+                    nullptr, HIPTENSOR_R_64F, 16));
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descB, nmodeB, extentB,
-                    nullptr, HIPTENSOR_R_64F, 8));
-    printf("DEBUG: Creating descC\n");
+                    nullptr, HIPTENSOR_R_64F, 16));
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(hiptensor_h_, &descC, nmodeC, extentC,
-                    nullptr, HIPTENSOR_R_64F, 8));
+                    nullptr, HIPTENSOR_R_64F, 16));
 
     // Create contraction operation descriptor
     hiptensorOperationDescriptor_t opDesc;
-    printf("DEBUG: Creating opDesc\n");
     HIPTENSOR_CHECK(hiptensorCreateContraction(hiptensor_h_, &opDesc,
         descA, modesA, HIPTENSOR_OP_IDENTITY,
         descB, modesB, HIPTENSOR_OP_IDENTITY,
@@ -1040,14 +1033,11 @@ void StreamSegment::hiptensor_contract(
 
     // Create plan preference
     hiptensorPlanPreference_t pref;
-    printf("DEBUG: Creating plan preference\n");
-    printf("DEBUG: Creating plan\n");
     HIPTENSOR_CHECK(hiptensorCreatePlanPreference(hiptensor_h_, &pref,
         HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_NONE));
 
     // Estimate workspace size
     uint64_t workspaceSize = 0;
-    printf("DEBUG: Estimating workspace\n");
     HIPTENSOR_CHECK(hiptensorEstimateWorkspaceSize(hiptensor_h_, opDesc, pref,
         HIPTENSOR_WORKSPACE_DEFAULT, &workspaceSize));
 
@@ -1059,7 +1049,6 @@ void StreamSegment::hiptensor_contract(
 
     // Create plan
     hiptensorPlan_t plan;
-    printf("DEBUG: Creating plan\n");
     HIPTENSOR_CHECK(hiptensorCreatePlan(hiptensor_h_, &plan, opDesc, pref, workspaceSize));
 
     // Execute contraction
@@ -1083,288 +1072,4 @@ void StreamSegment::hiptensor_contract(
     HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(descA));
     HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(descB));
     HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(descC));
-}
-
-bool StreamSegment::load_mps_from_binary(const char* filename, const int* bond_dims) {
-    std::ifstream file(filename, std::ios::binary);
-    if (!file) {
-        printf("[Stream %d] ERROR: Cannot open MPS file %s\\n", id_, filename);
-        return false;
-    }
-
-    std::vector<std::vector<std::complex<double>>> all_tensors(chain_length_);
-    for (int i = 0; i < chain_length_; i++) {
-        int chi_L = bond_dims[i];
-        int chi_R = bond_dims[i + 1];
-        size_t size = chi_L * d_ * chi_R;
-        all_tensors[i].resize(size);
-        file.read(reinterpret_cast<char*>(all_tensors[i].data()),
-                  size * sizeof(std::complex<double>));
-        if (!file) {
-            printf("[Stream %d] ERROR: Failed to read MPS tensor %d\\n", id_, i);
-            return false;
-        }
-    }
-    file.close();
-
-    printf("[Stream %d] Loading MPS tensors from %s for sites %d-%d\\n",
-           id_, filename, start_site_, end_site_);
-
-    for (int local_idx = 0; local_idx < num_sites_; local_idx++) {
-        int global_site = start_site_ + local_idx;
-        int chi_L = bond_dims[global_site];
-        int chi_R = bond_dims[global_site + 1];
-        size_t size = chi_L * d_ * chi_R;
-
-        const auto& tensor_data = all_tensors[global_site];
-        std::vector<double> real_data(size);
-        for (size_t j = 0; j < size; j++) {
-            real_data[j] = tensor_data[j].real();
-        }
-
-        double* d_tensor = d_mps_tensors_[local_idx];
-        hipMemcpyAsync(d_tensor, real_data.data(), size * sizeof(double),
-                      hipMemcpyHostToDevice, stream_);
-
-    }
-
-    hipStreamSynchronize(stream_);
-    printf("[Stream %d] Successfully loaded %d MPS tensors\\n", id_, num_sites_);
-    // Initialize all environments to identity
-    // BUG FIX: Do not initialize to identity for loaded MPS
-    //     build_environments_from_mps();
-
-    // Compute environments from loaded MPS
-    // This is needed because we loaded an MPS with specific tensor values
-    // and the environments must match those values
-    printf("[Stream %d] Computing environments from loaded MPS...\n", id_);
-    
-    // Initialize boundary environments to identity
-    // L_env[0] at left boundary
-    {
-        int chi_L = 1;
-        size_t size_L = D_mpo_ * chi_L * chi_L;
-        std::vector<double> h_L_env(size_L, 0.0);
-        h_L_env[0] = 1.0;  // Identity at (w=0, a=0, a=0)
-        hipMemcpyAsync(d_L_envs_[0], h_L_env.data(),
-                      size_L * sizeof(double), hipMemcpyHostToDevice, stream_);
-    }
-    
-    // R_env[num_sites_] at right boundary  
-    {
-        int chi_R = 1;
-        size_t size_R = D_mpo_ * chi_R * chi_R;
-        std::vector<double> h_R_env(size_R, 0.0);
-        h_R_env[0] = 1.0;  // Identity at (w=0, b=0, b=0)
-        hipMemcpyAsync(d_R_envs_[num_sites_], h_R_env.data(),
-                      size_R * sizeof(double), hipMemcpyHostToDevice, stream_);
-    }
-    
-    hipStreamSynchronize(stream_);
-    printf("[Stream %d] Boundary environments initialized\n", id_);
-    
-    // TODO: Compute interior environments by contracting MPS/MPO tensors
-    // For now, use identity for interior environments (will be rebuilt during sweeps)
-    for (int i = 1; i < num_sites_; i++) {
-        int chi = (i <= num_sites_/2) ? mps_chi_right_[i-1] : mps_chi_left_[i];
-        
-        // L_env[i]
-        {
-            size_t size_L = D_mpo_ * chi * chi;
-            std::vector<double> h_L_env(size_L, 0.0);
-            for (int a = 0; a < chi; a++) {
-                h_L_env[0 + a * D_mpo_ + a * D_mpo_ * chi] = 1.0;
-            }
-            hipMemcpyAsync(d_L_envs_[i], h_L_env.data(),
-                          size_L * sizeof(double), hipMemcpyHostToDevice, stream_);
-        }
-        
-        // R_env[i]
-        {
-            size_t size_R = D_mpo_ * chi * chi;
-            std::vector<double> h_R_env(size_R, 0.0);
-            for (int b = 0; b < chi; b++) {
-                h_R_env[0 + b * D_mpo_ + b * D_mpo_ * chi] = 1.0;
-            }
-            hipMemcpyAsync(d_R_envs_[i], h_R_env.data(),
-                          size_R * sizeof(double), hipMemcpyHostToDevice, stream_);
-        }
-    }
-    
-    hipStreamSynchronize(stream_);
-    printf("[Stream %d] All environments initialized (interior=identity, will be rebuilt)\n", id_);
-    return true;
-}
-
-void StreamSegment::build_environments_from_mps() {
-    // Build all environments from loaded MPS tensors
-    // This is critical for computing correct energy after MPS loading
-
-    printf("[Stream %d] Building environments from MPS\\n", id_);
-
-    // 1. Initialize boundary environments
-    // L_envs[0]: left boundary (no sites to left)
-    {
-        int chi_L = mps_chi_left_[0];  // Should be 1
-        size_t size_L = D_mpo_ * chi_L * chi_L;
-        std::vector<double> h_L_env(size_L, 0.0);
-        h_L_env[0] = 1.0;  // Identity at (w=0, a=0, a=0)
-        HIP_CHECK(hipMemcpy(d_L_envs_[0], h_L_env.data(),
-                           size_L * sizeof(double), hipMemcpyHostToDevice));
-    }
-
-    // R_envs[num_sites]: right boundary (no sites to right)
-    {
-        int chi_R = mps_chi_right_[num_sites_ - 1];  // Should be 1
-        size_t size_R = D_mpo_ * chi_R * chi_R;
-        std::vector<double> h_R_env(size_R, 0.0);
-        h_R_env[0] = 1.0;  // Identity at (w=0, b=0, b=0)
-        HIP_CHECK(hipMemcpy(d_R_envs_[num_sites_], h_R_env.data(),
-                           size_R * sizeof(double), hipMemcpyHostToDevice));
-    }
-
-    // 2. Build L_envs left-to-right
-    // L_envs[i+1] = contract(L_envs[i], A[i], W[i], A*[i])
-    for (int i = 0; i < num_sites_ - 1; i++) {
-        int chi_L = mps_chi_left_[i];
-        int chi_R = mps_chi_right_[i];
-
-        double* d_L_in = d_L_envs_[i];
-        double* d_L_out = d_L_envs_[i + 1];
-        double* d_A = d_mps_tensors_[i];
-        double* d_W = d_mpo_tensors_[i];
-
-        // Allocate temp buffers
-        size_t temp_size = D_mpo_ * chi_L * d_ * chi_R;
-        double* d_temp1;
-        double* d_temp2;
-        HIP_CHECK(hipMalloc(&d_temp1, temp_size * sizeof(double)));
-        HIP_CHECK(hipMalloc(&d_temp2, temp_size * sizeof(double)));
-
-        // 3-step contraction (same as rebuild_right_boundary_env)
-        // Step 1: temp1[w, a', s, b] = sum_a L[a, w, a'] * A[a, s, b]
-        {
-            int64_t extentL[] = {(int64_t)chi_L, (int64_t)D_mpo_, (int64_t)chi_L};
-            int64_t extentA[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R};
-            int64_t extent_temp1[] = {(int64_t)D_mpo_, (int64_t)chi_L, (int64_t)d_, (int64_t)chi_R};
-
-            int32_t modesL[] = {0, 1, 2};
-            int32_t modesA[] = {0, 3, 4};
-            int32_t modes_temp1[] = {1, 2, 3, 4};
-
-            hiptensor_contract(d_L_in, 3, extentL, modesL,
-                             d_A, 3, extentA, modesA,
-                             d_temp1, 4, extent_temp1, modes_temp1,
-                             1.0, 0.0);
-        }
-
-        // Step 2: temp2[a', s', b, wp] = sum_{w,s} temp1[w, a', s, b] * W[w, s, s', wp]
-        {
-            int64_t extent_temp1[] = {(int64_t)D_mpo_, (int64_t)chi_L, (int64_t)d_, (int64_t)chi_R};
-            int64_t extentW[] = {(int64_t)D_mpo_, (int64_t)d_, (int64_t)d_, (int64_t)D_mpo_};
-            int64_t extent_temp2[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R, (int64_t)D_mpo_};
-
-            int32_t modes_temp1[] = {0, 1, 2, 3};
-            int32_t modesW[] = {0, 2, 4, 5};
-            int32_t modes_temp2[] = {1, 4, 3, 5};
-
-            hiptensor_contract(d_temp1, 4, extent_temp1, modes_temp1,
-                             d_W, 4, extentW, modesW,
-                             d_temp2, 4, extent_temp2, modes_temp2,
-                             1.0, 0.0);
-        }
-
-        // Step 3: L_new[b, wp, b'] = sum_{a',s'} temp2[a', s', b, wp] * A*[a', s', b']
-        {
-            int64_t extent_temp2[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R, (int64_t)D_mpo_};
-            int64_t extentA[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R};
-            int64_t extent_L_new[] = {(int64_t)chi_R, (int64_t)D_mpo_, (int64_t)chi_R};
-
-            int32_t modes_temp2[] = {0, 1, 2, 3};
-            int32_t modesA[] = {0, 1, 4};
-            int32_t modes_L_new[] = {2, 3, 4};
-
-            hiptensor_contract(d_temp2, 4, extent_temp2, modes_temp2,
-                             d_A, 3, extentA, modesA,
-                             d_L_out, 3, extent_L_new, modes_L_new,
-                             1.0, 0.0);
-        }
-
-        HIP_CHECK(hipFree(d_temp1));
-        HIP_CHECK(hipFree(d_temp2));
-    }
-
-    // 3. Build R_envs right-to-left
-    // R_envs[i] = contract(A[i+1], W[i+1], A*[i+1], R_envs[i+1])
-    for (int i = num_sites_ - 2; i >= 0; i--) {
-        int chi_L = mps_chi_left_[i + 1];
-        int chi_R = mps_chi_right_[i + 1];
-
-        double* d_R_in = d_R_envs_[i + 1];
-        double* d_R_out = d_R_envs_[i];
-        double* d_A = d_mps_tensors_[i + 1];
-        double* d_W = d_mpo_tensors_[i + 1];
-
-        // Allocate temp buffers
-        size_t temp_size = D_mpo_ * chi_L * d_ * chi_R;
-        double* d_temp1;
-        double* d_temp2;
-        HIP_CHECK(hipMalloc(&d_temp1, temp_size * sizeof(double)));
-        HIP_CHECK(hipMalloc(&d_temp2, temp_size * sizeof(double)));
-
-        // 3-step contraction (similar pattern but reversed)
-        // Step 1: temp1[a, s, w', b'] = sum_b A[a, s, b] * R[b, w', b']
-        {
-            int64_t extentA[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R};
-            int64_t extentR[] = {(int64_t)chi_R, (int64_t)D_mpo_, (int64_t)chi_R};
-            int64_t extent_temp1[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)D_mpo_, (int64_t)chi_R};
-
-            int32_t modesA[] = {0, 1, 2};
-            int32_t modesR[] = {2, 3, 4};
-            int32_t modes_temp1[] = {0, 1, 3, 4};
-
-            hiptensor_contract(d_A, 3, extentA, modesA,
-                             d_R_in, 3, extentR, modesR,
-                             d_temp1, 4, extent_temp1, modes_temp1,
-                             1.0, 0.0);
-        }
-
-        // Step 2: temp2[a, w, s', b'] = sum_{s,w'} temp1[a, s, w', b'] * W[w, s, s', w']
-        {
-            int64_t extent_temp1[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)D_mpo_, (int64_t)chi_R};
-            int64_t extentW[] = {(int64_t)D_mpo_, (int64_t)d_, (int64_t)d_, (int64_t)D_mpo_};
-            int64_t extent_temp2[] = {(int64_t)chi_L, (int64_t)D_mpo_, (int64_t)d_, (int64_t)chi_R};
-
-            int32_t modes_temp1[] = {0, 1, 2, 3};
-            int32_t modesW[] = {4, 1, 5, 2};
-            int32_t modes_temp2[] = {0, 4, 5, 3};
-
-            hiptensor_contract(d_temp1, 4, extent_temp1, modes_temp1,
-                             d_W, 4, extentW, modesW,
-                             d_temp2, 4, extent_temp2, modes_temp2,
-                             1.0, 0.0);
-        }
-
-        // Step 3: R_new[a, w, a'] = sum_{s',b'} temp2[a, w, s', b'] * A*[a', s', b']
-        {
-            int64_t extent_temp2[] = {(int64_t)chi_L, (int64_t)D_mpo_, (int64_t)d_, (int64_t)chi_R};
-            int64_t extentA[] = {(int64_t)chi_L, (int64_t)d_, (int64_t)chi_R};
-            int64_t extent_R_new[] = {(int64_t)chi_L, (int64_t)D_mpo_, (int64_t)chi_L};
-
-            int32_t modes_temp2[] = {0, 1, 2, 3};
-            int32_t modesA[] = {4, 2, 3};
-            int32_t modes_R_new[] = {0, 1, 4};
-
-            hiptensor_contract(d_temp2, 4, extent_temp2, modes_temp2,
-                             d_A, 3, extentA, modesA,
-                             d_R_out, 3, extent_R_new, modes_R_new,
-                             1.0, 0.0);
-        }
-
-        HIP_CHECK(hipFree(d_temp1));
-        HIP_CHECK(hipFree(d_temp2));
-    }
-
-    hipStreamSynchronize(stream_);
-    printf("[Stream %d] All environments built from MPS\\n", id_);
 }
