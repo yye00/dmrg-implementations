@@ -169,7 +169,9 @@ StreamSegment::StreamSegment(int segment_id, int start_site, int end_site,
 
     // Initialize MPS and environments
     initialize_mps();
-    build_environments_from_mps();
+    // MOVED: Call after both MPS and MPO loaded - see coordinator.build_all_environments()
+    //     // MOVED: Call after both MPS and MPO loaded
+    //     build_environments_from_mps();
 
     // Allocate tau workspace for QR/LQ (max size needed)
     tau_size_ = chi_max_;
@@ -1205,7 +1207,7 @@ void StreamSegment::build_environments_from_mps() {
     // 1. Initialize boundary environments
     // L_envs[0]: left boundary (no sites to left)
     {
-        int chi_L = mps_chi_left_[0];  // Should be 1
+        int chi_L = 1;  // Left boundary
         size_t size_L = D_mpo_ * chi_L * chi_L;
         std::vector<double> h_L_env(size_L, 0.0);
         h_L_env[0] = 1.0;  // Identity at (w=0, a=0, a=0)
@@ -1215,8 +1217,9 @@ void StreamSegment::build_environments_from_mps() {
 
     // R_envs[num_sites]: right boundary (no sites to right)
     {
-        int chi_R = mps_chi_right_[num_sites_ - 1];  // Should be 1
+        int chi_R = 1;  // Right boundary
         size_t size_R = D_mpo_ * chi_R * chi_R;
+        printf("[Stream %d] R boundary: num_sites_=%d, chi_R=%d, size_R=%zu, ptr=%p\n", id_, num_sites_, chi_R, size_R, (void*)d_R_envs_[num_sites_]);
         std::vector<double> h_R_env(size_R, 0.0);
         h_R_env[0] = 1.0;  // Identity at (w=0, b=0, b=0)
         HIP_CHECK(hipMemcpy(d_R_envs_[num_sites_], h_R_env.data(),

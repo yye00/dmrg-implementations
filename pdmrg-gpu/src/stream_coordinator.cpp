@@ -430,3 +430,14 @@ bool StreamCoordinator::load_mps_from_binary(const char* filename) {
     }
     return true;
 }
+
+void StreamCoordinator::build_all_environments() {
+    printf("StreamCoordinator: Building environments from loaded MPS...\n");
+    
+    for (int i = 0; i < n_streams_; i++) {
+        segments_[i]->build_environments_from_mps();
+    }
+    
+    printf("StreamCoordinator: ✓ All environments built\n");
+}
+

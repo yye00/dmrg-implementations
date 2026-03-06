@@ -79,6 +79,7 @@ public:
      * @return true on success, false on failure
      */
     bool load_mps_from_binary(const char* filename);
+    void build_all_environments();  // Build environments after MPS+MPO loaded
 
 private:
     // Configuration

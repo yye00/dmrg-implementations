@@ -68,6 +68,16 @@ int main(int argc, char** argv) {
             return 1;
         }
         std::cout << "✓ MPS loaded" << std::endl;
+    
+    // Build environments now that both MPS and MPO are loaded
+    std::cout << "Building environments from MPS..." << std::endl;
+    coordinator.build_all_environments();
+    std::cout << "✓ Environments built" << std::endl;
+        
+        // Build environments now that both MPS and MPO are loaded
+        std::cout << "Building environments from MPS..." << std::endl;
+        coordinator.build_all_environments();
+        std::cout << "✓ Environments built" << std::endl;
         std::cout << "✓ Initialization complete\n" << std::endl;
 
         // Run multiple DMRG iterations

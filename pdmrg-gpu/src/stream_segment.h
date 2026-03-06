@@ -128,6 +128,7 @@ public:
      * Rebuild R_env at left boundary for merge with left neighbor
      */
     void rebuild_left_boundary_env();
+    void build_environments_from_mps();  // Build all envs from loaded MPS
     
     /**
      * Load MPS from binary file
@@ -258,7 +259,6 @@ private:
      * Initialize environments for local sweeps
      */
     void initialize_environments();
-    void build_environments_from_mps();  // Build envs from loaded MPS
 
     /**
      * Allocate memory for all tensors
