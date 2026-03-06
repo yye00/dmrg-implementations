@@ -891,7 +891,7 @@ def main():
     parser.add_argument('--warmup-dim', type=int, default=50)
     parser.add_argument('--warmup-sweeps', type=int, default=5)
     parser.add_argument('--sweeps', type=int, default=20)
-    parser.add_argument('--tol', type=float, default=1e-8)
+    parser.add_argument('--tol', type=float, default=1e-10)
     parser.add_argument('--model', type=str, default='heisenberg',
                         choices=['heisenberg', 'josephson', 'random_tfim'])
     parser.add_argument('--dtype', type=str, default='float64',

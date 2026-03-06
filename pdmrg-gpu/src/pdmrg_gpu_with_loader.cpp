@@ -398,7 +398,6 @@ private:
     std::vector<Complex*> d_right_env;
     std::vector<int> mps_dims;
     rocblas_handle rb_handle;
-    HipTensorContractor* ht_heff;  // For GPU H_eff computation
     HipTensorContractor* ht_contractor;
 
 public:
@@ -864,7 +863,6 @@ private:
     MPOBase* mpo;
     Environments* envs;
     rocblas_handle rb_handle;
-    HipTensorContractor* ht_heff;  // For GPU H_eff computation
 
     std::vector<int> bond_dims;
     std::vector<Complex*> d_mps;
@@ -876,13 +874,20 @@ private:
     double time_init, time_sweeps, time_energy_eval;
     std::vector<double> sweep_times;
 
+    // Detailed GPU timing breakdown
+    double time_h2d_total;      // Host to Device transfers
+    double time_d2h_total;      // Device to Host transfers
+    double time_gpu_compute;    // GPU kernels (gemm, lanczos)
+    double time_cpu_compute;    // CPU work (contractions, SVD)
+
 public:
     PDMRG_GPU(MPOBase* mpo_in, int max_bond, int sweeps, int num_streams,
-              const std::string& model, bool debug = false)
+              const std::string& model, bool debug = false, int seed = 42)
         : mpo(mpo_in), max_D(max_bond), n_sweeps(sweeps),
           n_streams(num_streams), envs(nullptr), current_energy(0.0),
           model_name(model),
           time_init(0), time_sweeps(0), time_energy_eval(0),
+          time_h2d_total(0), time_d2h_total(0), time_gpu_compute(0), time_cpu_compute(0),
           verbose_debug(debug)
     {
         L = mpo->get_length();
@@ -900,7 +905,6 @@ public:
         std::cout << "Sweeps = " << n_sweeps << ", Streams = " << n_streams << "\n\n";
 
         rocblas_create_handle(&rb_handle);
-        ht_heff = new HipTensorContractor();
 
         bond_dims.resize(L + 1);
         bond_dims[0] = 1;
@@ -919,7 +923,7 @@ public:
 
         // Initialize MPS with random tensors (complex for Josephson, real for Heisenberg)
         bool complex_model = (model_name != "heisenberg");
-        srand(42);
+        srand(seed);
         d_mps.resize(L);
         for (int i = 0; i < L; i++) {
             int size = bond_dims[i] * d * bond_dims[i + 1];
@@ -949,11 +953,12 @@ public:
     // NEW: Constructor for loaded MPS/MPO from binary files
     PDMRG_GPU(const std::vector<MPSTensor>& mps_loaded, MPOBase* mpo_in,
               int max_bond, int sweeps, int num_streams,
-              const std::string& model, bool debug = false)
+              const std::string& model, bool debug = false, int seed = 42)
         : mpo(mpo_in), max_D(max_bond), n_sweeps(sweeps),
           n_streams(num_streams), envs(nullptr), current_energy(0.0),
           model_name(model),
           time_init(0), time_sweeps(0), time_energy_eval(0),
+          time_h2d_total(0), time_d2h_total(0), time_gpu_compute(0), time_cpu_compute(0),
           verbose_debug(debug)
     {
         L = mpo->get_length();
@@ -972,7 +977,6 @@ public:
         std::cout << "MPS initialization: LOADED FROM FILE\n\n";
 
         rocblas_create_handle(&rb_handle);
-        ht_heff = new HipTensorContractor();
 
         // Extract bond dimensions from loaded MPS
         bond_dims.resize(L + 1);
@@ -1019,7 +1023,6 @@ public:
     }
 
     ~PDMRG_GPU() {
-        if (ht_heff) delete ht_heff;
         delete envs;
         for (auto& p : d_mps) if (p) HIP_CHECK(hipFree(p));
         rocblas_destroy_handle(rb_handle);
@@ -1115,7 +1118,7 @@ public:
         std::cout << "Running PDMRG sweeps (streams=" << n_streams << ")...\n\n";
 
         double E_prev = 0.0;
-        double tol = 1e-12;  // convergence tolerance
+        double tol = 1e-10;  // convergence tolerance
 
         for (int sweep = 0; sweep < n_sweeps; sweep++) {
             Timer t_sweep;
@@ -1179,7 +1182,21 @@ public:
             double avg = std::accumulate(sweep_times.begin(), sweep_times.end(), 0.0) / sweep_times.size();
             std::cout << "Avg sweep:   " << avg << "s (" << sweep_times.size() << " sweeps)\n";
         }
-        std::cout << "Final E: " << std::fixed << std::setprecision(12) << current_energy << "\n";
+        std::cout << "\n--- Detailed Timing Breakdown ---\n";
+        std::cout << "GPU compute:  " << std::fixed << std::setprecision(4) << time_gpu_compute << "s ("
+                  << std::setprecision(1) << (time_gpu_compute/time_sweeps*100) << "%)\n";
+        std::cout << "CPU compute:  " << time_cpu_compute << "s ("
+                  << (time_cpu_compute/time_sweeps*100) << "%)\n";
+        std::cout << "Host→Device:  " << time_h2d_total << "s ("
+                  << (time_h2d_total/time_sweeps*100) << "%)\n";
+        std::cout << "Device→Host:  " << time_d2h_total << "s ("
+                  << (time_d2h_total/time_sweeps*100) << "%)\n";
+        double accounted = time_gpu_compute + time_cpu_compute + time_h2d_total + time_d2h_total;
+        double overhead = time_sweeps - accounted;
+        std::cout << "Other:        " << overhead << "s ("
+                  << (overhead/time_sweeps*100) << "%)\n";
+        std::cout << "Total:        " << time_sweeps << "s\n";
+        std::cout << "\nFinal E: " << std::fixed << std::setprecision(12) << current_energy << "\n";
         std::cout << "========================================\n";
 
         return current_energy;
@@ -1306,6 +1323,9 @@ private:
         Complex alpha = make_complex(1.0, 0.0);
         Complex beta_z = make_complex(0.0, 0.0);
 
+        // Time: GPU gemm for forming two-site tensor
+        Timer t_gpu;
+        t_gpu.tic();
         // row-major: A[site](D_L*d, D_M) * A[site+1](D_M, d*D_R)
         // col-major: A[site+1]^T(d*D_R, D_M) * A[site]^T(D_M, D_L*d)
         rocblas_zgemm(rb_handle, rocblas_operation_none, rocblas_operation_none,
@@ -1324,6 +1344,7 @@ private:
         // 30 iterations is sufficient for both Heisenberg (d=2) and Josephson (d=5)
         LanczosEigensolver solver(rb_handle, 30, 1e-10);
         double energy = solver.solve(apply_H_eff, psi_size, d_theta);
+        time_gpu_compute += t_gpu.toc();
 
         if (verbose_debug) {
             // Verify: compute <theta|H|theta> / <theta|theta> directly
@@ -1352,7 +1373,9 @@ private:
         return energy;
     }
 
-        // GPU-native H_eff using hipTensor contractions (NO CPU LOOPS)
+    // Apply H_eff via CPU-based contraction (proven correct for both Heisenberg and Josephson)
+    // Downloads L, R, W1, W2, theta to host, performs 4-step contraction, uploads result.
+    //
     // result[ap, s1p, s2p, bp] = sum_{a, s1, s2, b, w, wm, wr}
     //   L[a, w, ap] * W1[w, s1, s1p, wm] * W2[wm, s2, s2p, wr] * R[b, wr, bp] * theta[a, s1, s2, b]
     void apply_H_eff_with_environments(const Complex* d_theta_in, Complex* d_theta_out, int site) {
@@ -1361,92 +1384,133 @@ private:
         int D_mpo_L = mpo->get_left_dim(site);
         int D_mpo_M = mpo->get_right_dim(site);
         int D_mpo_R = mpo->get_right_dim(site + 1);
+
         int psi_size = D_L * d * d * D_R;
 
-        // Step 1: T1[w,ap,s1,s2,b] = sum_a L[a,w,ap] * theta[a,s1,s2,b]
+        // Download everything to CPU for exact contraction
+        int L_size = D_L * D_mpo_L * D_L;
+        int R_size = D_R * D_mpo_R * D_R;
+        int W1_size = D_mpo_L * d * d * D_mpo_M;
+        int W2_size = D_mpo_M * d * d * D_mpo_R;
+
+        std::vector<Complex> hL(L_size), hR(R_size), hW1(W1_size), hW2(W2_size), hTheta(psi_size);
+
+        // Time: Device to Host transfers
+        Timer t_d2h;
+        t_d2h.tic();
+        HIP_CHECK(hipMemcpy(hL.data(), envs->get_left(site), L_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hR.data(), envs->get_right(site + 2), R_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hW1.data(), mpo->get_mpo(site), W1_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hW2.data(), mpo->get_mpo(site + 1), W2_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(hTheta.data(), d_theta_in, psi_size * sizeof(Complex), hipMemcpyDeviceToHost));
+        time_d2h_total += t_d2h.toc();
+
+        std::vector<Complex> hResult(psi_size, make_complex(0.0, 0.0));
+
+        // Time: CPU tensor contraction
+        Timer t_cpu;
+        t_cpu.tic();
+
+        // Step 1: T1[w, ap, s1, s2, b] = sum_a L[a, w, ap] * theta[a, s1, s2, b]
         int T1_size = D_mpo_L * D_L * d * d * D_R;
-        Complex* d_T1;
-        HIP_CHECK(hipMalloc(&d_T1, T1_size * sizeof(Complex)));
+        std::vector<Complex> hT1(T1_size, make_complex(0.0, 0.0));
 
-        {
-            int64_t extL[] = {(int64_t)D_L, (int64_t)D_mpo_L, (int64_t)D_L};
-            int64_t extTheta[] = {(int64_t)D_R, (int64_t)d, (int64_t)d, (int64_t)D_L};
-            int64_t extT1[] = {(int64_t)D_R, (int64_t)d, (int64_t)d, (int64_t)D_L, (int64_t)D_mpo_L};
-            int32_t modesL[] = {2, 1, 0};    // col-major order: (ap, w, a)
-            int32_t modesTheta[] = {5, 4, 3, 0}; // col-major order: (b, s2, s1, a)
-            int32_t modesT1[] = {5, 4, 3, 2, 1}; // col-major order: (b, s2, s1, ap, w)
-            hipDoubleComplex alpha_v = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta_v = make_hipDoubleComplex(0.0, 0.0);
-            ht_heff->contract(
-                envs->get_left(site), 3, extL, modesL, HIPTENSOR_OP_IDENTITY,
-                d_theta_in, 4, extTheta, modesTheta, HIPTENSOR_OP_IDENTITY,
-                d_T1, 5, extT1, modesT1, alpha_v, beta_v, 0);
+        for (int w = 0; w < D_mpo_L; w++) {
+            for (int ap = 0; ap < D_L; ap++) {
+                for (int s1 = 0; s1 < d; s1++) {
+                    for (int s2 = 0; s2 < d; s2++) {
+                        for (int b = 0; b < D_R; b++) {
+                            Complex sum = make_complex(0.0, 0.0);
+                            for (int a = 0; a < D_L; a++) {
+                                Complex Lv = hL[a * (D_mpo_L * D_L) + w * D_L + ap];
+                                Complex tv = hTheta[a * (d * d * D_R) + s1 * (d * D_R) + s2 * D_R + b];
+                                sum.x += Lv.x * tv.x - Lv.y * tv.y;
+                                sum.y += Lv.x * tv.y + Lv.y * tv.x;
+                            }
+                            hT1[w * (D_L * d * d * D_R) + ap * (d * d * D_R) + s1 * (d * D_R) + s2 * D_R + b] = sum;
+                        }
+                    }
+                }
+            }
         }
 
-        // Step 2: T2[wm,ap,s1p,s2,b] = sum_{w,s1} W1[w,s1,s1p,wm] * T1[w,ap,s1,s2,b]
+        // Step 2: T2[wm, ap, s1p, s2, b] = sum_{w, s1} W1[w, s1, s1p, wm] * T1[w, ap, s1, s2, b]
         int T2_size = D_mpo_M * D_L * d * d * D_R;
-        Complex* d_T2;
-        HIP_CHECK(hipMalloc(&d_T2, T2_size * sizeof(Complex)));
+        std::vector<Complex> hT2(T2_size, make_complex(0.0, 0.0));
 
-        {
-            int64_t extT1[] = {(int64_t)D_R, (int64_t)d, (int64_t)d, (int64_t)D_L, (int64_t)D_mpo_L};
-            int64_t extW1[] = {(int64_t)D_mpo_M, (int64_t)d, (int64_t)d, (int64_t)D_mpo_L};
-            int64_t extT2[] = {(int64_t)D_R, (int64_t)d, (int64_t)d, (int64_t)D_L, (int64_t)D_mpo_M};
-            int32_t modesT1_2[] = {5, 4, 3, 2, 1};         // (b, s2, s1, ap, w)
-            int32_t modesW1[] = {7, 6, 3, 1};               // (wm, s1p, s1, w)
-            int32_t modesT2[] = {5, 4, 6, 2, 7};            // (b, s2, s1p, ap, wm)
-            hipDoubleComplex alpha_v = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta_v = make_hipDoubleComplex(0.0, 0.0);
-            ht_heff->contract(
-                d_T1, 5, extT1, modesT1_2, HIPTENSOR_OP_IDENTITY,
-                mpo->get_mpo(site), 4, extW1, modesW1, HIPTENSOR_OP_IDENTITY,
-                d_T2, 5, extT2, modesT2, alpha_v, beta_v, 0);
+        for (int wm = 0; wm < D_mpo_M; wm++) {
+            for (int ap = 0; ap < D_L; ap++) {
+                for (int s1p = 0; s1p < d; s1p++) {
+                    for (int s2 = 0; s2 < d; s2++) {
+                        for (int b = 0; b < D_R; b++) {
+                            Complex sum = make_complex(0.0, 0.0);
+                            for (int w = 0; w < D_mpo_L; w++) {
+                                for (int s1 = 0; s1 < d; s1++) {
+                                    Complex Wv = hW1[w * (d * d * D_mpo_M) + s1 * (d * D_mpo_M) + s1p * D_mpo_M + wm];
+                                    Complex T1v = hT1[w * (D_L * d * d * D_R) + ap * (d * d * D_R) + s1 * (d * D_R) + s2 * D_R + b];
+                                    sum.x += Wv.x * T1v.x - Wv.y * T1v.y;
+                                    sum.y += Wv.x * T1v.y + Wv.y * T1v.x;
+                                }
+                            }
+                            hT2[wm * (D_L * d * d * D_R) + ap * (d * d * D_R) + s1p * (d * D_R) + s2 * D_R + b] = sum;
+                        }
+                    }
+                }
+            }
         }
 
-        HIP_CHECK(hipFree(d_T1));
-
-        // Step 3: T3[ap,s1p,s2p,wr,b] = sum_{wm,s2} W2[wm,s2,s2p,wr] * T2[wm,ap,s1p,s2,b]
+        // Step 3: T3[ap, s1p, s2p, wr, b] = sum_{wm, s2} W2[wm, s2, s2p, wr] * T2[wm, ap, s1p, s2, b]
         int T3_size = D_L * d * d * D_mpo_R * D_R;
-        Complex* d_T3;
-        HIP_CHECK(hipMalloc(&d_T3, T3_size * sizeof(Complex)));
+        std::vector<Complex> hT3(T3_size, make_complex(0.0, 0.0));
 
-        {
-            int64_t extT2[] = {(int64_t)D_R, (int64_t)d, (int64_t)d, (int64_t)D_L, (int64_t)D_mpo_M};
-            int64_t extW2[] = {(int64_t)D_mpo_R, (int64_t)d, (int64_t)d, (int64_t)D_mpo_M};
-            int64_t extT3[] = {(int64_t)D_R, (int64_t)D_mpo_R, (int64_t)d, (int64_t)d, (int64_t)D_L};
-            int32_t modesT2_2[] = {5, 4, 6, 2, 7};          // (b, s2, s1p, ap, wm)
-            int32_t modesW2[] = {9, 8, 4, 7};               // (wr, s2p, s2, wm)
-            int32_t modesT3[] = {5, 9, 8, 6, 2};            // (b, wr, s2p, s1p, ap)
-            hipDoubleComplex alpha_v = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta_v = make_hipDoubleComplex(0.0, 0.0);
-            ht_heff->contract(
-                d_T2, 5, extT2, modesT2_2, HIPTENSOR_OP_IDENTITY,
-                mpo->get_mpo(site + 1), 4, extW2, modesW2, HIPTENSOR_OP_IDENTITY,
-                d_T3, 5, extT3, modesT3, alpha_v, beta_v, 0);
+        for (int ap = 0; ap < D_L; ap++) {
+            for (int s1p = 0; s1p < d; s1p++) {
+                for (int s2p = 0; s2p < d; s2p++) {
+                    for (int wr = 0; wr < D_mpo_R; wr++) {
+                        for (int b = 0; b < D_R; b++) {
+                            Complex sum = make_complex(0.0, 0.0);
+                            for (int wm = 0; wm < D_mpo_M; wm++) {
+                                for (int s2 = 0; s2 < d; s2++) {
+                                    Complex Wv = hW2[wm * (d * d * D_mpo_R) + s2 * (d * D_mpo_R) + s2p * D_mpo_R + wr];
+                                    Complex T2v = hT2[wm * (D_L * d * d * D_R) + ap * (d * d * D_R) + s1p * (d * D_R) + s2 * D_R + b];
+                                    sum.x += Wv.x * T2v.x - Wv.y * T2v.y;
+                                    sum.y += Wv.x * T2v.y + Wv.y * T2v.x;
+                                }
+                            }
+                            hT3[ap * (d * d * D_mpo_R * D_R) + s1p * (d * D_mpo_R * D_R) + s2p * (D_mpo_R * D_R) + wr * D_R + b] = sum;
+                        }
+                    }
+                }
+            }
         }
 
-        HIP_CHECK(hipFree(d_T2));
-
-        // Step 4: result[ap,s1p,s2p,bp] = sum_{wr,b} R[b,wr,bp] * T3[ap,s1p,s2p,wr,b]
-        {
-            int64_t extT3[] = {(int64_t)D_R, (int64_t)D_mpo_R, (int64_t)d, (int64_t)d, (int64_t)D_L};
-            int64_t extR[] = {(int64_t)D_R, (int64_t)D_mpo_R, (int64_t)D_R};
-            int64_t extResult[] = {(int64_t)D_R, (int64_t)d, (int64_t)d, (int64_t)D_L};
-            int32_t modesT3_2[] = {5, 9, 8, 6, 2};          // (b, wr, s2p, s1p, ap)
-            int32_t modesR[] = {10, 9, 5};                   // (bp, wr, b)
-            int32_t modesResult[] = {10, 8, 6, 2};           // (bp, s2p, s1p, ap)
-            hipDoubleComplex alpha_v = make_hipDoubleComplex(1.0, 0.0);
-            hipDoubleComplex beta_v = make_hipDoubleComplex(0.0, 0.0);
-            ht_heff->contract(
-                d_T3, 5, extT3, modesT3_2, HIPTENSOR_OP_IDENTITY,
-                envs->get_right(site + 2), 3, extR, modesR, HIPTENSOR_OP_IDENTITY,
-                d_theta_out, 4, extResult, modesResult, alpha_v, beta_v, 0);
+        // Step 4: result[ap, s1p, s2p, bp] = sum_{wr, b} R[b, wr, bp] * T3[ap, s1p, s2p, wr, b]
+        for (int ap = 0; ap < D_L; ap++) {
+            for (int s1p = 0; s1p < d; s1p++) {
+                for (int s2p = 0; s2p < d; s2p++) {
+                    for (int bp = 0; bp < D_R; bp++) {
+                        Complex sum = make_complex(0.0, 0.0);
+                        for (int b = 0; b < D_R; b++) {
+                            for (int wr = 0; wr < D_mpo_R; wr++) {
+                                Complex Rv = hR[b * (D_mpo_R * D_R) + wr * D_R + bp];
+                                Complex T3v = hT3[ap * (d * d * D_mpo_R * D_R) + s1p * (d * D_mpo_R * D_R) + s2p * (D_mpo_R * D_R) + wr * D_R + b];
+                                sum.x += Rv.x * T3v.x - Rv.y * T3v.y;
+                                sum.y += Rv.x * T3v.y + Rv.y * T3v.x;
+                            }
+                        }
+                        hResult[ap * (d * d * D_R) + s1p * (d * D_R) + s2p * D_R + bp] = sum;
+                    }
+                }
+            }
         }
+        time_cpu_compute += t_cpu.toc();
 
-        HIP_CHECK(hipFree(d_T3));
+        // Time: Host to Device transfer
+        Timer t_h2d;
+        t_h2d.tic();
+        HIP_CHECK(hipMemcpy(d_theta_out, hResult.data(), psi_size * sizeof(Complex), hipMemcpyHostToDevice));
+        time_h2d_total += t_h2d.toc();
     }
-
-
 
     // SVD to split optimized 2-site wavefunction (from working dmrg_with_environments.cpp)
     void update_mps_with_svd(int site, Complex* d_theta, bool move_right) {
@@ -1479,6 +1543,9 @@ private:
         HIP_CHECK(hipMalloc(&d_theta_copy, m_col * n_col * sizeof(Complex)));
         HIP_CHECK(hipMemcpy(d_theta_copy, d_theta, m_col * n_col * sizeof(Complex), hipMemcpyDeviceToDevice));
 
+        // Time: GPU SVD computation
+        Timer t_svd;
+        t_svd.tic();
         rocsolver_zgesvd(rb_handle,
                         rocblas_svect_singular, rocblas_svect_singular,
                         m_col, n_col,
@@ -1488,7 +1555,11 @@ private:
                         (rocblas_double_complex*)d_Vt_col, ldv,
                         d_E, rocblas_outofplace, d_info);
         HIP_CHECK(hipDeviceSynchronize());
+        time_gpu_compute += t_svd.toc();
 
+        // Time: D2H transfers for SVD results
+        Timer t_d2h_svd;
+        t_d2h_svd.tic();
         int h_info;
         HIP_CHECK(hipMemcpy(&h_info, d_info, sizeof(int), hipMemcpyDeviceToHost));
         if (h_info != 0) {
@@ -1504,7 +1575,11 @@ private:
         std::vector<Complex> hU_col(ldu * k), hVt_col(ldv * n_col);
         HIP_CHECK(hipMemcpy(hU_col.data(), d_U_col, ldu * k * sizeof(Complex), hipMemcpyDeviceToHost));
         HIP_CHECK(hipMemcpy(hVt_col.data(), d_Vt_col, ldv * n_col * sizeof(Complex), hipMemcpyDeviceToHost));
+        time_d2h_total += t_d2h_svd.toc();
 
+        // Time: CPU work (matrix reorganization)
+        Timer t_cpu_svd;
+        t_cpu_svd.tic();
         int left_size = D_L * d * D_new;
         std::vector<Complex> hA_left(left_size, make_complex(0.0, 0.0));
 
@@ -1534,13 +1609,18 @@ private:
                 }
 
         bond_dims[site + 1] = D_new;
+        time_cpu_compute += t_cpu_svd.toc();
 
+        // Time: H2D transfers for updated MPS tensors
+        Timer t_h2d_svd;
+        t_h2d_svd.tic();
         HIP_CHECK(hipFree(d_mps[site]));
         HIP_CHECK(hipFree(d_mps[site + 1]));
         HIP_CHECK(hipMalloc(&d_mps[site], left_size * sizeof(Complex)));
         HIP_CHECK(hipMalloc(&d_mps[site + 1], right_size * sizeof(Complex)));
         HIP_CHECK(hipMemcpy(d_mps[site], hA_left.data(), left_size * sizeof(Complex), hipMemcpyHostToDevice));
         HIP_CHECK(hipMemcpy(d_mps[site + 1], hA_right.data(), right_size * sizeof(Complex), hipMemcpyHostToDevice));
+        time_h2d_total += t_h2d_svd.toc();
 
         HIP_CHECK(hipFree(d_U_col));
         HIP_CHECK(hipFree(d_Vt_col));
@@ -1579,6 +1659,7 @@ int main(int argc, char** argv) {
     bool debug = false;
     std::string mps_file = "";
     std::string mpo_file = "";
+    int random_seed = 42;  // Default seed for reproducibility
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -1592,6 +1673,7 @@ int main(int argc, char** argv) {
         else if (arg == "--E-C" && i+1 < argc) E_C = std::stod(argv[++i]);
         else if (arg == "--mps-file" && i+1 < argc) mps_file = argv[++i];
         else if (arg == "--mpo-file" && i+1 < argc) mpo_file = argv[++i];
+        else if (arg == "--seed" && i+1 < argc) random_seed = std::stoi(argv[++i]);
         else if (arg == "--debug") debug = true;
         else if (arg == "--help" || arg == "-h") { print_usage(argv[0]); return 0; }
     }
@@ -1623,12 +1705,18 @@ int main(int argc, char** argv) {
 
     // Load MPS/MPO from files if specified
     std::vector<MPSTensor> mps_loaded;
-    bool use_loaded_data = !mps_file.empty() && !mpo_file.empty();
+    bool use_loaded_mps = !mps_file.empty();
+    bool use_loaded_mpo = !mpo_file.empty();
+    bool use_loaded_data = use_loaded_mps && use_loaded_mpo;
 
-    if (use_loaded_data) {
-        std::cout << "Loading MPS/MPO from files:\n";
-        std::cout << "  MPS: " << mps_file << "\n";
-        std::cout << "  MPO: " << mpo_file << "\n\n";
+    if (use_loaded_mps) {
+        std::cout << "Loading MPS from file: " << mps_file << "\n";
+        if (use_loaded_mpo) {
+            std::cout << "Loading MPO from file: " << mpo_file << "\n";
+        } else {
+            std::cout << "MPO will be generated for model: " << model << "\n";
+        }
+        std::cout << "\n";
 
         mps_loaded = MPSLoader::load(mps_file);
         L = mps_loaded.size();
@@ -1651,17 +1739,13 @@ int main(int argc, char** argv) {
         double energy = 0.0;
         double wall_time = 0.0;
 
-        if (use_loaded_data) {
+        // Create or load MPO
+        if (use_loaded_mpo) {
             // Use LoadedMPO from file
             auto mpo_loaded = MPOLoader::load(mpo_file);
             mpo_ptr = new LoadedMPO(mpo_loaded);
-
-            // Use constructor with loaded MPS
-            PDMRG_GPU dmrg(mps_loaded, mpo_ptr, max_D, n_sweeps, ns, model, debug);
-            energy = dmrg.run();
-            wall_time = t_wall.toc();
         } else {
-            // Use generated MPO (original behavior)
+            // Generate MPO
             if (model == "heisenberg") {
                 mpo_ptr = new HeisenbergMPO(L);
             } else if (model == "josephson") {
@@ -1670,8 +1754,17 @@ int main(int argc, char** argv) {
                 std::cerr << "Unknown model: " << model << "\n";
                 return 1;
             }
+        }
 
-            PDMRG_GPU dmrg(mpo_ptr, max_D, n_sweeps, ns, model, debug);
+        // Run DMRG with appropriate constructor
+        if (use_loaded_mps) {
+            // Use constructor with loaded MPS
+            PDMRG_GPU dmrg(mps_loaded, mpo_ptr, max_D, n_sweeps, ns, model, debug, random_seed);
+            energy = dmrg.run();
+            wall_time = t_wall.toc();
+        } else {
+            // Use constructor with generated MPS
+            PDMRG_GPU dmrg(mpo_ptr, max_D, n_sweeps, ns, model, debug, random_seed);
             energy = dmrg.run();
             wall_time = t_wall.toc();
         }
