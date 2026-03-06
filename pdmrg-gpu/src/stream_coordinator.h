@@ -72,6 +72,13 @@ public:
      * Initialize MPS from random state or product state
      */
     void initialize_mps_random();
+    
+    /**
+     * Load MPS from binary file
+     * @param filename Path to binary file containing MPS tensors
+     * @return true on success, false on failure
+     */
+    bool load_mps_from_binary(const char* filename);
 
 private:
     // Configuration
@@ -81,6 +88,7 @@ private:
     int d_;
     int D_mpo_;
     int max_bond_;
+    std::vector<int> bond_dims_;  // Bond dimensions for MPS loading
 
     // Segments and streams
     std::vector<hipStream_t> streams_;

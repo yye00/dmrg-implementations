@@ -76,7 +76,7 @@ public:
      * @param stream        HIP stream for asynchronous operations
      */
     StreamSegment(int segment_id, int start_site, int end_site,
-                  int chi_max, int d, int D_mpo, hipStream_t stream);
+                  int chi_max, int d, int D_mpo, hipStream_t stream, int total_chain_length);
 
     ~StreamSegment();
 
@@ -128,6 +128,14 @@ public:
      * Rebuild R_env at left boundary for merge with left neighbor
      */
     void rebuild_left_boundary_env();
+    
+    /**
+     * Load MPS from binary file
+     * @param filename Path to binary file containing MPS tensors
+     * @param bond_dims Array of bond dimensions [chi_0, chi_1, ..., chi_L]
+     * @return true on success, false on failure
+     */
+    bool load_mps_from_binary(const char* filename, const int* bond_dims);
 
     // ============================================================================
     // V Matrix Updates (after canonization)
@@ -189,6 +197,7 @@ private:
     int start_site_;
     int end_site_;
     int num_sites_;
+    int chain_length_;  // Total chain length (not segment length)
 
     // Dimensions
     int chi_max_;
