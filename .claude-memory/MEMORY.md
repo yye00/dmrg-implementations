@@ -554,3 +554,39 @@ Streams=2: E=-3.3749325987, time=0.426s, dE=4.441e-15 (1.59x speedup)
 💡 **Performance**: CPU faster for small systems (GPU overhead dominates)
 
 **File**: `~/dmrg-implementations/benchmarks/cpu_gpu_stream_comparison.txt`
+
+## 2026-03-06: Detailed GPU Timing Breakdown Analysis
+
+**Completed**: Added instrumentation to separate GPU compute from CPU work and transfers
+
+### Implementation:
+- Added 4 timing categories: GPU compute, CPU compute, H2D, D2H
+- Instrumented apply_H_eff_with_environments() for transfer timing
+- Instrumented update_mps_with_svd() for SVD breakdown
+- Instrumented optimize_site() for GPU kernel timing
+
+### Key Findings:
+
+**L=12 (Medium System)**:
+- GPU compute: 0.76s → 0.59s with streams (23% reduction)
+- CPU compute: 0.38s (constant - good parallelization)
+- Transfers: <3% of total time (NOT a bottleneck)
+- Speedup: 1.20x at 2+ streams
+
+**L=16 (Large System)**:
+- GPU + CPU percentages = 186% (shows ~90% concurrent execution!)
+- GPU compute: 17.01s (96.9% of time)
+- CPU compute: 15.66s (89.3% of time) 
+- Transfers: 0.8% of total time (negligible)
+- Speedup: Only 1.02x (CPU work on critical path)
+
+### Performance Insights:
+✅ **Transfer overhead is MINIMAL** (<3%) - NOT the bottleneck
+✅ **Stream parallelization WORKS** - GPU/CPU execute concurrently
+✅ **GPU compute reduces with streams** (23% at L=12)
+⚠️ **Saturation at 2-4 streams** for L≤16
+💡 **CPU contractions become bottleneck** at larger L
+
+**Files**: 
+- Code: `pdmrg-gpu/src/pdmrg_gpu_with_loader.cpp`
+- Report: `~/dmrg-implementations/benchmarks/gpu_detailed_timing_report.txt`
