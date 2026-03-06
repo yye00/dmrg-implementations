@@ -876,7 +876,7 @@ private:
 
 public:
     PDMRG_GPU(MPOBase* mpo_in, int max_bond, int sweeps, int num_streams,
-              const std::string& model, bool debug = false)
+              const std::string& model, bool debug = false, int seed = 42)
         : mpo(mpo_in), max_D(max_bond), n_sweeps(sweeps),
           n_streams(num_streams), envs(nullptr), current_energy(0.0),
           model_name(model),
@@ -916,7 +916,7 @@ public:
 
         // Initialize MPS with random tensors (complex for Josephson, real for Heisenberg)
         bool complex_model = (model_name != "heisenberg");
-        srand(42);
+        srand(seed);
         d_mps.resize(L);
         for (int i = 0; i < L; i++) {
             int size = bond_dims[i] * d * bond_dims[i + 1];
@@ -946,7 +946,7 @@ public:
     // NEW: Constructor for loaded MPS/MPO from binary files
     PDMRG_GPU(const std::vector<MPSTensor>& mps_loaded, MPOBase* mpo_in,
               int max_bond, int sweeps, int num_streams,
-              const std::string& model, bool debug = false)
+              const std::string& model, bool debug = false, int seed = 42)
         : mpo(mpo_in), max_D(max_bond), n_sweeps(sweeps),
           n_streams(num_streams), envs(nullptr), current_energy(0.0),
           model_name(model),
@@ -1604,6 +1604,7 @@ int main(int argc, char** argv) {
     bool debug = false;
     std::string mps_file = "";
     std::string mpo_file = "";
+    int random_seed = 42;  // Default seed for reproducibility
 
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -1617,6 +1618,7 @@ int main(int argc, char** argv) {
         else if (arg == "--E-C" && i+1 < argc) E_C = std::stod(argv[++i]);
         else if (arg == "--mps-file" && i+1 < argc) mps_file = argv[++i];
         else if (arg == "--mpo-file" && i+1 < argc) mpo_file = argv[++i];
+        else if (arg == "--seed" && i+1 < argc) random_seed = std::stoi(argv[++i]);
         else if (arg == "--debug") debug = true;
         else if (arg == "--help" || arg == "-h") { print_usage(argv[0]); return 0; }
     }
@@ -1702,12 +1704,12 @@ int main(int argc, char** argv) {
         // Run DMRG with appropriate constructor
         if (use_loaded_mps) {
             // Use constructor with loaded MPS
-            PDMRG_GPU dmrg(mps_loaded, mpo_ptr, max_D, n_sweeps, ns, model, debug);
+            PDMRG_GPU dmrg(mps_loaded, mpo_ptr, max_D, n_sweeps, ns, model, debug, random_seed);
             energy = dmrg.run();
             wall_time = t_wall.toc();
         } else {
             // Use constructor with generated MPS
-            PDMRG_GPU dmrg(mpo_ptr, max_D, n_sweeps, ns, model, debug);
+            PDMRG_GPU dmrg(mpo_ptr, max_D, n_sweeps, ns, model, debug, random_seed);
             energy = dmrg.run();
             wall_time = t_wall.toc();
         }
