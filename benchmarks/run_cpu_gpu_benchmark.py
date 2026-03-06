@@ -73,9 +73,10 @@ def run_cpu_benchmark(model, L, chi, n_max, threads, n_runs=5):
             "--sites", str(L),
             "--bond-dim", str(chi),
             "--model", model,
-            "--sweeps", "10",
+            "--sweeps", "20",
             "--random-init",
             "--timing",
+            "--tol", "1e-10",
         ]
 
         try:
