@@ -520,3 +520,37 @@ Streams=2: E=-3.3749325987, time=0.426s, dE=4.441e-15 (1.59x speedup)
 **Usage**: `./pdmrg_gpu_with_loader --L 8 --seed 42 --streams 1,2`
 
 **Note**: SSH works on standard port 22, not port 10022 as previously tried.
+
+## 2026-03-06: CPU vs GPU Comprehensive Comparison (1,2,4,8 streams)
+
+**Completed**: Full CPU vs GPU DMRG comparison with stream scaling analysis
+
+### Test Configuration:
+- Seed: 42 (same for all runs - ensures fair comparison)
+- Model: Heisenberg
+- Systems: L=8 and L=12, max_D=100
+- GPU streams tested: 1, 2, 4, 8
+- CPU: Python PDMRG (NumPy/BLAS backend)
+
+### Results Summary:
+
+**L=8 Energy: -3.374932598688** (all platforms match exactly)
+- CPU (Python): 0.03s
+- GPU (1 stream): 0.67s
+- GPU (2 streams): 0.42s (1.61x GPU speedup)
+- GPU (4,8 streams): 0.42s (saturated)
+
+**L=12 Energy: -5.142090632841** (all platforms match exactly)
+- CPU (Python): 0.76s  
+- GPU (1 stream): 1.46s
+- GPU (2 streams): 1.19s (1.22x GPU speedup)
+- GPU (4,8 streams): 1.19s (saturated)
+
+### Key Findings:
+✅ **Perfect accuracy**: CPU and GPU energies match to full precision
+✅ **Reproducibility**: Same seed produces identical results  
+✅ **Stream scaling**: 1.22-1.61x speedup at 2 streams
+⚠️  **Stream saturation**: No benefit beyond 2 streams for L≤12
+💡 **Performance**: CPU faster for small systems (GPU overhead dominates)
+
+**File**: `~/dmrg-implementations/benchmarks/cpu_gpu_stream_comparison.txt`
