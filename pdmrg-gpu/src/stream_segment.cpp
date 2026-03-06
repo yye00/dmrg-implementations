@@ -360,7 +360,7 @@ void StreamSegment::initialize_environments() {
         std::vector<double> h_L_env(size_L, 0.0);
         // Set identity: L_env[w, a, a] = delta_{w,0}
         for (int a = 0; a < chi_L; a++) {
-            h_L_env[0 + a * D_mpo_ + a * D_mpo_ * chi_L] = 1.0;
+            h_L_env[a * D_mpo_ * chi_L + 0 * chi_L + a] = 1.0;
         }
         HIP_CHECK(hipMemcpy(d_L_envs_[i], h_L_env.data(),
                            size_L * sizeof(double), hipMemcpyHostToDevice));
@@ -371,7 +371,7 @@ void StreamSegment::initialize_environments() {
         std::vector<double> h_R_env(size_R, 0.0);
         // Set identity: R_env[w, b, b] = delta_{w,0}
         for (int b = 0; b < chi_R; b++) {
-            h_R_env[0 + b * D_mpo_ + b * D_mpo_ * chi_R] = 1.0;
+            h_R_env[b * D_mpo_ * chi_R + (D_mpo_ - 1) * chi_R + b] = 1.0;
         }
         HIP_CHECK(hipMemcpy(d_R_envs_[i], h_R_env.data(),
                            size_R * sizeof(double), hipMemcpyHostToDevice));
@@ -1157,7 +1157,7 @@ bool StreamSegment::load_mps_from_binary(const char* filename, const int* bond_d
         int chi_R = 1;
         size_t size_R = D_mpo_ * chi_R * chi_R;
         std::vector<double> h_R_env(size_R, 0.0);
-        h_R_env[0] = 1.0;  // Identity at (w=0, b=0, b=0)
+        h_R_env[D_mpo_ - 1] = 1.0;  // Identity at (w=0, b=0, b=0)
         hipMemcpyAsync(d_R_envs_[num_sites_], h_R_env.data(),
                       size_R * sizeof(double), hipMemcpyHostToDevice, stream_);
     }
@@ -1221,7 +1221,7 @@ void StreamSegment::build_environments_from_mps() {
         size_t size_R = D_mpo_ * chi_R * chi_R;
         printf("[Stream %d] R boundary: num_sites_=%d, chi_R=%d, size_R=%zu, ptr=%p\n", id_, num_sites_, chi_R, size_R, (void*)d_R_envs_[num_sites_]);
         std::vector<double> h_R_env(size_R, 0.0);
-        h_R_env[0] = 1.0;  // Identity at (w=0, b=0, b=0)
+        h_R_env[D_mpo_ - 1] = 1.0;  // Identity at (w=0, b=0, b=0)
         HIP_CHECK(hipMemcpy(d_R_envs_[num_sites_], h_R_env.data(),
                            size_R * sizeof(double), hipMemcpyHostToDevice));
     }
