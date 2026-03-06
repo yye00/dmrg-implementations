@@ -245,6 +245,22 @@ target_link_libraries(pdmrg_gpu
     ${HIPTENSOR_LIBRARY}
 )
 
+# PDMRG GPU with MPS/MPO Loader - Uses working PDMRG implementation with loaded data
+add_executable(pdmrg_gpu_with_loader
+    src/pdmrg_gpu_with_loader.cpp
+)
+set_source_files_properties(src/pdmrg_gpu_with_loader.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(pdmrg_gpu_with_loader PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(pdmrg_gpu_with_loader
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+)
+
 # PDMRG2 GPU - Production with hipTensor environments + BLAS-3 H_eff (GPU-optimized)
 add_executable(pdmrg2_gpu
     src/pdmrg2_gpu.cpp
@@ -403,6 +419,46 @@ target_compile_options(pdmrg_benchmark_loaded PRIVATE
     -O3
 )
 target_link_libraries(pdmrg_benchmark_loaded
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+    lapack
+)
+
+# PDMRG Benchmark V2 - Integrated with Full PDMRG_GPU Implementation
+add_executable(pdmrg_benchmark_loaded_v2
+    src/pdmrg_benchmark_loaded_v2.cpp
+)
+set_source_files_properties(src/pdmrg_benchmark_loaded_v2.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(pdmrg_benchmark_loaded_v2 PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(pdmrg_benchmark_loaded_v2
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+    lapack
+)
+
+# Test: Load MPS and compute energy only (no optimization)
+add_executable(test_mps_energy_only
+    src/test_mps_energy_only.cpp
+    src/stream_coordinator.cpp
+    src/boundary_merge_gpu.cpp
+    src/stream_segment.cpp
+    src/accurate_svd_gpu.cpp
+    src/heff_optimized_gpu.cpp
+    src/heisenberg_mpo_real.cpp
+)
+set_source_files_properties(src/test_mps_energy_only.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(test_mps_energy_only PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(test_mps_energy_only
     hip::device
     roc::rocblas
     roc::rocsolver

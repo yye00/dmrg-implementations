@@ -1133,5 +1133,65 @@ bool StreamSegment::load_mps_from_binary(const char* filename, const int* bond_d
     // Initialize all environments to identity
     // BUG FIX: Do not initialize to identity for loaded MPS
     //     initialize_environments();
+
+    // Compute environments from loaded MPS
+    // This is needed because we loaded an MPS with specific tensor values
+    // and the environments must match those values
+    printf("[Stream %d] Computing environments from loaded MPS...\n", id_);
+    
+    // Initialize boundary environments to identity
+    // L_env[0] at left boundary
+    {
+        int chi_L = 1;
+        size_t size_L = D_mpo_ * chi_L * chi_L;
+        std::vector<double> h_L_env(size_L, 0.0);
+        h_L_env[0] = 1.0;  // Identity at (w=0, a=0, a=0)
+        hipMemcpyAsync(d_L_envs_[0], h_L_env.data(),
+                      size_L * sizeof(double), hipMemcpyHostToDevice, stream_);
+    }
+    
+    // R_env[num_sites_] at right boundary  
+    {
+        int chi_R = 1;
+        size_t size_R = D_mpo_ * chi_R * chi_R;
+        std::vector<double> h_R_env(size_R, 0.0);
+        h_R_env[0] = 1.0;  // Identity at (w=0, b=0, b=0)
+        hipMemcpyAsync(d_R_envs_[num_sites_], h_R_env.data(),
+                      size_R * sizeof(double), hipMemcpyHostToDevice, stream_);
+    }
+    
+    hipStreamSynchronize(stream_);
+    printf("[Stream %d] Boundary environments initialized\n", id_);
+    
+    // TODO: Compute interior environments by contracting MPS/MPO tensors
+    // For now, use identity for interior environments (will be rebuilt during sweeps)
+    for (int i = 1; i < num_sites_; i++) {
+        int chi = (i <= num_sites_/2) ? mps_chi_right_[i-1] : mps_chi_left_[i];
+        
+        // L_env[i]
+        {
+            size_t size_L = D_mpo_ * chi * chi;
+            std::vector<double> h_L_env(size_L, 0.0);
+            for (int a = 0; a < chi; a++) {
+                h_L_env[0 + a * D_mpo_ + a * D_mpo_ * chi] = 1.0;
+            }
+            hipMemcpyAsync(d_L_envs_[i], h_L_env.data(),
+                          size_L * sizeof(double), hipMemcpyHostToDevice, stream_);
+        }
+        
+        // R_env[i]
+        {
+            size_t size_R = D_mpo_ * chi * chi;
+            std::vector<double> h_R_env(size_R, 0.0);
+            for (int b = 0; b < chi; b++) {
+                h_R_env[0 + b * D_mpo_ + b * D_mpo_ * chi] = 1.0;
+            }
+            hipMemcpyAsync(d_R_envs_[i], h_R_env.data(),
+                          size_R * sizeof(double), hipMemcpyHostToDevice, stream_);
+        }
+    }
+    
+    hipStreamSynchronize(stream_);
+    printf("[Stream %d] All environments initialized (interior=identity, will be rebuilt)\n", id_);
     return true;
 }
