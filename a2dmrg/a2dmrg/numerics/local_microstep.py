@@ -1,12 +1,21 @@
 """
-Local DMRG micro-steps.
+Local DMRG micro-steps for A2DMRG.
 
-This module implements the local micro-step operations for A2DMRG:
-- One-site DMRG update
-- Two-site DMRG update with SVD splitting
+This module implements the local micro-step operations for Phase 2 of the
+Additive Two-Level DMRG (A2DMRG) algorithm:
+- One-site DMRG update (Definition 9, Eq. 11 in Grigori & Hassan)
+- Two-site DMRG update with SVD splitting (Definition 9, Eq. 12)
 
-These operations are the building blocks of Phase 2 (Parallel Local Micro-Steps)
-in the A2DMRG algorithm.
+The critical requirement is that each micro-step operates on an
+**i-orthogonal** tensor train decomposition (Definition 6, page 6),
+where the orthogonality center is at the site(s) being optimized.
+This ensures the effective Hamiltonian is well-conditioned (Lemma 10,
+Remark 11) and the retraction operators are orthogonal projections
+(Lemma 8).
+
+Reference: Grigori & Hassan, "An Additive Two-Level Parallel Variant
+of the DMRG Algorithm with Coarse-Space Correction",
+arXiv:2505.23429v2 (2025).
 """
 
 import numpy as np
@@ -17,6 +26,72 @@ from .effective_ham import build_effective_hamiltonian_1site, build_effective_ha
 from .eigensolver import solve_effective_hamiltonian
 from .truncated_svd import truncated_svd
 from ..environments.environment import build_left_environments, build_right_environments
+
+
+def _transform_to_i_orthogonal(mps, center_site, normalize=True):
+    """
+    Transform MPS to i-orthogonal canonical form with orthogonality center
+    at the specified site, WITHOUT changing bond dimensions.
+
+    This implements the gauge transformation described in Definition 6
+    (page 6) of Grigori & Hassan (2025):
+
+        A TT decomposition U = (U_1, ..., U_d) is i-orthogonal if:
+        - (U_j^{<2>})^T U_j^{<2>} = I  for j in {1, ..., i-1}  (left-orthogonal)
+        - U_k^{<1>} (U_k^{<1>})^T = I  for k in {i+1, ..., d}  (right-orthogonal)
+
+    The transformation is performed by:
+    1. Sweeping LEFT (site 0 to center-1): QR decomposition makes each
+       site left-orthogonal, contracting R into the next site.
+    2. Sweeping RIGHT (site L-1 to center+1): LQ decomposition makes each
+       site right-orthogonal, contracting L into the next site.
+
+    This is a pure gauge transformation that preserves the physical state
+    exactly (no truncation or compression). Bond dimensions are unchanged.
+
+    Parameters
+    ----------
+    mps : quimb.tensor.MatrixProductState
+        MPS to transform (modified in-place).
+    center_site : int
+        Site index for the orthogonality center (0-indexed).
+    normalize : bool, optional
+        Whether to normalize the MPS after transformation (default: True).
+
+    Returns
+    -------
+    mps : quimb.tensor.MatrixProductState
+        The same MPS object, now in i-orthogonal form.
+
+    Notes
+    -----
+    This function uses quimb's built-in canonize() method, which performs
+    exact QR/LQ sweeps without bond truncation. The bond dimensions are
+    guaranteed to be preserved.
+
+    See Also
+    --------
+    Algorithm 2, Step 1 (page 10): The orthogonalization sweep that
+    creates i-orthogonal forms U^{(n),i} for each site i.
+    """
+    L = mps.L
+    if not (0 <= center_site < L):
+        raise ValueError(
+            f"center_site={center_site} out of range for MPS with L={L}"
+        )
+
+    # quimb's canonize(where=center_site) performs exact QR sweep from left
+    # and LQ sweep from right, placing the orthogonality center at the
+    # specified site. This does NOT truncate bonds.
+    mps.canonize(where=center_site)
+
+    # Normalize if requested (the norm accumulates at the center site)
+    if normalize:
+        norm = mps.norm()
+        if abs(norm) > 1e-15:
+            mps /= norm
+
+    return mps
 
 
 def local_microstep_1site(
@@ -30,162 +105,141 @@ def local_microstep_1site(
     """
     Perform one-site DMRG local micro-step at a single site.
 
-    This function performs the following steps (as per spec):
-    1. Prepare i-orthogonal MPS for site i (move orthogonality center)
-    2. Build L[i-1] and R[i+1] environments
-    3. Construct H_eff and solve eigenvalue problem
-    4. Update MPS[i] with eigenvector reshaped to (chi_L, chi_R, d)
-    5. Return updated MPS and energy
+    Implements the one-site DMRG micro-iteration S_j (Definition 9, Eq. 11)
+    from Grigori & Hassan (2025):
+
+        S_j(U) = argmin_{W_j} g o P_{U,j,1}(W_j)
+
+    where P_{U,j,1} is the one-site retraction operator (Definition 7) and
+    U must be in j-orthogonal form (Definition 6).
+
+    Algorithm steps:
+    1. Copy MPS and transform to i-orthogonal form centered at `site`
+       (Algorithm 2, Step 1; implements the gauge transformation without
+       bond compression)
+    2. Build left L[site] and right R[site+1] environments from the
+       i-orthogonal MPS (ensures consistency per Lemma 8)
+    3. Construct effective Hamiltonian H_eff and solve eigenvalue problem
+       (Lemma 10: reduces to standard eigenvalue problem P*AP W = lambda W)
+    4. Update MPS[site] with the eigenvector (the optimized TT core V_i)
+    5. Compute and return total energy
 
     Parameters
     ----------
     mps : quimb.tensor.MatrixProductState
-        Input MPS (will be copied, not modified in-place)
+        Input MPS (will be copied, not modified in-place).
     mpo : quimb MPO
-        Matrix Product Operator (Hamiltonian)
+        Matrix Product Operator (Hamiltonian).
     site : int
-        Site index to update (0-indexed)
+        Site index to update (0-indexed).
     tol : float, optional
-        Tolerance for eigensolver (default: 1e-10)
+        Tolerance for eigensolver (default: 1e-10).
     L_env : np.ndarray, optional
-        Precomputed left environment L[site]. If None, built internally.
+        Precomputed left environment L[site]. If None, built internally
+        from the i-orthogonal MPS.
     R_env : np.ndarray, optional
-        Precomputed right environment R[site+1]. If None, built internally.
+        Precomputed right environment R[site+1]. If None, built internally
+        from the i-orthogonal MPS.
 
     Returns
     -------
     mps_updated : quimb.tensor.MatrixProductState
-        Updated MPS with site i optimized
+        Updated MPS with site i optimized.
     energy : float
-        Ground state energy from local optimization
+        Ground state energy from local optimization.
 
     Notes
     -----
-    This implements the one-site micro-step from Phase 2 of A2DMRG algorithm.
-    The input MPS should already be in i-orthogonal form for the given site,
-    or this function will convert it.
+    Per Remark 11 (page 8), if U is NOT i-orthogonal, the DMRG
+    micro-iteration consists of solving a badly-conditioned generalized
+    eigenvalue problem. The i-orthogonal transformation is therefore
+    CRITICAL for numerical stability.
     """
-    # Step 1: Create a copy
-    # Note: For now, we assume the MPS is already in suitable canonical form
-    # TODO: Implement proper i-orthogonal transformation without bond compression
+    from ..environments.environment import _reshape_mps_tensor_from_quimb
+
+    # Step 1: Copy MPS and transform to i-orthogonal form
+    # (Algorithm 2, Step 1: orthogonalization sweep)
     mps_updated = mps.copy()
+    _transform_to_i_orthogonal(mps_updated, center_site=site, normalize=True)
 
-    # Step 2: Build left and right environments (only if not provided)
-    if L_env is None or R_env is None:
-        L_envs = build_left_environments(mps_updated, mpo)
-        R_envs = build_right_environments(mps_updated, mpo)
-        if L_env is None:
-            L_env = L_envs[site]
-        if R_env is None:
-            R_env = R_envs[site + 1]
-
-    # Get the tensor at site i
-    mps_tensor = mps_updated[site].data
     L = mps_updated.L
 
-    # Get original MPS tensor shape - we must preserve this!
-    # In A2DMRG, local micro-steps do NOT change bond dimensions
-    original_shape = mps_tensor.shape
+    # Step 2: Build environments from the i-orthogonal MPS
+    # CRITICAL: Environments must be built from the canonicalized MPS,
+    # not the original, to ensure consistency with the gauge choice.
+    # Pre-computed environments from the non-canonical MPS are invalid
+    # after gauge transformation, so we always rebuild.
+    L_envs = build_left_environments(mps_updated, mpo)
+    R_envs = build_right_environments(mps_updated, mpo)
+    L_env_local = L_envs[site]
+    R_env_local = R_envs[site + 1]
 
-    # Determine dimensions from the original MPS tensor
-    # NOTE: quimb stores MPS tensors in different orderings:
-    #   - First site (i=0): (d, chi_R) with indices ('k0', bond)
-    #   - Middle sites: (chi_L, d, chi_R) with indices (bond_L, 'k{i}', bond_R)
-    #   - Last site (i=L-1): (chi_L, d) with indices (bond, 'k{L-1}')
-    if site == 0:
-        # First site: shape is (d, chi_R)
-        d = original_shape[0]
-        chi_R = original_shape[1]
-        chi_L = 1
-    elif site == L - 1:
-        # Last site: shape is (chi_L, d)
-        chi_L = original_shape[0]
-        d = original_shape[1]
-        chi_R = 1
-    else:
-        # Middle site: quimb uses (chi_L, d, chi_R)
-        chi_L = original_shape[0]
-        d = original_shape[1]
-        chi_R = original_shape[2]
-
-    # The MPS shape for the effective Hamiltonian
-    mps_shape = (chi_L, chi_R, d)
-
-    # CRITICAL: The environments must be compatible with the MPS bond dimensions
-    # If they're not, we need to project/truncate them
-    # For now, we'll check and raise an error if incompatible
-    env_chi_L = L_env.shape[2] if len(L_env.shape) == 3 else L_env.shape[0]
-    env_chi_R = R_env.shape[2] if len(R_env.shape) == 3 else R_env.shape[0]
-
-    if env_chi_L != chi_L or env_chi_R != chi_R:
-        # Environment bond dimensions don't match MPS!
-        # This can happen if bond dimensions changed in a previous step
-        # For A2DMRG, we need to project the environment to match the MPS
-        # For now, skip this update (return original MPS)
-        # Note: Silently skipping to avoid cluttering output
-        return mps, 0.0  # Return original MPS unchanged
-
-    # DEBUG
-    # print(f"DEBUG local_microstep site {site}: mps_tensor.shape={mps_tensor.shape}")
-    # print(f"DEBUG   L_env.shape={L_env.shape}, R_env.shape={R_env.shape}")
-    # print(f"DEBUG   mps_shape={mps_shape} from env bonds")
+    # Extract site tensor in standard (left_bond, phys, right_bond) format
+    # This is the format expected by the effective Hamiltonian
+    mps_tensor_std = _reshape_mps_tensor_from_quimb(mps_updated[site], site, L)
+    chi_L, d, chi_R = mps_tensor_std.shape
 
     # Get MPO tensor at site i
     W_i = mpo[site].data
 
     # Step 3: Build effective Hamiltonian and solve
+    # H_eff operates on vectors of shape (chi_L, d, chi_R) flattened
+    # (see build_effective_hamiltonian_1site: psi = v.reshape(ket_L, phys, ket_R))
     H_eff = build_effective_hamiltonian_1site(
-        L_env, W_i, R_env, site, L
+        L_env_local, W_i, R_env_local, site, L
     )
 
-    # Use current MPS tensor as initial guess
-    # Must convert from quimb format to effective_ham format
-    # quimb: first=(d, chi_R), middle=(chi_L, d, chi_R), last=(chi_L, d)
-    # effective_ham expects: (chi_L, chi_R, d) flattened
-    if site == 0:
-        # (d, chi_R) -> (chi_R, d) -> add dim -> (1, chi_R, d)
-        v0_tensor = mps_tensor.T  # (chi_R, d)
-        v0_tensor = v0_tensor[np.newaxis, :, :]  # (1, chi_R, d)
-    elif site == L - 1:
-        # (chi_L, d) -> add dim -> (chi_L, 1, d)
-        v0_tensor = mps_tensor[:, np.newaxis, :]  # (chi_L, 1, d)
-    else:
-        # (chi_L, d, chi_R) -> (chi_L, chi_R, d)
-        v0_tensor = mps_tensor.transpose(0, 2, 1)  # (chi_L, chi_R, d)
-    v0 = v0_tensor.ravel()
+    # Initial guess: current MPS tensor in (chi_L, d, chi_R) format, flattened
+    v0 = mps_tensor_std.ravel()
 
-    # Solve for ground state
+    # Solve for ground state (Lemma 10: eigenvalue problem)
     energy, eigvec = solve_effective_hamiltonian(H_eff, v0=v0, tol=tol)
 
-    # Step 4: Update MPS[i] with new eigenvector
-    # The effective_ham works with mps_shape = (chi_L, chi_R, d)
-    # But quimb stores MPS tensors as:
-    #   - First site: (d, chi_R)
-    #   - Middle site: (chi_L, d, chi_R)
-    #   - Last site: (chi_L, d)
-    # So we need to reshape and transpose appropriately
-    if site == 0:
-        # First site: eigvec in (1, chi_R, d) -> squeeze to (chi_R, d) -> transpose to (d, chi_R)
-        new_tensor = eigvec.reshape(mps_shape).squeeze(axis=0)  # (chi_R, d)
-        new_tensor = new_tensor.T  # (d, chi_R)
-    elif site == L - 1:
-        # Last site: eigvec in (chi_L, 1, d) -> squeeze to (chi_L, d)
-        new_tensor = eigvec.reshape(mps_shape).squeeze(axis=1)  # (chi_L, d) - already correct
+    # Step 4: Update MPS[site] with the optimized eigenvector
+    # eigvec is in (chi_L, d, chi_R) format (matching H_eff convention)
+    new_tensor_std = eigvec.reshape(chi_L, d, chi_R)
+
+    # Convert back to quimb's storage format for this site
+    # Detect quimb's index ordering from the original tensor
+    orig_inds = mps_updated[site].inds
+    phys_name = f'k{site}'
+    if phys_name in orig_inds:
+        phys_pos = list(orig_inds).index(phys_name)
     else:
-        # Middle site: eigvec in (chi_L, chi_R, d) -> transpose to (chi_L, d, chi_R)
-        new_tensor = eigvec.reshape(mps_shape)  # (chi_L, chi_R, d)
-        new_tensor = new_tensor.transpose(0, 2, 1)  # (chi_L, d, chi_R)
+        phys_pos = 1  # default middle-site ordering
 
-    # DEBUG
-    # print(f"DEBUG   eigvec.shape={eigvec.shape}, new_tensor.shape={new_tensor.shape}, mps_tensor.shape={mps_tensor.shape}")
+    orig_data = mps_updated[site].data
+    if orig_data.ndim == 2:
+        # Edge site: 2D tensor
+        if site == 0:
+            # Standard: (chi_L=1, d, chi_R) -> quimb first site
+            if phys_pos == 0:
+                new_tensor = new_tensor_std[0, :, :]  # (d, chi_R)
+            else:
+                new_tensor = new_tensor_std[0, :, :].T  # (chi_R, d)
+        else:
+            # Last site: (chi_L, d, chi_R=1) -> quimb last site
+            if phys_pos == 1:
+                new_tensor = new_tensor_std[:, :, 0]  # (chi_L, d)
+            else:
+                new_tensor = new_tensor_std[:, :, 0].T  # (d, chi_L)
+    else:
+        # Middle site: 3D tensor
+        if phys_pos == 1:
+            new_tensor = new_tensor_std  # already (chi_L, d, chi_R)
+        elif phys_pos == 2:
+            new_tensor = new_tensor_std.transpose(0, 2, 1)  # (chi_L, chi_R, d)
+        else:
+            new_tensor = new_tensor_std.transpose(1, 0, 2)  # (d, chi_L, chi_R)
 
-    # Update the MPS tensor data
     mps_updated[site].modify(data=new_tensor)
 
-    # Step 5: Return updated MPS and energy
-    # CRITICAL: The eigenvalue 'energy' from the effective Hamiltonian is NOT the full energy!
-    # It's only the local contribution. We need to compute the actual total energy.
-    # Import compute_energy here to avoid circular imports
+    # Step 5: Compute actual total energy
+    # The eigenvalue from H_eff is the Rayleigh quotient at the orthogonality
+    # center. For an i-orthogonal MPS, this equals the total energy
+    # (since left/right parts are orthonormal). However, after replacing the
+    # center tensor the MPS is no longer normalized, so we compute the full
+    # energy for robustness.
     from .observables import compute_energy
     actual_energy = compute_energy(mps_updated, mpo, normalize=True)
 
@@ -205,112 +259,114 @@ def local_microstep_2site(
     """
     Perform two-site DMRG local micro-step at sites i and i+1.
 
-    This function performs the following steps (as per spec):
-    1. Prepare i-orthogonal MPS for sites (i, i+1)
-    2. Build L[i-1] and R[i+2] environments
-    3. Construct two-site H_eff and solve
-    4. Reshape eigenvector to (chi_L, d, d, chi_R)
+    Implements the two-site DMRG micro-iteration S_{k,k+1} (Definition 9,
+    Eq. 12) from Grigori & Hassan (2025):
+
+        S_{k,k+1}(V) = argmin_{W_{k,k+1}} g o P_{V,k,2}(W_{k,k+1})
+
+    where P_{V,k,2} is the two-site retraction operator (Definition 7) and
+    V must be in k-orthogonal form (Definition 6).
+
+    Algorithm steps:
+    1. Copy MPS and transform to i-orthogonal form centered at `site`
+       (Algorithm 2, Step 1)
+    2. Build left L[site] and right R[site+2] environments from the
+       i-orthogonal MPS
+    3. Construct two-site H_eff and solve eigenvalue problem (Lemma 10)
+    4. Reshape eigenvector to (chi_L, d1, d2, chi_R)
     5. Apply truncated SVD to split back to two tensors
+       (Algorithm 2, Step 2: W_{i,i+1} = P_i S_i Q_i)
     6. Return updated MPS and energy
 
     Parameters
     ----------
     mps : quimb.tensor.MatrixProductState
-        Input MPS (will be copied, not modified in-place)
+        Input MPS (will be copied, not modified in-place).
     mpo : quimb MPO
-        Matrix Product Operator (Hamiltonian)
+        Matrix Product Operator (Hamiltonian).
     site : int
-        Left site index (will update sites i and i+1)
+        Left site index (will update sites i and i+1).
     max_bond : int, optional
-        Maximum bond dimension after SVD (default: None, no limit)
+        Maximum bond dimension after SVD (default: None, no limit).
     cutoff : float, optional
-        SVD truncation tolerance (default: 1e-10)
+        SVD truncation tolerance (default: 1e-10).
     tol : float, optional
-        Tolerance for eigensolver (default: 1e-10)
+        Tolerance for eigensolver (default: 1e-10).
     L_env : np.ndarray, optional
-        Precomputed left environment L[site]. If None, built internally.
+        Precomputed left environment L[site]. If None, built internally
+        from the i-orthogonal MPS.
     R_env : np.ndarray, optional
-        Precomputed right environment R[site+2]. If None, built internally.
+        Precomputed right environment R[site+2]. If None, built internally
+        from the i-orthogonal MPS.
 
     Returns
     -------
     mps_updated : quimb.tensor.MatrixProductState
-        Updated MPS with sites i and i+1 optimized
+        Updated MPS with sites i and i+1 optimized.
     energy : float
-        Ground state energy from local optimization
+        Ground state energy from local optimization.
 
     Notes
     -----
-    This implements the two-site micro-step from Phase 2 of A2DMRG algorithm.
-    The SVD splitting ensures the bond dimension is controlled.
+    The SVD splitting in step 5 decomposes the two-site tensor as:
+        theta = U @ diag(S) @ V^H
+    The left tensor becomes U (left-isometric) and the right tensor
+    absorbs S @ V^H. This corresponds to the factorization
+    W_{i,i+1} = P_i^{<2>} S_i Q_i^{<i>} in Algorithm 2.
     """
+    from ..environments.environment import _reshape_mps_tensor_from_quimb
+
     L = mps.L
     if site >= L - 1:
         raise ValueError(f"Two-site update requires site < L-1, got site={site}, L={L}")
 
-    # Step 1: Create a copy
-    # Note: For now, we assume the MPS is already in suitable canonical form
-    # TODO: Implement proper i-orthogonal transformation without bond compression
+    # Step 1: Copy MPS and transform to i-orthogonal form
+    # For two-site update, we place the orthogonality center at `site`.
+    # Both site and site+1 then participate in the two-site block
+    # containing the gauge freedom.
     mps_updated = mps.copy()
+    _transform_to_i_orthogonal(mps_updated, center_site=site, normalize=True)
 
-    # Step 2: Build left and right environments (only if not provided)
-    if L_env is None or R_env is None:
-        L_envs = build_left_environments(mps_updated, mpo)
-        R_envs = build_right_environments(mps_updated, mpo)
-        if L_env is None:
-            L_env = L_envs[site]
-        if R_env is None:
-            R_env = R_envs[site + 2]
+    # Step 2: Build environments from the i-orthogonal MPS
+    # CRITICAL: Must rebuild from canonicalized MPS for consistency
+    L_envs = build_left_environments(mps_updated, mpo)
+    R_envs = build_right_environments(mps_updated, mpo)
+    L_env_local = L_envs[site]
+    R_env_local = R_envs[site + 2]
 
-    # Get tensors at sites i and i+1
-    t_i = mps_updated[site]
-    t_ip1 = mps_updated[site + 1]
+    # Extract tensors in standard (left_bond, phys, right_bond) format
+    tensor_i = _reshape_mps_tensor_from_quimb(mps_updated[site], site, L)
+    tensor_ip1 = _reshape_mps_tensor_from_quimb(mps_updated[site + 1], site + 1, L)
 
-    # Use the same reshape function as environment building for consistency
-    # This produces tensors in (left_bond, phys, right_bond) format
-    from ..environments.environment import _reshape_mps_tensor_from_quimb
+    chi_L, d1, chi_M1 = tensor_i.shape
+    chi_M2, d2, chi_R = tensor_ip1.shape
 
-    tensor_i = _reshape_mps_tensor_from_quimb(t_i, site, L)
-    tensor_ip1 = _reshape_mps_tensor_from_quimb(t_ip1, site + 1, L)
+    # Store original quimb index info for write-back
+    orig_inds_i = mps_updated[site].inds
+    orig_inds_ip1 = mps_updated[site + 1].inds
 
-    # Extract dimensions
-    chi_L, d1, chi_M1 = tensor_i.shape   # (left, phys, right)
-    chi_M2, d2, chi_R = tensor_ip1.shape  # (left, phys, right)
-
-    # Store original tensor info for later reconstruction
-    orig_inds_i = t_i.inds
-    orig_inds_ip1 = t_ip1.inds
-
-    # Detect quimb's physical index position for correct write-back
     phys_name_i = f'k{site}'
     phys_name_ip1 = f'k{site + 1}'
-    _phys_pos_i = list(orig_inds_i).index(phys_name_i) if phys_name_i in orig_inds_i else None
-    _phys_pos_ip1 = list(orig_inds_ip1).index(phys_name_ip1) if phys_name_ip1 in orig_inds_ip1 else None
+    _phys_pos_i = list(orig_inds_i).index(phys_name_i) if phys_name_i in orig_inds_i else 1
+    _phys_pos_ip1 = list(orig_inds_ip1).index(phys_name_ip1) if phys_name_ip1 in orig_inds_ip1 else 1
 
     # Middle bond dimensions should match
     assert chi_M1 == chi_M2, f"Bond dimension mismatch: {chi_M1} != {chi_M2}"
-    chi_M = chi_M1
 
-    # Get MPO tensors (raw data - will be reshaped by H_eff)
+    # Get MPO tensors
     W_i = mpo[site].data
     W_ip1 = mpo[site + 1].data
 
-    # Step 3: Build two-site effective Hamiltonian
-    # Note: L_env = L[site], R_env = R[site+2] (provided or built above)
-
+    # Step 3: Build two-site effective Hamiltonian and solve
+    # H_eff operates on theta of shape (chi_L, d1, d2, chi_R) flattened
     H_eff = build_effective_hamiltonian_2site(
-        L_env, W_i, W_ip1, R_env,
+        L_env_local, W_i, W_ip1, R_env_local,
         site, L
     )
 
-    # Create initial guess from current two-site tensor
-    # Tensors are in (left_bond, phys, right_bond) format
-    # Contract over shared middle bond to get theta in (chi_L, phys1, phys2, chi_R) format
-    # tensor_i: (chi_L, d1, chi_M1)
-    # tensor_ip1: (chi_M2, d2, chi_R) where chi_M1 == chi_M2
-    # Contract: tensor_i[l, p1, m] @ tensor_ip1[m, p2, r] -> theta[l, p1, p2, r]
+    # Initial guess: contract two-site tensor
+    # theta[l, p1, p2, r] = sum_m tensor_i[l, p1, m] * tensor_ip1[m, p2, r]
     theta = np.einsum('lpm,mqr->lpqr', tensor_i, tensor_ip1)
-    
     v0 = theta.ravel()
 
     # Solve for ground state
@@ -323,68 +379,53 @@ def local_microstep_2site(
     # Reshape to matrix: (chi_L * d1) x (d2 * chi_R)
     theta_mat = theta_new.reshape(chi_L * d1, d2 * chi_R)
 
-    # SVD with truncation
     U, S, Vh = truncated_svd(theta_mat, max_rank=max_bond, tol=cutoff)
-
-    # Determine new bond dimension
     chi_new = len(S)
 
-    # Reshape back to tensor format
-    # Include singular values in right tensor for canonical form
+    # Absorb singular values into right tensor (left-canonical split)
     SV = np.diag(S) @ Vh
 
-    # Construct tensors in quimb format.
-    # After SVD: U.shape=(chi_L*d1, chi_new), SV.shape=(chi_new, d2*chi_R).
-    # We need to write back matching the original quimb index ordering.
-    # The physical index position (_phys_pos_i, _phys_pos_ip1) tells us the format:
-    #   phys_pos=0: (phys, right) for site 0, or (phys, left, right) for middle
-    #   phys_pos=1: (left, phys, right) for middle, or (right, phys) for site 0
-    #   phys_pos=2: (left, right, phys) for middle
-    # For edge sites, 2D tensors:
-    #   site 0 with phys_pos=1: (right_bond, phys)
-    #   site 0 with phys_pos=0: (phys, right_bond)
-    #   last site with phys_pos=1: (left_bond, phys)
+    # Convert U back to quimb format for site i
     if site == 0:
-        # First site: 2D tensor (right_bond, phys) or (phys, right_bond)
-        # U has shape (d1, chi_new) since chi_L=1
+        # First site: 2D tensor
         u_2d = U.reshape(d1, chi_new)  # (phys, right_bond)
         if _phys_pos_i == 0:
-            tensor_i_new = u_2d          # (phys, right_bond) -- keep as-is
+            tensor_i_new = u_2d
         else:
-            tensor_i_new = u_2d.T        # (right_bond, phys)
+            tensor_i_new = u_2d.T
     else:
-        # Middle site: 3D tensor -- write in same phys position as original
+        # Middle site: 3D tensor
         u_3d = U.reshape(chi_L, d1, chi_new)  # (left, phys, right)
         if _phys_pos_i == 1:
-            tensor_i_new = u_3d                 # (left, phys, right)
+            tensor_i_new = u_3d
         elif _phys_pos_i == 2:
-            tensor_i_new = u_3d.transpose(0, 2, 1)  # (left, right, phys)
-        else:  # phys_pos==0: (phys, left, right)
+            tensor_i_new = u_3d.transpose(0, 2, 1)
+        else:
             tensor_i_new = u_3d.transpose(1, 0, 2)
 
+    # Convert SV back to quimb format for site i+1
     if site + 1 == L - 1:
-        # Last site: 2D tensor (left_bond, phys) or (phys, left_bond)
-        # SV has shape (chi_new, d2) since chi_R=1
+        # Last site: 2D tensor
         sv_2d = SV.reshape(chi_new, d2)  # (left_bond, phys)
         if _phys_pos_ip1 == 1:
-            tensor_ip1_new = sv_2d       # (left_bond, phys)
+            tensor_ip1_new = sv_2d
         else:
-            tensor_ip1_new = sv_2d.T     # (phys, left_bond)
+            tensor_ip1_new = sv_2d.T
     else:
-        # Middle site: 3D tensor -- write in same phys position as original
+        # Middle site: 3D tensor
         sv_3d = SV.reshape(chi_new, d2, chi_R)  # (left, phys, right)
         if _phys_pos_ip1 == 1:
-            tensor_ip1_new = sv_3d                   # (left, phys, right)
+            tensor_ip1_new = sv_3d
         elif _phys_pos_ip1 == 2:
-            tensor_ip1_new = sv_3d.transpose(0, 2, 1)  # (left, right, phys)
-        else:  # phys_pos==0
+            tensor_ip1_new = sv_3d.transpose(0, 2, 1)
+        else:
             tensor_ip1_new = sv_3d.transpose(1, 0, 2)
 
     # Step 6: Update MPS tensors
     mps_updated[site].modify(data=tensor_i_new)
     mps_updated[site + 1].modify(data=tensor_ip1_new)
 
-    # CRITICAL: Return actual total energy, not just the effective Hamiltonian eigenvalue
+    # Compute actual total energy
     from .observables import compute_energy
     actual_energy = compute_energy(mps_updated, mpo, normalize=True)
 

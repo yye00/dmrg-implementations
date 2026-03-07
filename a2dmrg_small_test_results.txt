@@ -1,0 +1,21 @@
+
+============================================================
+A2DMRG QUICK VALIDATION TESTS
+Testing convergence after i-orthogonal transformation fix
+============================================================
+
+============================================================
+TEST: Heisenberg L=8
+============================================================
+Traceback (most recent call last):
+  File "/home/captain/clawd/work/dmrg-implementations/test_a2dmrg_small.py", line 207, in <module>
+    results.append(("Heisenberg L=8", test_heisenberg_L8()))
+                                      ~~~~~~~~~~~~~~~~~~^^
+  File "/home/captain/clawd/work/dmrg-implementations/test_a2dmrg_small.py", line 49, in test_heisenberg_L8
+    mpo = load_mpo('benchmarks/benchmark_data/heisenberg_L8_mpo.bin')
+  File "/home/captain/clawd/work/dmrg-implementations/test_a2dmrg_small.py", line 26, in load_mpo
+    tensors = load_mpo_from_binary(filepath)
+  File "/home/captain/clawd/work/dmrg-implementations/benchmarks/load_mps_mpo.py", line 116, in load_mpo_from_binary
+    assert shape[0] == mpo_bond_dims[site], f"MPO bond dim mismatch at site {site}"
+           ~~~~~^^^
+IndexError: tuple index out of range

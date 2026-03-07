@@ -16,8 +16,6 @@ from typing import List, Dict, Tuple, Optional
 
 from ..numerics.local_microstep import local_microstep_1site, local_microstep_2site
 from .distribute import distribute_sites
-from ..mps.canonical import move_orthogonality_center, pad_to_bond_dimensions
-from ..environments.environment import build_left_environments, build_right_environments
 
 
 def parallel_local_microsteps(
@@ -98,24 +96,17 @@ def parallel_local_microsteps(
     # Dictionary to store results
     results = {}
 
-    # Rank 0 builds environments once and broadcasts to all ranks.
-    # This avoids each rank independently doing O(L) env build work,
-    # which caused np>1 to be *slower* than np=1 for small systems.
-    if comm.Get_rank() == 0:
-        left_envs = build_left_environments(mps, mpo)
-        right_envs = build_right_environments(mps, mpo)
-    else:
-        left_envs = None
-        right_envs = None
-    left_envs = comm.bcast(left_envs, root=0)
-    right_envs = comm.bcast(right_envs, root=0)
+    # NOTE: Each local micro-step now internally transforms the MPS to
+    # i-orthogonal form and rebuilds environments from the canonicalized
+    # MPS. Pre-built environments from the non-canonical MPS would be
+    # inconsistent with the gauge transformation (Definition 6, page 6
+    # of Grigori & Hassan 2025). Therefore we do NOT pre-build or
+    # broadcast environments here.
 
     if microstep_type == "one_site":
         for site in my_sites:
             updated_mps, energy = local_microstep_1site(
                 mps, mpo, site, tol=tol,
-                L_env=left_envs[site],
-                R_env=right_envs[site + 1],
             )
             results[site] = (updated_mps, energy)
 
@@ -127,8 +118,6 @@ def parallel_local_microsteps(
                     max_bond=max_bond,
                     cutoff=cutoff,
                     tol=tol,
-                    L_env=left_envs[site],
-                    R_env=right_envs[site + 2],
                 )
                 results[site] = (updated_mps, energy)
 
