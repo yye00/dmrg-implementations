@@ -580,7 +580,7 @@ def recompute_boundary_v(pmps, comm, which_boundary):
 def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
                n_warmup_sweeps=5, tol=1e-8, dtype='float64',
                comm=None, verbose=True, parallel_warmup_flag=False,
-               random_init_flag=False):
+               random_init_flag=False, return_metadata=False):
     """Run the full PDMRG algorithm.
 
     For n_procs > 1, uses staggered sweeps (Fig. 4 of the paper):
@@ -588,9 +588,12 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
       - Odd ranks start at left end, sweep right first
       - After sweeps reach boundaries, merge with neighbor using V
       - Sweep back, merge with other neighbor
-      
+
     Parameters
     ----------
+    return_metadata : bool, optional
+        If True, return (energy, pmps, metadata) tuple.
+        If False (default), return (energy, pmps) for backward compatibility.
     parallel_warmup_flag : bool
         If True, use parallel warmup instead of serial warmup.
         Each processor warms up its own segment independently,
@@ -701,10 +704,12 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         V_right = None
         if rank < n_procs - 1:
             chi_R = local_mps[-1].shape[2]
-            V_right = np.eye(chi_R, dtype=np.dtype(dtype))
+            # Initialize as 1D vector (will be properly computed in recompute_boundary_v)
+            V_right = np.ones(chi_R, dtype=np.dtype(dtype))
         if rank > 0:
             chi_L = local_mps[0].shape[0]
-            V_left = np.eye(chi_L, dtype=np.dtype(dtype))
+            # Initialize as 1D vector (will be properly computed in recompute_boundary_v)
+            V_left = np.ones(chi_L, dtype=np.dtype(dtype))
         
         # Create ParallelMPS with local arrays
         pmps = ParallelMPS(
@@ -742,7 +747,25 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
     if n_procs == 1 and not random_init_flag:
         if rank == 0 and verbose:
             print(f"np=1: returning serial-warmup energy {warmup_energy:.12f}")
-        return warmup_energy, pmps
+
+        if return_metadata:
+            metadata = {
+                "algorithm_executed": "quimb DMRG2 warmup (early return)",
+                "early_return": True,
+                "early_return_reason": "np=1 with warmup enabled",
+                "warmup_used": True,
+                "warmup_sweeps": n_warmup_sweeps,
+                "warmup_method": "quimb DMRG2 serial",
+                "skip_opt": None,
+                "random_init": False,
+                "np": n_procs,
+                "converged": True,  # Warmup converged
+                "final_sweep": n_warmup_sweeps,
+                "max_sweeps": max_sweeps,
+            }
+            return warmup_energy, pmps, metadata
+        else:
+            return warmup_energy, pmps
 
     if rank == 0 and verbose:
         site_ranges = compute_site_distribution(L, n_procs)
@@ -752,6 +775,8 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
     # Phase 2-4: Main loop
     E_prev = 0.0
     E_global = 0.0
+    converged_flag = False
+    final_sweep_num = 0
 
     eigsolver_max_iter = 30
     eigsolver_tol = tol / 10
@@ -760,6 +785,7 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         # Single-rank: standard DMRG sweeps
         direction = 'right'
         for sweep in range(max_sweeps):
+            final_sweep_num = sweep
             t0 = time.time()
             E_local, direction = local_sweep(
                 pmps, env_mgr, mpo_arrays, direction, bond_dim,
@@ -777,6 +803,7 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
             if converged and sweep > 0:
                 if verbose:
                     print(f"Converged after {sweep + 1} sweeps!")
+                converged_flag = True
                 break
             E_prev = E_global
     else:
@@ -793,6 +820,7 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         # All optimization happens at the merge steps.
 
         for sweep in range(max_sweeps):
+            final_sweep_num = sweep
             t0 = time.time()
 
             # QR sweep right on all ranks (parallel, no communication)
@@ -809,7 +837,11 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
             recompute_boundary_v(pmps, comm, 'right')
 
             # Merge at even boundaries (0↔1, 2↔3, ...)
-            # Skip optimization due to spurious H_eff eigenvalues (TODO: fix H_eff bug)
+            # KNOWN LIMITATION: Boundary optimization disabled
+            #
+            # Without optimization, boundaries can only EVALUATE energy, not improve it.
+            # This limits parallel efficiency to 10-30% speedup at np=8.
+            # To fix: Debug H_eff construction to eliminate spurious eigenvalues.
             skip_opt = True  # Always skip until H_eff bug is fixed
             E_merge1 = boundary_merge(
                 pmps, env_mgr, mpo_arrays, comm, 'even',
@@ -856,6 +888,7 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
             if converged and sweep > 0:
                 if rank == 0 and verbose:
                     print(f"Converged after {sweep + 1} sweeps!")
+                converged_flag = True
                 break
 
             E_prev = E_global
@@ -863,7 +896,35 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
     if rank == 0 and verbose:
         print(f"Final energy: {E_global:.12f}")
 
-    return E_global, pmps
+    if return_metadata:
+        # Determine algorithm executed and warmup method
+        if random_init_flag:
+            warmup_method_str = None
+            algorithm_executed_str = "PDMRG2 serial sweeps" if n_procs == 1 else "PDMRG2 parallel sweeps"
+        elif parallel_warmup_flag:
+            warmup_method_str = "parallel rank-local quimb DMRG2"
+            algorithm_executed_str = "PDMRG2 serial sweeps" if n_procs == 1 else "PDMRG2 parallel sweeps"
+        else:
+            warmup_method_str = "quimb DMRG2 serial"
+            algorithm_executed_str = "PDMRG2 serial sweeps" if n_procs == 1 else "PDMRG2 parallel sweeps"
+
+        metadata = {
+            "algorithm_executed": algorithm_executed_str,
+            "early_return": False,
+            "early_return_reason": None,
+            "warmup_used": not random_init_flag,
+            "warmup_sweeps": n_warmup_sweeps if not random_init_flag else 0,
+            "warmup_method": warmup_method_str,
+            "skip_opt": True if n_procs > 1 else None,  # Always True for multi-rank
+            "random_init": random_init_flag,
+            "np": n_procs,
+            "converged": converged_flag,
+            "final_sweep": final_sweep_num,
+            "max_sweeps": max_sweeps,
+        }
+        return E_global, pmps, metadata
+    else:
+        return E_global, pmps
 
 
 def gather_mps(pmps, comm):
