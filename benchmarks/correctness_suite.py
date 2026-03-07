@@ -26,9 +26,10 @@ from pathlib import Path
 from datetime import datetime
 import numpy as np
 
-# Validation thresholds
-MACHINE_PRECISION_THRESHOLD = 1e-12  # Gold standard
-ACCEPTANCE_THRESHOLD = 5e-10  # Acceptable agreement (order 1e-10)
+# Convergence and validation thresholds
+GOLDEN_TOLERANCE = 1e-12           # Convergence tolerance (match golden generation)
+MACHINE_PRECISION_THRESHOLD = 1e-12  # Validation: Gold standard
+ACCEPTANCE_THRESHOLD = 5e-10       # Validation: Acceptable agreement (order 1e-10)
 
 # Add repo root to path
 repo_root = Path(__file__).parent.parent
@@ -53,7 +54,7 @@ def run_quimb_dmrg(model, case, method='dmrg2'):
 
     t0 = time.time()
     dmrg = dmrg_class(mpo, bond_dims=manifest['bond_dim'], cutoffs=1e-14)
-    dmrg.solve(max_sweeps=50, tol=ACCEPTANCE_THRESHOLD, verbosity=0)
+    dmrg.solve(max_sweeps=50, tol=GOLDEN_TOLERANCE, verbosity=0)
     t1 = time.time()
 
     return {
@@ -97,11 +98,11 @@ t0 = time.time()
 result = pdmrg_main(
     L=manifest['L'],
     mpo=mpo,
-    max_sweeps=30,
+    max_sweeps=50,
     bond_dim=manifest['bond_dim'],
     bond_dim_warmup=manifest['bond_dim'],
     n_warmup_sweeps=5,
-    tol={ACCEPTANCE_THRESHOLD},
+    tol={GOLDEN_TOLERANCE},
     dtype=manifest['dtype'],
     comm=comm,
     verbose=False,
@@ -216,9 +217,9 @@ dtype = np.complex128 if manifest['dtype'] == 'complex128' else np.float64
 energy, mps = a2dmrg_main(
     L=manifest['L'],
     mpo=mpo,
-    max_sweeps=30,
+    max_sweeps=50,
     bond_dim=manifest['bond_dim'],
-    tol={ACCEPTANCE_THRESHOLD},
+    tol={GOLDEN_TOLERANCE},
     dtype=dtype,
     comm=comm,
     warmup_sweeps=5,
