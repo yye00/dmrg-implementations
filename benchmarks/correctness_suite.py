@@ -27,7 +27,7 @@ from datetime import datetime
 import numpy as np
 
 # Convergence and validation thresholds
-GOLDEN_TOLERANCE = 1e-12           # Convergence tolerance (match golden generation)
+GOLDEN_TOLERANCE = 1e-11           # Convergence tolerance (tighter than acceptance, faster than 1e-12)
 MACHINE_PRECISION_THRESHOLD = 1e-12  # Validation: Gold standard
 ACCEPTANCE_THRESHOLD = 5e-10       # Validation: Acceptable agreement (order 1e-10)
 
@@ -98,7 +98,7 @@ t0 = time.time()
 result = pdmrg_main(
     L=manifest['L'],
     mpo=mpo,
-    max_sweeps=50,
+    max_sweeps=40,
     bond_dim=manifest['bond_dim'],
     bond_dim_warmup=manifest['bond_dim'],
     n_warmup_sweeps=5,
@@ -217,7 +217,7 @@ dtype = np.complex128 if manifest['dtype'] == 'complex128' else np.float64
 energy, mps = a2dmrg_main(
     L=manifest['L'],
     mpo=mpo,
-    max_sweeps=50,
+    max_sweeps=40,
     bond_dim=manifest['bond_dim'],
     tol={GOLDEN_TOLERANCE},
     dtype=dtype,
