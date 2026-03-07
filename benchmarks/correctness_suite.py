@@ -27,8 +27,8 @@ from datetime import datetime
 import numpy as np
 
 # Validation thresholds
-MACHINE_PRECISION_THRESHOLD = MACHINE_PRECISION_THRESHOLD  # Gold standard
-ACCEPTANCE_THRESHOLD = 5e-10  # Acceptable agreement (order ACCEPTANCE_THRESHOLD)
+MACHINE_PRECISION_THRESHOLD = 1e-12  # Gold standard
+ACCEPTANCE_THRESHOLD = 5e-10  # Acceptable agreement (order 1e-10)
 
 # Add repo root to path
 repo_root = Path(__file__).parent.parent
