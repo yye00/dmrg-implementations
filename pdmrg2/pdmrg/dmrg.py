@@ -256,8 +256,7 @@ def local_sweep(pmps, env_mgr, mpo_arrays, direction, max_bond,
 
 
 def boundary_merge(pmps, env_mgr, mpo_arrays, comm, boundaries,
-                   max_bond, max_iter=30, tol=1e-10, skip_optimization=False,
-                   use_stable_merge=True):
+                   max_bond, max_iter=30, tol=1e-10, skip_optimization=False):
     """Phase 3: Merge at shared boundary bonds.
 
     Must be called by ALL ranks. Merges happen at the specified boundaries.
@@ -267,10 +266,6 @@ def boundary_merge(pmps, env_mgr, mpo_arrays, comm, boundaries,
     boundaries : str
         'even' for boundaries 0↔1, 2↔3, 4↔5, ...
         'odd' for boundaries 1↔2, 3↔4, 5↔6, ...
-    skip_optimization : bool
-        If True, skip eigensolver and just compute energy.
-    use_stable_merge : bool
-        If True (default), use stable merge without V amplification.
     skip_optimization : bool
         If True, skip eigensolver and just compute energy of current state.
         Useful when state is already converged.
@@ -585,16 +580,8 @@ def recompute_boundary_v(pmps, comm, which_boundary):
 def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
                n_warmup_sweeps=5, tol=1e-8, dtype='float64',
                comm=None, verbose=True, parallel_warmup_flag=False,
-               random_init_flag=False, return_metadata=False,
-               use_stable_merge=True):
-    """Run the full PDMRG algorithm (PDMRG2 variant with BLAS-3 optimizations).
-
-    Parameters
-    ----------
-    return_metadata : bool, optional
-        If True, return (energy, pmps, metadata) tuple.
-    use_stable_merge : bool, optional
-        If True (default), use numerically stable boundary merge.
+               random_init_flag=False):
+    """Run the full PDMRG algorithm.
 
     For n_procs > 1, uses staggered sweeps (Fig. 4 of the paper):
       - Even ranks start at right end, sweep left first

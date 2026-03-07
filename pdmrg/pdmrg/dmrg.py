@@ -250,8 +250,7 @@ def local_sweep(pmps, env_mgr, mpo_arrays, direction, max_bond,
 
 
 def boundary_merge(pmps, env_mgr, mpo_arrays, comm, boundaries,
-                   max_bond, max_iter=30, tol=1e-10, skip_optimization=False,
-                   use_stable_merge=True):
+                   max_bond, max_iter=30, tol=1e-10, skip_optimization=False):
     """Phase 3: Merge at shared boundary bonds.
 
     Must be called by ALL ranks. Merges happen at the specified boundaries.
@@ -264,9 +263,6 @@ def boundary_merge(pmps, env_mgr, mpo_arrays, comm, boundaries,
     skip_optimization : bool
         If True, skip eigensolver and just compute energy of current state.
         Useful when state is already converged.
-    use_stable_merge : bool
-        If True (default), use stable merge without V amplification.
-        If False, use original merge (may have numerical issues).
 
     At each active boundary, the left rank (lower) performs the merge
     computation. Both ranks exchange data and receive results.
@@ -319,25 +315,13 @@ def boundary_merge(pmps, env_mgr, mpo_arrays, comm, boundaries,
         left_global = global_end
         right_global = global_end + 1
 
-        if use_stable_merge:
-            # Use numerically stable merge (avoids V = 1/Lambda amplification)
-            from pdmrg.parallel.merge_stable import merge_boundary_tensors_stable_from_V
-            A_left_new, A_right_new, V_new, energy, _ = merge_boundary_tensors_stable_from_V(
-                psi_left, psi_right, V,
-                L_env, R_env,
-                mpo_arrays[left_global], mpo_arrays[right_global],
-                max_bond=max_bond, max_iter=max_iter, tol=tol,
-                skip_optimization=skip_optimization
-            )
-        else:
-            # Use original merge (may have numerical instability)
-            A_left_new, A_right_new, V_new, energy, _ = merge_boundary_tensors(
-                psi_left, psi_right, V,
-                L_env, R_env,
-                mpo_arrays[left_global], mpo_arrays[right_global],
-                max_bond=max_bond, max_iter=max_iter, tol=tol,
-                skip_optimization=skip_optimization
-            )
+        A_left_new, A_right_new, V_new, energy, _ = merge_boundary_tensors(
+            psi_left, psi_right, V,
+            L_env, R_env,
+            mpo_arrays[left_global], mpo_arrays[right_global],
+            max_bond=max_bond, max_iter=max_iter, tol=tol,
+            skip_optimization=skip_optimization
+        )
 
         # Update local state
         pmps.arrays[-1] = A_left_new
@@ -590,8 +574,7 @@ def recompute_boundary_v(pmps, comm, which_boundary):
 def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
                n_warmup_sweeps=5, tol=1e-8, dtype='float64',
                comm=None, verbose=True, parallel_warmup_flag=False,
-               random_init_flag=False, return_metadata=False,
-               use_stable_merge=True):
+               random_init_flag=False, return_metadata=False):
     """Run the full PDMRG algorithm.
 
     For n_procs > 1, uses staggered sweeps (Fig. 4 of the paper):
@@ -605,9 +588,6 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
     return_metadata : bool, optional
         If True, return (energy, pmps, metadata) tuple.
         If False (default), return (energy, pmps) for backward compatibility.
-    use_stable_merge : bool, optional
-        If True (default), use numerically stable boundary merge that avoids
-        V = 1/Lambda amplification. If False, use original merge (unstable).
       
     Parameters
     ----------
@@ -851,13 +831,12 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
             recompute_boundary_v(pmps, comm, 'right')
 
             # Merge at even boundaries (0↔1, 2↔3, ...)
-            # With stable merge, skip_opt can be set to False for better convergence
-            skip_opt = not use_stable_merge  # If stable, allow optimization
+            # Skip optimization due to spurious H_eff eigenvalues (TODO: fix H_eff bug)
+            skip_opt = True  # Always skip until H_eff bug is fixed
             E_merge1 = boundary_merge(
                 pmps, env_mgr, mpo_arrays, comm, 'even',
                 max_bond=bond_dim, max_iter=eigsolver_max_iter,
-                tol=eigsolver_tol, skip_optimization=skip_opt,
-                use_stable_merge=use_stable_merge)
+                tol=eigsolver_tol, skip_optimization=skip_opt)
 
             # QR sweep left on all ranks (parallel, no communication)
             canonize_block(pmps, env_mgr, mpo_arrays, 'right')
@@ -881,8 +860,7 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
             E_merge2 = boundary_merge(
                 pmps, env_mgr, mpo_arrays, comm, 'odd',
                 max_bond=bond_dim, max_iter=eigsolver_max_iter,
-                tol=eigsolver_tol, skip_optimization=skip_opt,
-                use_stable_merge=use_stable_merge)
+                tol=eigsolver_tol, skip_optimization=skip_opt)
 
             # Convergence check
             merge_energies = [e for e in [E_merge1, E_merge2] if e != 0.0]
