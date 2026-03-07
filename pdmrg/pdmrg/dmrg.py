@@ -701,10 +701,12 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         V_right = None
         if rank < n_procs - 1:
             chi_R = local_mps[-1].shape[2]
-            V_right = np.eye(chi_R, dtype=np.dtype(dtype))
+            # Initialize as 1D vector (will be properly computed in recompute_boundary_v)
+            V_right = np.ones(chi_R, dtype=np.dtype(dtype))
         if rank > 0:
             chi_L = local_mps[0].shape[0]
-            V_left = np.eye(chi_L, dtype=np.dtype(dtype))
+            # Initialize as 1D vector (will be properly computed in recompute_boundary_v)
+            V_left = np.ones(chi_L, dtype=np.dtype(dtype))
         
         # Create ParallelMPS with local arrays
         pmps = ParallelMPS(
@@ -831,7 +833,11 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
             recompute_boundary_v(pmps, comm, 'right')
 
             # Merge at even boundaries (0↔1, 2↔3, ...)
-            # Skip optimization due to spurious H_eff eigenvalues (TODO: fix H_eff bug)
+            # KNOWN LIMITATION: Boundary optimization disabled
+            #
+            # Without optimization, boundaries can only EVALUATE energy, not improve it.
+            # This limits parallel efficiency to 10-30% speedup at np=8.
+            # To fix: Debug H_eff construction to eliminate spurious eigenvalues.
             skip_opt = True  # Always skip until H_eff bug is fixed
             E_merge1 = boundary_merge(
                 pmps, env_mgr, mpo_arrays, comm, 'even',

@@ -22,6 +22,7 @@ import os
 import json
 import time
 import subprocess
+import shutil
 from pathlib import Path
 from datetime import datetime
 import numpy as np
@@ -132,8 +133,17 @@ if rank == 0:
     # Run with MPI
     venv_python = repo_root / implementation / 'venv' / 'bin' / 'python'
 
+    # Find mpirun in PATH (portable across distributions)
+    mpirun = shutil.which('mpirun')
+    if not mpirun:
+        return {
+            'method': f'{implementation}_np{np_count}',
+            'success': False,
+            'error': 'mpirun not found in PATH'
+        }
+
     cmd = [
-        '/usr/lib64/openmpi/bin/mpirun',
+        mpirun,
         '-np', str(np_count),
         '--oversubscribe',
         '--mca', 'btl', 'tcp,self',
@@ -143,8 +153,7 @@ if rank == 0:
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
-                               env={**os.environ, 'PATH': '/usr/lib64/openmpi/bin:' + os.environ.get('PATH', '')})
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
         if result.returncode != 0:
             return {
@@ -241,8 +250,17 @@ if rank == 0:
 
     venv_python = repo_root / 'a2dmrg' / 'venv' / 'bin' / 'python'
 
+    # Find mpirun in PATH (portable across distributions)
+    mpirun = shutil.which('mpirun')
+    if not mpirun:
+        return {
+            'method': f'A2DMRG_np{np_count}',
+            'success': False,
+            'error': 'mpirun not found in PATH'
+        }
+
     cmd = [
-        '/usr/lib64/openmpi/bin/mpirun',
+        mpirun,
         '-np', str(np_count),
         '--oversubscribe',
         '--mca', 'btl', 'tcp,self',
@@ -252,8 +270,7 @@ if rank == 0:
     ]
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
-                               env={**os.environ, 'PATH': '/usr/lib64/openmpi/bin:' + os.environ.get('PATH', '')})
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
 
         if result.returncode != 0:
             return {
