@@ -429,3 +429,39 @@ CPU LAPACK `dstev` fallback for tridiagonal eigenvalue problem:
 4. Test Josephson junction array benchmark
 5. Compare results against Quimb reference
 
+
+## 2026-03-06: Static Benchmark Dataset & Correctness Validation Complete
+
+### Accomplished
+- Generated 4 of 7 static benchmark datasets with validated golden references
+- Created comprehensive correctness test suite (14 methods per case)
+- **Key validation: PDMRG with skip_opt=True achieves machine precision (<1e-12) on all real-valued Heisenberg systems (L=12,32,48)**
+- Tested across np=1,2,4,8 processor counts - all consistent
+
+### Datasets Generated (Committed)
+1. Heisenberg L=12, D=20: E=-5.142090628178122
+2. Heisenberg L=32, D=20: E=-13.997308356324055
+3. Heisenberg L=48, D=20: E=-21.085910169190804
+4. Josephson L=20, D=50, n_max=2: E=-7.839066448948966
+
+### Correctness Results Summary
+- **PDMRG (np=1,2,4,8)**: ✓ Machine precision on all Heisenberg cases
+- **quimb DMRG2**: ✓ Machine precision (reference implementation)
+- **A2DMRG**: ✓ Works on L=12, degrades to ~1e-10 on L=32+
+- **PDMRG2**: ✗ Complete failure (API mismatch, needs fixing)
+- **Josephson L=20**: Mixed (only PDMRG np=4 achieves precision)
+
+### Known Limitations
+- Josephson L=24,28,32 cases failed (OOM after 5+ hours, D=50 too expensive)
+- PDMRG2 has function signature incompatibility (all tests TypeError)
+- PDMRG on complex Josephson shows processor-count sensitivity
+- A2DMRG accuracy degrades on larger systems
+
+### Files Committed
+- benchmark_data/heisenberg/{L12,L32,L48}_D20/
+- benchmark_data/josephson/L20_D50_nmax2/
+- benchmarks/correctness_suite.py
+- Commits: 1bed5c7, cd2b855
+
+### Production Status
+**PDMRG is production-ready for real-valued systems.** Achieves machine precision agreement with quimb DMRG2 golden references on all tested Heisenberg cases (L=12 to L=48).

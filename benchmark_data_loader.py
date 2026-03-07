@@ -19,9 +19,14 @@ def get_benchmark_root() -> Path:
     return repo_root / "benchmark_data"
 
 
-def list_available_benchmarks() -> Dict[str, List[str]]:
+def list_available_benchmarks(tier: str = None) -> Dict[str, List[str]]:
     """
     List all available benchmark cases.
+
+    Parameters
+    ----------
+    tier : str, optional
+        Benchmark tier to filter: "regular", "challenge", or None for all
 
     Returns
     -------
@@ -31,16 +36,64 @@ def list_available_benchmarks() -> Dict[str, List[str]]:
     bench_root = get_benchmark_root()
     result = {}
 
-    for model_dir in bench_root.iterdir():
-        if model_dir.is_dir() and model_dir.name not in [".git", "__pycache__"]:
-            cases = []
-            for case_dir in model_dir.iterdir():
-                if case_dir.is_dir() and (case_dir / "manifest.json").exists():
-                    cases.append(case_dir.name)
-            if cases:
-                result[model_dir.name] = sorted(cases)
+    # Support both old flat structure and new tier structure
+    tier_dirs = []
+    if tier:
+        tier_dir = bench_root / tier
+        if tier_dir.exists():
+            tier_dirs = [tier_dir]
+    else:
+        # Check for new tier structure
+        regular_dir = bench_root / "regular"
+        challenge_dir = bench_root / "challenge"
+        if regular_dir.exists() or challenge_dir.exists():
+            tier_dirs = [d for d in [regular_dir, challenge_dir] if d.exists()]
+        else:
+            # Fallback to old flat structure
+            tier_dirs = [bench_root]
+
+    for tier_dir in tier_dirs:
+        for model_dir in tier_dir.iterdir():
+            if model_dir.is_dir() and model_dir.name not in [".git", "__pycache__", "regular", "challenge"]:
+                model_name = model_dir.name
+                if model_name not in result:
+                    result[model_name] = []
+
+                for case_dir in model_dir.iterdir():
+                    if case_dir.is_dir() and (case_dir / "manifest.json").exists():
+                        result[model_name].append(case_dir.name)
+
+    # Sort and deduplicate
+    for model in result:
+        result[model] = sorted(list(set(result[model])))
 
     return result
+
+
+def _resolve_case_path(model: str, case: str) -> Path:
+    """
+    Resolve case directory path, supporting both tier and flat structures.
+
+    Searches in order: regular/, challenge/, then root.
+    """
+    bench_root = get_benchmark_root()
+
+    # Try tier structure first
+    for tier in ["regular", "challenge"]:
+        tier_path = bench_root / tier / model / case
+        if tier_path.exists():
+            return tier_path
+
+    # Fallback to flat structure
+    flat_path = bench_root / model / case
+    if flat_path.exists():
+        return flat_path
+
+    # Not found
+    raise FileNotFoundError(
+        f"Benchmark case not found: {model}/{case}\n"
+        f"Searched in: regular/, challenge/, and root"
+    )
 
 
 def load_mpo_from_disk(model: str, case: str) -> Tuple[List[np.ndarray], Dict[str, Any]]:
@@ -61,8 +114,8 @@ def load_mpo_from_disk(model: str, case: str) -> Tuple[List[np.ndarray], Dict[st
     metadata : dict
         MPO metadata
     """
-    bench_root = get_benchmark_root()
-    mpo_path = bench_root / model / case / "mpo.npz"
+    case_path = _resolve_case_path(model, case)
+    mpo_path = case_path / "mpo.npz"
 
     if not mpo_path.exists():
         raise FileNotFoundError(f"MPO not found: {mpo_path}")
@@ -97,8 +150,8 @@ def load_mps_from_disk(model: str, case: str) -> Tuple[List[np.ndarray], Dict[st
     metadata : dict
         MPS metadata including gauge information
     """
-    bench_root = get_benchmark_root()
-    mps_path = bench_root / model / case / "initial_mps.npz"
+    case_path = _resolve_case_path(model, case)
+    mps_path = case_path / "initial_mps.npz"
 
     if not mps_path.exists():
         raise FileNotFoundError(f"Initial MPS not found: {mps_path}")
@@ -131,8 +184,8 @@ def load_manifest(model: str, case: str) -> Dict[str, Any]:
     dict
         Manifest with system parameters
     """
-    bench_root = get_benchmark_root()
-    manifest_path = bench_root / model / case / "manifest.json"
+    case_path = _resolve_case_path(model, case)
+    manifest_path = case_path / "manifest.json"
 
     if not manifest_path.exists():
         raise FileNotFoundError(f"Manifest not found: {manifest_path}")
@@ -157,8 +210,8 @@ def load_golden_results(model: str, case: str) -> Dict[str, Any]:
     dict
         Golden results from quimb DMRG1/DMRG2
     """
-    bench_root = get_benchmark_root()
-    golden_path = bench_root / model / case / "golden_results.json"
+    case_path = _resolve_case_path(model, case)
+    golden_path = case_path / "golden_results.json"
 
     if not golden_path.exists():
         raise FileNotFoundError(f"Golden results not found: {golden_path}")

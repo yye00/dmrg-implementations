@@ -1,0 +1,15 @@
+{
+  "model": "josephson",
+  "L": 28,
+  "bond_dim": 50,
+  "dtype": "complex128",
+  "parameters": {
+    "E_J": 1.0,
+    "E_C": 0.5,
+    "n_max": 2,
+    "with_flux": true
+  },
+  "initial_mps_gauge": "left",
+  "generator_version": "1.0",
+  "created_timestamp": "2026-03-06T22:40:08.809373"
+}
