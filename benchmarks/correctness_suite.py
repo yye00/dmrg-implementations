@@ -392,7 +392,7 @@ def run_correctness_suite():
 
     for test_case, case_results in all_results.items():
         print(f"\n{test_case}:")
-        golden = load_benchmark_case(*test_case.split('/'))[' golden_results']['quimb_dmrg2']['energy']
+        golden = load_benchmark_case(*test_case.split('/'))['golden_results']['quimb_dmrg2']['energy']
 
         for method, result in case_results.items():
             total_count += 1
