@@ -23,6 +23,7 @@ from a2dmrg.dmrg import a2dmrg_main
 class TestErrorHandling:
     """Test #65: Error handling for non-convergence and invalid inputs."""
 
+    @pytest.mark.mpi
     def test_insufficient_bond_dimension(self):
         """
         Test that algorithm handles insufficient bond dimension gracefully.
@@ -69,6 +70,7 @@ class TestErrorHandling:
         # but should still be negative and within order of magnitude
         assert energy > -20, f"Energy should be > -20 for L=10, got {energy}"
 
+    @pytest.mark.mpi
     def test_very_few_sweeps(self):
         """
         Test that algorithm handles very few sweeps gracefully.
@@ -105,6 +107,7 @@ class TestErrorHandling:
         assert np.isfinite(energy), f"Energy should be finite, got {energy}"
         assert mps.L == L, f"MPS should have {L} sites"
 
+    @pytest.mark.mpi
     def test_max_sweeps_two(self):
         """
         Test with max_sweeps=2 to verify minimal sweep count works.
@@ -256,6 +259,7 @@ class TestErrorHandling:
         with pytest.raises(ValueError, match="dtype must be np.float64 or np.complex128"):
             a2dmrg_main(L=6, mpo=mpo, max_sweeps=5, bond_dim=8, dtype=np.int32)
 
+    @pytest.mark.mpi
     def test_small_bond_dim_with_complex_dtype(self):
         """
         Test insufficient bond dimension with complex dtype.
@@ -297,6 +301,7 @@ class TestErrorHandling:
         assert np.abs(np.imag(energy)) < 1e-10, \
             f"Energy should be real for Hermitian H, got imaginary part {np.imag(energy)}"
 
+    @pytest.mark.mpi
     def test_convergence_detection_with_large_tol(self):
         """
         Test that algorithm completes even with very large tolerance.

@@ -1,7 +1,5 @@
 """Test #41: Josephson junction - Complex128 parallel (np=2,4) matches serial."""
 
-import fix_quimb_python313  # Fix for Python 3.13 compatibility
-
 import pytest
 import numpy as np
 from a2dmrg.mpi_compat import MPI
@@ -190,76 +188,13 @@ def test_complex128_parallel_np4():
     assert diff < 1e-10, f"Energies differ by {diff} (np=4)"
 
 
-def test_complex128_serial_baseline():
-    """Test that serial (np=1) complex128 still works as baseline.
-
-    This test ensures that the serial version continues to work,
-    providing a baseline for the parallel tests above.
-    """
-    comm = MPI.COMM_WORLD
-    size = comm.Get_size()
-
-    # Only run if np=1
-    if size != 1:
-        pytest.skip(f"Baseline test requires np=1, but running with np={size}")
-
-    L = 6
-    bond_dim = 20
-    nmax = 3
-
-    # Create Bose-Hubbard MPO
-    t_mag = 1.0
-    phase = np.pi / 4
-    t = t_mag * np.exp(1j * phase)
-    U = 2.0
-    mu = 0.5
-
-    mpo = create_bose_hubbard_mpo(L, t=t, U=U, mu=mu, nmax=nmax)
-
-    # Warm-start
-    dmrg_warmstart = DMRG2(mpo, bond_dims=bond_dim)
-    dmrg_warmstart.solve(tol=1e-10, max_sweeps=10, verbosity=0)
-    initial_mps = convert_quimb_dmrg_to_a2dmrg_format(dmrg_warmstart.state, bond_dim)
-
-    # Reference
-    dmrg = DMRG2(mpo, bond_dims=bond_dim)
-    dmrg.solve(tol=1e-10, max_sweeps=15, verbosity=0)
-    E_serial = dmrg.energy
-
-    print(f"\nSerial DMRG2 reference: {E_serial:.15f}")
-
-    # A2DMRG serial
-    energy, mps = a2dmrg_main(
-        L=L,
-        mpo=mpo,
-        max_sweeps=15,
-        bond_dim=bond_dim,
-        tol=1e-10,
-        comm=comm,
-        dtype=np.complex128,
-        one_site=True,
-        initial_mps=initial_mps,
-        verbose=False
-    )
-
-    print(f"A2DMRG (np=1):      {energy:.15f}")
-
-    diff = abs(energy - E_serial)
-    print(f"Difference: {diff:.3e}")
-
-    assert diff < 1e-10, f"Serial baseline failed: {diff}"
-
-
 if __name__ == "__main__":
-    # Run serial baseline if np=1
     comm = MPI.COMM_WORLD
     size = comm.Get_size()
 
-    if size == 1:
-        test_complex128_serial_baseline()
-    elif size == 2:
+    if size == 2:
         test_complex128_parallel_np2()
     elif size == 4:
         test_complex128_parallel_np4()
     else:
-        print(f"No test configured for np={size}. Use np=1, 2, or 4.")
+        print(f"No test configured for np={size}. Use np=2 or 4.")

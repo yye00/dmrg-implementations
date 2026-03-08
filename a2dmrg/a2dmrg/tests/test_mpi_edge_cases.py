@@ -12,6 +12,8 @@ from a2dmrg.mpi_compat import MPI
 from a2dmrg.dmrg import a2dmrg_main
 from a2dmrg.numerics.observables import compute_energy
 
+pytestmark = pytest.mark.mpi
+
 
 def create_heisenberg_mpo(L, J=1.0, dtype=np.float64):
     """

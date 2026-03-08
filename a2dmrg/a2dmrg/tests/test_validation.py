@@ -12,6 +12,8 @@ from a2dmrg.mpi_compat import MPI
 
 from a2dmrg.dmrg import a2dmrg_main
 
+pytestmark = pytest.mark.mpi
+
 
 def _create_heisenberg_mpo(L, J=1.0):
     """Create Heisenberg chain MPO using quimb's SpinHam1D."""
@@ -44,7 +46,7 @@ def _run_a2dmrg(L, bond_dim, warmup_sweeps=2, one_site=True):
         max_sweeps=30,
         bond_dim=bond_dim,
         tol=1e-12,
-        comm=MPI.COMM_SELF,
+        comm=MPI.COMM_WORLD,
         dtype=np.float64,
         one_site=one_site,
         verbose=False,

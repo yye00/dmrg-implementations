@@ -158,7 +158,7 @@ def compute_energy(
         L_env = np.transpose(L_env, (2, 1, 0))
     
     # Final trace to get energy
-    energy = np.real(np.trace(L_env[:, -1, :]))
+    energy = np.real(np.trace(L_env[:, 0, :]))
     
     # Normalize if requested
     if normalize:
@@ -221,7 +221,7 @@ def compute_cross_energy(
         L_env = np.tensordot(Y, A_bra_conj, axes=([0, 3], [0, 1]))
         L_env = np.transpose(L_env, (2, 1, 0))
 
-    return complex(np.trace(L_env[:, -1, :]))
+    return complex(np.trace(L_env[:, 0, :]))
 
 
 def compute_overlap(

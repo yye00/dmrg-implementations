@@ -61,8 +61,7 @@ def build_left_environments(mps: qtn.MatrixProductState,
     # Sweep left to right, building L[1], L[2], ..., L[L]
     for i in range(L):
         A = _get_mps_array(mps, i)            # (left, phys, right) - ket tensor
-        W_raw = np.asarray(mpo[i].data)
-        W = _reshape_mpo_tensor(W_raw, i, L)  # (mpo_L, phys_out, mpo_R, phys_in)
+        W = _reshape_mpo_tensor(mpo, i)       # (mpo_L, phys_out, mpo_R, phys_in)
         A_conj = A.conj()
 
         # Contraction: L[a,m,k] @ A_conj[a,s,A] @ W[m,s,M,p] @ A[k,p,K] -> L_new[A,M,K]
@@ -126,8 +125,7 @@ def build_right_environments(mps: qtn.MatrixProductState,
     # Sweep right to left, building R[L-1], R[L-2], ..., R[0]
     for i in range(L - 1, -1, -1):
         B = _get_mps_array(mps, i)            # (left, phys, right) - ket tensor
-        W_raw = np.asarray(mpo[i].data)
-        W = _reshape_mpo_tensor(W_raw, i, L)  # (mpo_L, phys_out, mpo_R, phys_in)
+        W = _reshape_mpo_tensor(mpo, i)       # (mpo_L, phys_out, mpo_R, phys_in)
         B_conj = B.conj()
 
         # Contraction: B_conj[a,s,A] @ W[m,s,M,p] @ B[k,p,K] @ R[A,M,K] -> R_new[a,m,k]
@@ -261,47 +259,91 @@ def _reshape_mps_tensor(A: np.ndarray, site: int, L: int) -> np.ndarray:
         return A
 
 
-def _reshape_mpo_tensor(W: np.ndarray, site: int, L: int) -> np.ndarray:
+def _reshape_mpo_tensor(mpo_or_array, site: int, L: int = None) -> np.ndarray:
     """
-    Reshape MPO tensor to form (left_mpo, phys_out, right_mpo, phys_in).
+    Extract MPO tensor and reshape to (mpo_left, phys_out, mpo_right, phys_in).
 
-    Quimb MPO_ham_heis returns tensors with shapes:
-    - First site (i=0): (right_mpo, phys_out, phys_in) with left_mpo=1 implicit
-    - Middle sites: (left_mpo, right_mpo, phys_out, phys_in)
-    - Last site (i=L-1): (left_mpo, phys_out, phys_in) with right_mpo=1 implicit
-
-    We want: (mpo_left, phys_out, mpo_right, phys_in)
+    When *mpo_or_array* is a quimb ``MatrixProductOperator``, uses the
+    ``.inds`` attribute to resolve index positions (preferred path).
+    When it is a raw numpy array (legacy callers in effective_ham.py),
+    falls back to positional heuristics.
 
     Parameters
     ----------
-    W : np.ndarray
-        Raw MPO tensor from quimb
+    mpo_or_array : MatrixProductOperator or np.ndarray
+        Either the full quimb MPO (preferred) or a raw numpy array (legacy).
     site : int
-        Site index
-    L : int
-        Total number of sites
+        Site index.
+    L : int, optional
+        Total number of sites.  Required only for the legacy (raw array)
+        path; ignored when *mpo_or_array* is an MPO.
 
     Returns
     -------
-    W_reshaped : np.ndarray
-        Tensor in standard form (left_mpo, phys_out, mpo_right, phys_in)
+    W : np.ndarray
+        Tensor in standard form (mpo_left, phys_out, mpo_right, phys_in).
     """
+
+    # -----------------------------------------------------------
+    # Preferred path: quimb MPO object — use index-name resolution
+    # -----------------------------------------------------------
+    if hasattr(mpo_or_array, 'upper_ind_id'):
+        mpo = mpo_or_array
+        t = mpo[site]
+        data = np.asarray(t.data)
+        inds = t.inds
+
+        # Identify the physical indices by name
+        upper_name = mpo.upper_ind_id.format(site)  # phys_out / ket, e.g. 'k0'
+        lower_name = mpo.lower_ind_id.format(site)  # phys_in  / bra, e.g. 'b0'
+
+        upper_pos = list(inds).index(upper_name)
+        lower_pos = list(inds).index(lower_name)
+
+        if data.ndim == 2:
+            # Single-site MPO stored as (phys_out, phys_in) with no bond dims.
+            if upper_pos == 0 and lower_pos == 1:
+                op = data
+            else:
+                op = np.transpose(data, (1, 0))
+            return op[None, :, None, :]
+
+        if data.ndim == 3:
+            # Edge site: one bond index + two physical indices.
+            bond_pos = [i for i in range(3) if i not in (upper_pos, lower_pos)][0]
+
+            if site == 0:
+                # bond is mpo_right; mpo_left is implicit size-1
+                perm = [upper_pos, bond_pos, lower_pos]
+                return np.transpose(data, perm)[None, :, :, :]
+            else:
+                # bond is mpo_left; mpo_right is implicit size-1
+                perm = [bond_pos, upper_pos, lower_pos]
+                ordered = np.transpose(data, perm)
+                return ordered[:, :, None, :]
+
+        # Middle site: 4D — two bond indices + two physical indices.
+        bond_positions = [i for i in range(4) if i not in (upper_pos, lower_pos)]
+        # quimb keeps bonds in (left, right) order within the index tuple
+        mpo_left_pos = bond_positions[0]
+        mpo_right_pos = bond_positions[1]
+
+        perm = [mpo_left_pos, upper_pos, mpo_right_pos, lower_pos]
+        return np.transpose(data, perm)
+
+    # -----------------------------------------------------------
+    # Legacy fallback: raw numpy array with positional heuristics
+    # (used by effective_ham.py which receives pre-extracted arrays)
+    # -----------------------------------------------------------
+    W = np.asarray(mpo_or_array)
+
     if W.ndim == 3:
-        # Either first or last site
         if site == 0:
-            # First site: (right_mpo, phys_out, phys_in) -> (1, phys_out, right_mpo, phys_in)
-            # Need to transpose (right_mpo, phys_out, phys_in) -> (phys_out, right_mpo, phys_in)
-            # Then expand_dims to add left_mpo=1 at axis 0
-            W_transposed = W.transpose(1, 0, 2)  # (phys_out, right_mpo, phys_in)
-            return np.expand_dims(W_transposed, axis=0)  # (1, phys_out, right_mpo, phys_in)
+            W_transposed = W.transpose(1, 0, 2)
+            return np.expand_dims(W_transposed, axis=0)
         else:
-            # Last site: (left_mpo, phys_out, phys_in) -> (left_mpo, phys_out, 1, phys_in)
-            # Already in correct order, just need to add right_mpo=1 at axis 2
-            return np.expand_dims(W, axis=2)  # (left_mpo, phys_out, 1, phys_in)
+            return np.expand_dims(W, axis=2)
     elif W.ndim == 4:
-        # Middle site: (left_mpo, right_mpo, phys_out, phys_in)
-        # We want: (left_mpo, phys_out, right_mpo, phys_in)
-        # Transpose: (0, 2, 1, 3)
         return W.transpose(0, 2, 1, 3)
     else:
         return W

@@ -8,6 +8,7 @@ and Python 3.13+ compatibility for quimb/numba.
 # CRITICAL: Apply numba fix BEFORE any imports that use quimb
 import sys
 import os
+import pytest
 
 # Add project root to path so we can import fix_quimb_python313
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
@@ -19,6 +20,23 @@ try:
     import fix_quimb_python313
 except Exception:
     pass  # If fix not needed or not available, continue
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-skip tests marked with @pytest.mark.mpi when running with np < 2."""
+    try:
+        from mpi4py import MPI
+        size = MPI.COMM_WORLD.size
+    except Exception:
+        size = 1
+
+    if size < 2:
+        skip_mpi = pytest.mark.skip(
+            reason="A2DMRG requires np>=2; run with: mpirun -np 2 python -m pytest -m mpi"
+        )
+        for item in items:
+            if "mpi" in item.keywords:
+                item.add_marker(skip_mpi)
 
 
 def pytest_configure(config):

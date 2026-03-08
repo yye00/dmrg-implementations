@@ -13,6 +13,8 @@ import pytest
 from a2dmrg.dmrg import a2dmrg_main
 from quimb.tensor import SpinHam1D
 
+pytestmark = pytest.mark.mpi
+
 
 class TestNumericalRobustness:
     """Test #66: Numerical robustness and error handling."""

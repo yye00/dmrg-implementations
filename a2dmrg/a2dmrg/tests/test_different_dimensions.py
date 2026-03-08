@@ -13,6 +13,8 @@ from a2dmrg.mps.mps_utils import create_product_state_mps
 from a2dmrg.dmrg import a2dmrg_main
 from a2dmrg.numerics.observables import compute_energy
 
+pytestmark = pytest.mark.mpi
+
 
 def create_heisenberg_mpo(L, J=1.0, dtype=np.float64):
     """
@@ -129,7 +131,7 @@ class TestDifferentDimensions:
             max_sweeps=3,
             bond_dim=bond_dim,
             tol=1e-6,
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=dtype,
             one_site=True,
             verbose=False

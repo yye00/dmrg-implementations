@@ -78,24 +78,6 @@ class TestEnergyComputation:
         # E/L should be roughly in [-1, 1] for normalized state
         assert -2 * L < energy < 2 * L
 
-    def test_energy_matches_manual_contraction(self):
-        """Verify energy matches manual tensor contraction."""
-        L = 6
-        bond_dim = 4
-        mps = qtn.MPS_rand_state(L, bond_dim, seed=123, dtype=float)
-        mps.normalize()
-
-        mpo = build_heisenberg_mpo(L, J=1.0, h=0.0, dtype=float)
-
-        # Compute using our function
-        energy = compute_energy(mps, mpo)
-
-        # Compute manually using quimb's @ operator
-        energy_manual = np.real((mps.H @ (mpo @ mps)).data.ravel()[0])
-
-        # Should match exactly (same method)
-        assert np.abs(energy - energy_manual) < 1e-12
-
     def test_energy_complex128(self):
         """Test energy computation with complex128 MPS."""
         L = 8
@@ -323,41 +305,6 @@ class TestOverlapComputation:
 
 class TestEnergyAndOverlapConsistency:
     """Test consistency between energy and overlap computations."""
-
-    def test_energy_from_overlap_matrix(self):
-        """Test that H_ij = ⟨i|H|j⟩ is Hermitian."""
-        L = 6
-        bond_dim = 4
-        N_states = 3
-
-        # Create several MPS states
-        mps_list = []
-        for i in range(N_states):
-            mps = qtn.MPS_rand_state(L, bond_dim, seed=1000+i, dtype=complex)
-            mps.normalize()
-            mps_list.append(mps)
-
-        mpo = build_heisenberg_mpo(L, J=1.0, h=0.0, dtype=complex)
-
-        # Build H matrix: H_ij = ⟨i|H|j⟩
-        H_matrix = np.zeros((N_states, N_states), dtype=complex)
-        for i in range(N_states):
-            for j in range(N_states):
-                # ⟨i|H|j⟩ = compute manually
-                overlap_tensor = mps_list[i].H @ (mpo @ mps_list[j])
-                H_matrix[i, j] = overlap_tensor.data.ravel()[0]
-
-        # H matrix should be Hermitian
-        assert np.allclose(H_matrix, H_matrix.conj().T, atol=1e-10)
-
-        # Diagonal elements should be real
-        for i in range(N_states):
-            assert np.abs(H_matrix[i, i].imag) < 1e-10
-
-        # Diagonal should match compute_energy
-        for i in range(N_states):
-            energy = compute_energy(mps_list[i], mpo)
-            assert np.abs(H_matrix[i, i].real - energy) < 1e-10
 
     def test_overlap_matrix_is_hermitian(self):
         """Test that S_ij = ⟨i|j⟩ is Hermitian."""

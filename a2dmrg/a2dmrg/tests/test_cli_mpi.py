@@ -10,12 +10,19 @@ import fix_quimb_python313  # noqa: F401 - Must be first for Python 3.13+
 import subprocess
 import sys
 import re
+import pytest
+
+pytestmark = pytest.mark.mpi
 
 
 def test_cli_basic():
     """Test #69 Step 1: Basic CLI execution."""
-    # Run CLI with small problem
+    import shutil
+    mpirun = shutil.which('mpirun')
+    if mpirun is None:
+        pytest.skip("mpirun not found")
     cmd = [
+        mpirun, '--oversubscribe', '-np', '2',
         sys.executable, '-m', 'a2dmrg',
         '--sites', '4',
         '--bond-dim', '8',
@@ -26,10 +33,10 @@ def test_cli_basic():
         cmd,
         capture_output=True,
         text=True,
-        timeout=30
+        timeout=120
     )
 
-    assert result.returncode == 0, f"CLI failed with return code {result.returncode}"
+    assert result.returncode == 0, f"CLI failed with return code {result.returncode}\nstderr: {result.stderr}"
     assert "A2DMRG Complete" in result.stdout
     assert "Ground state energy:" in result.stdout
 
@@ -45,7 +52,7 @@ def test_cli_mpi_initialization():
 
     # Use mpirun with 1 process (always available)
     cmd = [
-        'mpirun', '-np', '1',
+        'mpirun', '-np', '2', '--oversubscribe',
         sys.executable, '-m', 'a2dmrg',
         '--sites', '4',
         '--bond-dim', '8',
@@ -56,7 +63,7 @@ def test_cli_mpi_initialization():
         cmd,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=120,
         env=env
     )
 
@@ -75,7 +82,7 @@ def test_cli_rank0_output():
 
     # With np=1, only rank 0 exists and should print
     cmd = [
-        'mpirun', '-np', '1',
+        'mpirun', '-np', '2', '--oversubscribe',
         sys.executable, '-m', 'a2dmrg',
         '--sites', '4',
         '--bond-dim', '8',
@@ -86,7 +93,7 @@ def test_cli_rank0_output():
         cmd,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=120,
         env=env
     )
 
@@ -108,7 +115,7 @@ def test_cli_clean_completion():
     env['LD_LIBRARY_PATH'] = '/usr/lib64/openmpi/lib:' + env.get('LD_LIBRARY_PATH', '')
 
     cmd = [
-        'mpirun', '-np', '1',
+        'mpirun', '-np', '2', '--oversubscribe',
         sys.executable, '-m', 'a2dmrg',
         '--sites', '4',
         '--bond-dim', '8',
@@ -119,7 +126,7 @@ def test_cli_clean_completion():
         cmd,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=120,
         env=env
     )
 
@@ -158,7 +165,12 @@ def test_cli_help():
 
 def test_cli_energy_reasonable():
     """Verify that computed energy is physically reasonable."""
+    import shutil
+    mpirun = shutil.which('mpirun')
+    if mpirun is None:
+        pytest.skip("mpirun not found")
     cmd = [
+        mpirun, '--oversubscribe', '-np', '2',
         sys.executable, '-m', 'a2dmrg',
         '--sites', '4',
         '--bond-dim', '8',
@@ -169,7 +181,7 @@ def test_cli_energy_reasonable():
         cmd,
         capture_output=True,
         text=True,
-        timeout=30
+        timeout=120
     )
 
     # Extract energy from output

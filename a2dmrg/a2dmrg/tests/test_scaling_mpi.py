@@ -12,8 +12,11 @@ import time
 import sys
 import os
 import numpy as np
+import pytest
 
 from a2dmrg.mpi_compat import MPI, HAS_MPI
+
+pytestmark = pytest.mark.mpi
 
 
 from a2dmrg.dmrg import a2dmrg_main
@@ -46,7 +49,7 @@ def run_benchmark(L, bond_dim, max_sweeps, warmup_sweeps, comm, verbose=False):
         max_sweeps=max_sweeps,
         bond_dim=bond_dim,
         tol=1e-12,
-        comm=comm if comm else MPI.COMM_SELF,
+        comm=comm if comm else MPI.COMM_WORLD,
         warmup_sweeps=warmup_sweeps,
         one_site=True,
         verbose=verbose and rank == 0,

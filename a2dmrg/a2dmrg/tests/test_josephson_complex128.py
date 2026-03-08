@@ -9,6 +9,10 @@ from a2dmrg.dmrg import a2dmrg_main
 from a2dmrg.tests.test_bose_hubbard import create_bose_hubbard_mpo
 from a2dmrg.mps.format_conversion import convert_quimb_dmrg_to_a2dmrg_format
 
+import pytest
+
+pytestmark = pytest.mark.mpi
+
 
 def test_complex128_bose_hubbard():
     """Test #40: A2DMRG with complex128 on Bose-Hubbard model.

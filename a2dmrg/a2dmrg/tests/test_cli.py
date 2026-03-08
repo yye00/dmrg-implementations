@@ -5,23 +5,33 @@ This test verifies the command-line interface works correctly with various
 arguments and parameter combinations.
 """
 
+import shutil
 import subprocess
 import sys
 import pytest
 import numpy as np
 
+pytestmark = pytest.mark.mpi
+
 
 class TestCLI:
     """Test #67: CLI interface - Run from command line with arguments."""
 
-    def run_cli(self, args, expect_success=True):
+    def run_cli(self, args, expect_success=True, use_mpi=True):
         """Helper to run CLI and return output."""
-        cmd = [sys.executable, '-m', 'a2dmrg'] + args
+        if use_mpi:
+            mpirun = shutil.which('mpirun')
+            if mpirun is None:
+                pytest.skip("mpirun not found")
+            cmd = [mpirun, '--oversubscribe', '-np', '2',
+                   sys.executable, '-m', 'a2dmrg'] + args
+        else:
+            cmd = [sys.executable, '-m', 'a2dmrg'] + args
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=60
+            timeout=120
         )
 
         if expect_success:
@@ -151,7 +161,7 @@ class TestCLI:
 
         Test that --help displays usage information.
         """
-        result = self.run_cli(['--help'], expect_success=True)
+        result = self.run_cli(['--help'], expect_success=True, use_mpi=False)
 
         # Help should print to stdout and exit with 0
         assert result.returncode == 0

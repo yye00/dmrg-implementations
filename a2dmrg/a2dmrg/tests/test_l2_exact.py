@@ -6,6 +6,10 @@ from a2dmrg.mpi_compat import MPI
 from quimb.tensor import SpinHam1D
 from a2dmrg.dmrg import a2dmrg_main
 
+import pytest
+
+pytestmark = pytest.mark.mpi
+
 
 def test_l2_exact_energy():
     """Test #62: A2DMRG reproduces exact L=2 Heisenberg energy."""

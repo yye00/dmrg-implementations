@@ -6,6 +6,8 @@ from a2dmrg.mpi_compat import MPI
 from quimb.tensor import SpinHam1D, DMRG2
 from a2dmrg.dmrg import a2dmrg_main
 
+pytestmark = pytest.mark.mpi
+
 
 def test_l20_matches_quimb():
     """Test #35: A2DMRG matches quimb for L=20."""

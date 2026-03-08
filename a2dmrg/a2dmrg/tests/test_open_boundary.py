@@ -13,6 +13,8 @@ from a2dmrg.dmrg import a2dmrg_main
 from a2dmrg.mps.mps_utils import create_neel_state
 from a2dmrg.numerics.observables import compute_energy
 
+pytestmark = pytest.mark.mpi
+
 
 def create_heisenberg_mpo_obc(L, J=1.0, dtype=np.float64):
     """

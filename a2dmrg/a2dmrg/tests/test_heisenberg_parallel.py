@@ -244,71 +244,16 @@ def test_heisenberg_np8_matches_serial():
     assert diff < 1e-10, f"np=8 differs from serial by {diff}"
 
 
-def test_heisenberg_serial_baseline():
-    """Baseline test: Verify serial (np=1) works for Heisenberg.
-
-    This provides a baseline for the parallel tests above.
-    """
-    comm = MPI.COMM_WORLD
-    size = comm.Get_size()
-
-    # Only run if np=1
-    if size != 1:
-        pytest.skip(f"Baseline test requires np=1, but running with np={size}")
-
-    L = 40
-    bond_dim = 100
-
-    # Create Heisenberg MPO
-    builder = SpinHam1D(S=1/2)
-    builder += 1.0, "X", "X"
-    builder += 1.0, "Y", "Y"
-    builder += 1.0, "Z", "Z"
-    mpo = builder.build_mpo(L)
-
-    print(f"\n{'='*60}")
-    print(f"Heisenberg Serial Baseline (np=1)")
-    print(f"{'='*60}")
-
-    # Reference
-    dmrg = DMRG2(mpo, bond_dims=bond_dim)
-    dmrg.solve(tol=1e-10, verbosity=0)
-    E_serial = dmrg.energy
-    print(f"Serial DMRG energy: {E_serial:.15f}")
-
-    # A2DMRG serial
-    energy, mps = a2dmrg_main(
-        L=L,
-        mpo=mpo,
-        max_sweeps=30,
-        bond_dim=bond_dim,
-        tol=1e-10,
-        comm=comm,
-        dtype=np.float64,
-        one_site=True,
-        verbose=False
-    )
-    print(f"A2DMRG (np=1):      {energy:.15f}")
-
-    diff = abs(energy - E_serial)
-    print(f"Difference: {diff:.3e}")
-    print(f"{'='*60}\n")
-
-    assert diff < 1e-10, f"Serial baseline failed: {diff}"
-
-
 if __name__ == "__main__":
     # Run appropriate test based on MPI size
     comm = MPI.COMM_WORLD
     size = comm.Get_size()
 
-    if size == 1:
-        test_heisenberg_serial_baseline()
-    elif size == 2:
+    if size == 2:
         test_heisenberg_np2_matches_serial()
     elif size == 4:
         test_heisenberg_np4_matches_serial()
     elif size == 8:
         test_heisenberg_np8_matches_serial()
     else:
-        print(f"No test configured for np={size}. Use np=1, 2, 4, or 8.")
+        print(f"No test configured for np={size}. Use np=2, 4, or 8.")

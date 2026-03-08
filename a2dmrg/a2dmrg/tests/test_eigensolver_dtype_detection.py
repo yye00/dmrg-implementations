@@ -42,7 +42,7 @@ def test_random_v0_is_complex_for_complex_operator():
         return np.array([0.0]), vec
 
     # Patch the imported symbol inside the module.
-    es.eigsh = fake_eigsh
+    es.eigs = fake_eigsh
 
     es.solve_effective_hamiltonian(H_eff, v0=None)
 

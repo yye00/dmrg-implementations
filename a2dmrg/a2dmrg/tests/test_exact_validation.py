@@ -10,6 +10,8 @@ from scipy.linalg import eigh
 from quimb.tensor import SpinHam1D
 from a2dmrg.dmrg import a2dmrg_main
 
+pytestmark = pytest.mark.mpi
+
 
 def create_heisenberg_mpo(L, J=1.0, hz=0.0):
     """

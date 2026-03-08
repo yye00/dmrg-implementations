@@ -11,6 +11,8 @@ from a2dmrg.mpi_compat import MPI
 from quimb.tensor import SpinHam1D
 from a2dmrg.dmrg import a2dmrg_main
 
+pytestmark = pytest.mark.mpi
+
 
 class TestTiming:
     """Test timing measurements for A2DMRG."""

@@ -16,6 +16,9 @@ import fix_quimb_python313  # noqa: F401 - Must be first for Python 3.13+
 from a2dmrg.dmrg import a2dmrg_main
 from quimb.tensor import MPO_ham_heis
 import time
+import pytest
+
+pytestmark = pytest.mark.mpi
 
 
 def test_l20_practical():

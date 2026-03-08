@@ -13,6 +13,8 @@ from a2dmrg.mpi_compat import MPI
 from a2dmrg.dmrg import a2dmrg_main
 from a2dmrg.numerics.observables import compute_energy
 
+pytestmark = pytest.mark.mpi
+
 
 def create_heisenberg_mpo(L, J=1.0, cyclic=False):
     """
@@ -64,7 +66,7 @@ class TestA2DMRGSingleIteration:
         mpo = create_heisenberg_mpo(L, J=1.0, cyclic=False)
 
         # Run single iteration (max_sweeps=1)
-        comm = MPI.COMM_SELF
+        comm = MPI.COMM_WORLD
         energy, mps = a2dmrg_main(
             L=L,
             mpo=mpo,
@@ -101,7 +103,7 @@ class TestA2DMRGSingleIteration:
             max_sweeps=1,
             bond_dim=bond_dim,
             tol=1e-10,
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.float64,
             one_site=True,
             verbose=False
@@ -124,7 +126,7 @@ class TestA2DMRGSingleIteration:
             max_sweeps=1,
             bond_dim=bond_dim,
             tol=1e-10,
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.float64,
             one_site=True,
             verbose=False
@@ -147,7 +149,7 @@ class TestA2DMRGSingleIteration:
             max_sweeps=1,
             bond_dim=bond_dim,
             tol=1e-10,
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.float64,
             one_site=True,
             verbose=False
@@ -168,7 +170,7 @@ class TestA2DMRGSingleIteration:
             max_sweeps=1,
             bond_dim=bond_dim,
             tol=1e-10,
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.float64,
             one_site=True,
             verbose=False
@@ -189,7 +191,7 @@ class TestA2DMRGSingleIteration:
             max_sweeps=1,
             bond_dim=bond_dim,
             tol=1e-10,
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.float64,
             one_site=True,
             verbose=False
@@ -211,7 +213,7 @@ class TestA2DMRGSingleIteration:
             max_sweeps=1,
             bond_dim=bond_dim,
             tol=1e-10,
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.float64,
             one_site=True,
             verbose=False
@@ -239,7 +241,7 @@ class TestA2DMRGSingleIteration:
             max_sweeps=2,
             bond_dim=bond_dim,
             tol=1e-20,  # Set very small to force 2 sweeps
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.float64,
             one_site=True,
             verbose=False
@@ -269,7 +271,7 @@ class TestA2DMRGConvergence:
             max_sweeps=10,
             bond_dim=bond_dim,
             tol=tol,
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.float64,
             one_site=True,
             verbose=False
@@ -292,7 +294,7 @@ class TestA2DMRGConvergence:
             max_sweeps=3,
             bond_dim=bond_dim,
             tol=1e-6,
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.float64,
             one_site=False,  # Two-site updates
             verbose=False
@@ -314,7 +316,7 @@ class TestA2DMRGConvergence:
             max_sweeps=3,
             bond_dim=bond_dim,
             tol=1e-6,
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.complex128,
             one_site=True,
             verbose=False
@@ -337,7 +339,7 @@ class TestA2DMRGConvergence:
             max_sweeps=5,
             bond_dim=bond_dim,
             tol=1e-5,
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.float64,
             one_site=True,
             verbose=False
@@ -367,7 +369,7 @@ class TestEdgeCases:
             max_sweeps=5,
             bond_dim=bond_dim,
             tol=1e-8,
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.float64,
             one_site=True,
             verbose=False
@@ -389,7 +391,7 @@ class TestEdgeCases:
             max_sweeps=max_sweeps,
             bond_dim=bond_dim,
             tol=1e-20,  # Impossible tolerance to ensure max_sweeps is reached
-            comm=MPI.COMM_SELF,
+            comm=MPI.COMM_WORLD,
             dtype=np.float64,
             one_site=True,
             verbose=False
