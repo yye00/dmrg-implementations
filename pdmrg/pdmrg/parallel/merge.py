@@ -12,8 +12,7 @@ from pdmrg.numerics.accurate_svd import accurate_svd, compute_v_from_svd, trunca
 
 def merge_boundary_tensors(psi_left, psi_right, V,
                            L_env, R_env, W_left, W_right,
-                           max_bond, max_iter=30, tol=1e-10,
-                           skip_optimization=False):
+                           max_bond, max_iter=30, tol=1e-10):
     """Merge two boundary tensors using V, optimize, and split.
 
     Implements Eq. 5: Psi' = psi_left . diag(V) . psi_right
@@ -41,9 +40,6 @@ def merge_boundary_tensors(psi_left, psi_right, V,
         Maximum eigensolver iterations.
     tol : float
         Eigensolver tolerance.
-    skip_optimization : bool
-        If True, skip eigensolver and just compute energy of current theta.
-        Useful when the state is already converged.
 
     Returns
     -------
@@ -58,24 +54,16 @@ def merge_boundary_tensors(psi_left, psi_right, V,
     trunc_err : float
         Truncation error from SVD.
     """
-    from pdmrg.numerics.effective_ham import apply_heff
-    
     # Step 1: Form theta = psi_left . diag(V) . psi_right  (Eq. 5)
     # psi_left: (chi_L, d, chi_bond), V: (chi_bond,), psi_right: (chi_bond, d, chi_R)
     V_psi_right = V[:, None, None] * psi_right
     theta = np.einsum('ija,akl->ijkl', psi_left, V_psi_right)
 
-    # Step 2: Optimize with Lanczos (or skip if already converged)
-    if skip_optimization:
-        # Just compute the energy without optimization
-        H_theta = apply_heff(L_env, R_env, W_left, W_right, theta)
-        energy = float(np.real(np.vdot(theta.ravel(), H_theta.ravel()) / np.vdot(theta.ravel(), theta.ravel())))
-        theta_opt = theta
-    else:
-        energy, theta_opt = optimize_two_site(
-            L_env, R_env, W_left, W_right, theta,
-            max_iter=max_iter, tol=tol
-        )
+    # Step 2: Optimize with eigensolver
+    energy, theta_opt = optimize_two_site(
+        L_env, R_env, W_left, W_right, theta,
+        max_iter=max_iter, tol=tol
+    )
 
     # Step 3: SVD to split
     chi_L, d_L, d_R, chi_R = theta_opt.shape

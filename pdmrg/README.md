@@ -28,7 +28,7 @@ PDMRG enables parallel execution of DMRG calculations by dividing the system in 
   - Uses `compute_v_from_svd()` with accurate SVD for numerical stability
   - Applied to initialization, recomputation, and boundary merge
   - No more identity approximation
-- ✅ **Boundary optimization**: Enabled (`skip_opt=False`) with exact SVD (2026-03-07)
+- ✅ **Boundary optimization**: Always enabled with exact SVD
 - ✅ **Staggered sweeps**: Correctly implemented (even/odd rank pattern)
 - ✅ **Energy accuracy**: Achieves ~10⁻¹⁰ for np=2,4,8 on validated test cases
 

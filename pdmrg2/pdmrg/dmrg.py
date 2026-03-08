@@ -184,7 +184,7 @@ def local_sweep(pmps, env_mgr, mpo_arrays, direction, max_bond,
 
 
 def boundary_merge(pmps, env_mgr, mpo_arrays, comm, boundaries,
-                   max_bond, max_iter=30, tol=1e-10, skip_optimization=False):
+                   max_bond, max_iter=30, tol=1e-10):
     """Phase 3: Merge at shared boundary bonds.
 
     Must be called by ALL ranks. Merges happen at the specified boundaries.
@@ -194,9 +194,6 @@ def boundary_merge(pmps, env_mgr, mpo_arrays, comm, boundaries,
     boundaries : str
         'even' for boundaries 0↔1, 2↔3, 4↔5, ...
         'odd' for boundaries 1↔2, 3↔4, 5↔6, ...
-    skip_optimization : bool
-        If True, skip eigensolver and just compute energy of current state.
-        Useful when state is already converged.
 
     At each active boundary, the left rank (lower) performs the merge
     computation. Both ranks exchange data and receive results.
@@ -253,8 +250,7 @@ def boundary_merge(pmps, env_mgr, mpo_arrays, comm, boundaries,
             psi_left, psi_right, V,
             L_env, R_env,
             mpo_arrays[left_global], mpo_arrays[right_global],
-            max_bond=max_bond, max_iter=max_iter, tol=tol,
-            skip_optimization=skip_optimization
+            max_bond=max_bond, max_iter=max_iter, tol=tol
         )
 
         # Update local state
@@ -773,16 +769,13 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         # Recompute V at right boundary using exact SVD (V = Lambda^-1)
         recompute_boundary_v(pmps, comm, 'right')
 
-        # Merge at even boundaries with boundary optimization enabled
-        skip_opt = False  # Boundary optimization enabled (exact SVD method)
-
         if rank == 0 and verbose:
-            print(f"  Phase 2: Merging even boundaries (skip_opt={skip_opt})...")
+            print(f"  Phase 2: Merging even boundaries...")
 
         E_merge1 = boundary_merge(
             pmps, env_mgr, mpo_arrays, comm, 'even',
             max_bond=bond_dim, max_iter=eigsolver_max_iter,
-            tol=eigsolver_tol, skip_optimization=skip_opt)
+            tol=eigsolver_tol)
 
         # ===== PHASE 3: LOCAL OPTIMIZATION SWEEPS IN OPPOSITE DIRECTION =====
         if rank == 0 and verbose:
@@ -806,12 +799,12 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
 
         # Merge at odd boundaries
         if rank == 0 and verbose:
-            print(f"  Phase 4: Merging odd boundaries (skip_opt={skip_opt})...")
+            print(f"  Phase 4: Merging odd boundaries...")
 
         E_merge2 = boundary_merge(
             pmps, env_mgr, mpo_arrays, comm, 'odd',
             max_bond=bond_dim, max_iter=eigsolver_max_iter,
-            tol=eigsolver_tol, skip_optimization=skip_opt)
+            tol=eigsolver_tol)
 
         # ===== CONVERGENCE CHECK =====
         # Use best energy from merges (local sweep energies are rank-local only)
@@ -863,7 +856,6 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
             "warmup_used": not random_init_flag,
             "warmup_sweeps": n_warmup_sweeps if not random_init_flag else 0,
             "warmup_method": warmup_method_str,
-            "skip_opt": False,
             "random_init": random_init_flag,
             "np": n_procs,
             "converged": converged_flag,
