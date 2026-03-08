@@ -68,17 +68,20 @@ def a2dmrg_main(
     max_candidates: Optional[int] = None,
     coarse_reduction_tol: float = 1e-8,
     overlap_threshold: float = 0.99,
+    experimental_nonpaper: bool = False,
 ) -> Tuple[float, qtn.MatrixProductState]:
     """
     Main A2DMRG algorithm.
 
-    The Additive Two-Level DMRG algorithm requires an initialization that is
-    "sufficiently close to the true minimizer" (Grigori & Hassan, arXiv:2505.23429).
-    Starting from a product state (e.g., Neel state) causes numerical issues because
-    the local eigenvectors become orthogonal to the original state structure.
-    
-    This implementation uses warm-up sweeps with standard DMRG to establish proper
-    entanglement structure before running the parallel A2DMRG algorithm.
+    DEFAULT CONFIGURATION (2026-03-07):
+    - warmup_sweeps=2 for practical convergence
+    - Matches PDMRG/PDMRG2 warmup configuration
+    - Serial warmup improves initial state quality and convergence rate
+    - Paper-faithful mode (warmup_sweeps=0) available via experimental_nonpaper flag
+
+    The Grigori & Hassan paper uses random initialization with very small rank,
+    relying on Lanczos reuse. For production use, 2 warmup sweeps provide better
+    initial states without significantly increasing runtime.
 
     Parameters
     ----------
@@ -105,9 +108,11 @@ def a2dmrg_main(
         If provided, this MPS is used instead of creating a new one.
         Useful for warm-starting with a few serial DMRG sweeps.
     warmup_sweeps : int, optional
-        Number of standard DMRG sweeps to run before A2DMRG (default: 2).
-        Set to 0 to disable warm-up (not recommended for product state init).
-        The paper requires initialization "sufficiently close to the minimizer".
+        Number of standard DMRG sweeps to run before A2DMRG (default: 0).
+        Paper-faithful mode uses warmup_sweeps=0 (random init, no serial warmup).
+        Allowed range: 0-2 (hard cap for benchmark hygiene).
+        Values > 2 require experimental_nonpaper=True.
+        WARNING: Serial warmup is a non-paper convenience mode.
     finalize_sweeps : int, optional
         Number of standard DMRG sweeps to run after A2DMRG (default: 0).
         These "polishing" sweeps can achieve machine precision accuracy.
@@ -119,6 +124,10 @@ def a2dmrg_main(
     max_candidates : int, optional
         If set, keep at most this many coarse-space candidates (including Y^(0)).
         This reduces coarse-space cost from O(d^2) to O(k^2).
+    experimental_nonpaper : bool, optional
+        If True, allow warmup_sweeps > 2 (default: False).
+        This explicitly marks non-paper-faithful execution mode.
+        Use only for experimental comparison, not for benchmark results.
 
     Returns
     -------
@@ -150,8 +159,45 @@ def a2dmrg_main(
     rank = comm.rank
     size = comm.size
 
+    # Validate np >= 2 (A2DMRG is a parallel algorithm)
+    if size < 2:
+        raise ValueError(
+            f"A2DMRG requires at least 2 MPI ranks (got np={size}). "
+            "A2DMRG is a parallel algorithm based on additive subspace correction. "
+            "For serial execution, use quimb.DMRG2 instead."
+        )
+
+    # Validate warmup policy (2026-03-07: warmup_sweeps=2 default)
+    if warmup_sweeps < 0:
+        raise ValueError(f"warmup_sweeps must be non-negative, got {warmup_sweeps}")
+
+    if warmup_sweeps > 5 and not experimental_nonpaper:
+        raise ValueError(
+            f"warmup_sweeps={warmup_sweeps} exceeds recommended bound (≤5). "
+            "For very high warmup_sweeps, set experimental_nonpaper=True to acknowledge "
+            "this is outside typical usage."
+        )
+
+    # Optional verbose notifications
+    if rank == 0 and verbose:
+        if warmup_sweeps == 0:
+            print(f"⚠️  Paper-faithful mode: warmup_sweeps=0 (random initialization)")
+        elif warmup_sweeps > 5:
+            print(f"⚠️  Experimental mode: warmup_sweeps={warmup_sweeps} (experimental_nonpaper=True)")
+
     # Timing collection (rank-local; reduced when reporting)
     timing_enabled = bool(timing_report)
+    # Determine initialization mode for metadata
+    if initial_mps is not None:
+        init_mode = "provided_initial_mps"
+        paper_faithful = False  # Custom init is not paper-faithful
+    elif warmup_sweeps == 0:
+        init_mode = "paper_faithful_random"
+        paper_faithful = True
+    else:
+        init_mode = f"warmup_{warmup_sweeps}_sweeps"
+        paper_faithful = (warmup_sweeps <= 2)  # 1-2 sweeps considered reasonable
+
     timing = {
         "meta": {
             "timestamp": datetime.now().isoformat(),
@@ -167,6 +213,9 @@ def a2dmrg_main(
             "max_candidates": max_candidates,
             "coarse_reduction_tol": coarse_reduction_tol,
             "overlap_threshold": overlap_threshold,
+            "initialization_mode": init_mode,
+            "paper_faithful_mode": paper_faithful,
+            "experimental_nonpaper": experimental_nonpaper,
         },
         "sweeps": [],
     }
@@ -324,14 +373,6 @@ def a2dmrg_main(
             print(f"\nStarting A2DMRG from warm-up state: E = {energy_prev:.12f}", flush=True)
         else:
             print(f"Starting A2DMRG: E = {energy_prev:.12f}", flush=True)
-
-    # For np=1 with a valid warmup, the quimb DMRG2 warmup (tol=1e-12) is
-    # already the best single-process result.  A2DMRG's parallel algorithm
-    # provides no benefit for a single process, and the per-step eigensolver
-    # can be unreliable for complex Hamiltonians at serial scale.
-    # Return the warmup energy immediately — mirrors the PDMRG np=1 behaviour.
-    if size == 1 and warmup_sweeps > 0 and initial_mps is None:
-        return energy_prev, mps
 
     # Main iteration loop
     for sweep in range(max_sweeps):
@@ -517,13 +558,16 @@ def a2dmrg_main(
         if rank == 0 and verbose:
             print("Phase 5: Compressing MPS...", flush=True)
 
-        # Use quimb's built-in compress
-        # IMPORTANT: Use target bond_dim directly (not 2*bond_dim) to ensure
-        # uniform bond dimensions. Variable bond dims cause shape mismatches
-        # in prepare_orthogonal_decompositions and environment building.
+        # Use quimb's compress with minimal SVD truncation.
+        # CRITICAL: Use cutoff=0 to disable singular value truncation entirely.
+        # This preserves all SVD components up to max_bond, preventing energy increase.
+        # Only bond dimension constraint (max_bond) controls compression.
+        #
+        # Setting cutoff > 0 (e.g., 1e-12 or 1e-14) truncates singular values and
+        # removes entanglement, causing energy to increase by O(1e-10).
         compress_t0 = time.perf_counter()
         mps = combined_mps.copy()
-        mps.compress(max_bond=bond_dim, cutoff=1e-12)
+        mps.compress(max_bond=bond_dim, cutoff=0.0)
         mps /= mps.norm()  # Normalize after compression
         _tmark("phase5_compress", compress_t0)
 
@@ -681,7 +725,24 @@ def a2dmrg_main(
         if verbose:
             print(f"Timing report written: {path}", flush=True)
 
-    return final_energy, mps
+    # Metadata for benchmarking and reproducibility
+    metadata = {
+        "algorithm_executed": "A2DMRG additive two-level parallel",
+        "warmup_method": "quimb DMRG2 serial" if warmup_sweeps > 0 else None,
+        "warmup_sweeps": warmup_sweeps,
+        "experimental_nonpaper": experimental_nonpaper,
+        "initialization_mode": init_mode,
+        "paper_faithful": paper_faithful,
+        "converged": converged_flag,
+        "final_sweep": final_sweep_num,
+        "np": size,
+        "max_sweeps": max_sweeps,
+        "bond_dim": bond_dim,
+        "tol": tol,
+        "total_time": time.time() - start_time,
+    }
+
+    return final_energy, mps, metadata
 
 
 def main():

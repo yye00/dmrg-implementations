@@ -30,24 +30,19 @@ from ..environments.environment import build_left_environments, build_right_envi
 
 def _transform_to_i_orthogonal(mps, center_site, normalize=True):
     """
-    Transform MPS to i-orthogonal canonical form with orthogonality center
-    at the specified site, WITHOUT changing bond dimensions.
+    Transform MPS to i-orthogonal canonical form WITHOUT changing bond dimensions.
 
-    This implements the gauge transformation described in Definition 6
-    (page 6) of Grigori & Hassan (2025):
+    This implements Definition 6 (page 6) from Grigori & Hassan (2025).
 
-        A TT decomposition U = (U_1, ..., U_d) is i-orthogonal if:
-        - (U_j^{<2>})^T U_j^{<2>} = I  for j in {1, ..., i-1}  (left-orthogonal)
-        - U_k^{<1>} (U_k^{<1>})^T = I  for k in {i+1, ..., d}  (right-orthogonal)
+    CRITICAL: Bond dimensions must be preserved for A2DMRG's additive structure.
+    Algorithm 2, Step 1 states this is a "gauge transformation without bond
+    compression". We achieve this by:
+    1. Storing original bond dimensions before canonization
+    2. Calling quimb's canonize() (which may reduce bonds to numerical rank)
+    3. Zero-padding back to original dimensions
 
-    The transformation is performed by:
-    1. Sweeping LEFT (site 0 to center-1): QR decomposition makes each
-       site left-orthogonal, contracting R into the next site.
-    2. Sweeping RIGHT (site L-1 to center+1): LQ decomposition makes each
-       site right-orthogonal, contracting L into the next site.
-
-    This is a pure gauge transformation that preserves the physical state
-    exactly (no truncation or compression). Bond dimensions are unchanged.
+    Zero-padding is mathematically valid because the padded dimensions
+    represent empty subspace that doesn't affect the physical state.
 
     Parameters
     ----------
@@ -65,14 +60,20 @@ def _transform_to_i_orthogonal(mps, center_site, normalize=True):
 
     Notes
     -----
-    This function uses quimb's built-in canonize() method, which performs
-    exact QR/LQ sweeps without bond truncation. The bond dimensions are
-    guaranteed to be preserved.
+    quimb's canonize() performs exact QR/LQ decompositions which may truncate
+    near-zero singular values for random or low-rank MPS, reducing bond
+    dimensions to the numerical rank. This violates Algorithm 2's requirement
+    of "gauge transformation without bond compression" (page 10).
+
+    The fix pads back to the original dimensions with zeros after canonize().
+    This preserves the state exactly since zero-padded dimensions represent
+    empty subspace: <psi x 0 | H | psi x 0> = <psi | H | psi>.
 
     See Also
     --------
     Algorithm 2, Step 1 (page 10): The orthogonalization sweep that
     creates i-orthogonal forms U^{(n),i} for each site i.
+    Definition 6 (page 6): i-orthogonal TT decomposition definition.
     """
     L = mps.L
     if not (0 <= center_site < L):
@@ -80,10 +81,31 @@ def _transform_to_i_orthogonal(mps, center_site, normalize=True):
             f"center_site={center_site} out of range for MPS with L={L}"
         )
 
-    # quimb's canonize(where=center_site) performs exact QR sweep from left
-    # and LQ sweep from right, placing the orthogonality center at the
-    # specified site. This does NOT truncate bonds.
+    # Store original bond dimensions BEFORE canonization
+    original_shapes = []
+    for i in range(L):
+        original_shapes.append(mps[i].data.shape)
+
+    # Perform gauge transformation (may reduce bonds to numerical rank)
     mps.canonize(where=center_site)
+
+    # CRITICAL FIX: Pad back to original bond dimensions
+    # This ensures all candidate MPS have the same bond structure,
+    # which is required for the linear combination in Algorithm 2, Step 4.
+    for i in range(L):
+        current_shape = mps[i].data.shape
+        target_shape = original_shapes[i]
+
+        if current_shape != target_shape:
+            # Bond dimensions changed - need to pad with zeros
+            padded = np.zeros(target_shape, dtype=mps[i].data.dtype)
+
+            # Copy actual data into top-left corner of padded array
+            slices = tuple(slice(0, s) for s in current_shape)
+            padded[slices] = mps[i].data
+
+            # Replace tensor data
+            mps[i].modify(data=padded)
 
     # Normalize if requested (the norm accumulates at the center site)
     if normalize:

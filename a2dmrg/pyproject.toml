@@ -7,37 +7,26 @@ name = "a2dmrg"
 version = "0.1.0"
 description = "Additive Two-Level Parallel DMRG for quantum many-body physics"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
     {name = "A2DMRG Development Team"}
 ]
-keywords = ["dmrg", "tensor networks", "quantum physics", "mpi", "parallel computing"]
+keywords = ["dmrg", "tensor networks", "quantum physics", "mpi", "parallel computing", "two-level"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Physics",
 ]
 
-dependencies = [
-    "numpy>=1.24.0",
-    "scipy>=1.10.0",
-    "quimb>=1.7.0",
-    "mpi4py>=3.1.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-mpi>=0.6",
-    "black>=23.0.0",
-    "mypy>=1.0.0",
-]
+# Dependencies inherited from workspace root
+dependencies = []
 
 [project.urls]
 Homepage = "https://github.com/yourusername/a2dmrg"
@@ -45,38 +34,11 @@ Documentation = "https://github.com/yourusername/a2dmrg/blob/main/README.md"
 Repository = "https://github.com/yourusername/a2dmrg"
 "Bug Tracker" = "https://github.com/yourusername/a2dmrg/issues"
 
+[project.scripts]
+a2dmrg = "a2dmrg.__main__:main"
+
 [tool.setuptools]
 packages = ["a2dmrg"]
 
-[tool.pytest.ini_options]
-minversion = "7.0"
-testpaths = ["a2dmrg/tests"]
-python_files = "test_*.py"
-python_classes = "Test*"
-python_functions = "test_*"
-addopts = "-v --tb=short"
-
-[tool.black]
-line-length = 100
-target-version = ['py310']
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | build
-  | dist
-)/
-'''
-
-[tool.mypy]
-python_version = "3.10"
-warn_return_any = true
-warn_unused_configs = true
-disallow_untyped_defs = false
-ignore_missing_imports = true
+[tool.setuptools.package-data]
+a2dmrg = ["py.typed"]
