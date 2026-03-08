@@ -1,7 +1,0 @@
-/home/hotaisle/dmrg-implementations/gpu-port/tests/CMakeFiles/simple_dmrg.dir
-/home/hotaisle/dmrg-implementations/gpu-port/tests/CMakeFiles/edit_cache.dir
-/home/hotaisle/dmrg-implementations/gpu-port/tests/CMakeFiles/rebuild_cache.dir
-/home/hotaisle/dmrg-implementations/gpu-port/tests/CMakeFiles/list_install_components.dir
-/home/hotaisle/dmrg-implementations/gpu-port/tests/CMakeFiles/install.dir
-/home/hotaisle/dmrg-implementations/gpu-port/tests/CMakeFiles/install/local.dir
-/home/hotaisle/dmrg-implementations/gpu-port/tests/CMakeFiles/install/strip.dir
