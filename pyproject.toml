@@ -1,0 +1,156 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dmrg-implementations"
+version = "0.1.0"
+description = "Unified repository for parallel DMRG implementations (PDMRG, PDMRG2, A2DMRG)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "DMRG Development Team"}
+]
+keywords = ["dmrg", "tensor networks", "quantum physics", "mpi", "parallel computing"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+# Shared dependencies across all implementations
+dependencies = [
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+    "quimb>=1.7.0",
+    "mpi4py>=3.1.0",
+]
+
+[project.optional-dependencies]
+# Development and testing tools
+dev = [
+    "pytest>=7.0.0",
+    "pytest-mpi>=0.6",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+]
+
+# Benchmarking and analysis tools
+bench = [
+    "matplotlib>=3.5.0",
+    "pandas>=1.4.0",
+    "seaborn>=0.12.0",
+]
+
+# GPU support (for pdmrg2 future work)
+gpu = [
+    "cupy>=12.0.0",
+]
+
+# All optional dependencies combined
+all = [
+    "pytest>=7.0.0",
+    "pytest-mpi>=0.6",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+    "matplotlib>=3.5.0",
+    "pandas>=1.4.0",
+    "seaborn>=0.12.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yourusername/dmrg-implementations"
+Repository = "https://github.com/yourusername/dmrg-implementations"
+"Bug Tracker" = "https://github.com/yourusername/dmrg-implementations/issues"
+
+# Workspace configuration for monorepo
+[tool.uv.workspace]
+members = ["pdmrg", "pdmrg2", "a2dmrg"]
+
+# Development dependencies using new dependency-groups syntax
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-mpi>=0.6",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+]
+
+[tool.setuptools]
+# This is a workspace root, actual packages are in subdirectories
+packages = []
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["pdmrg/tests", "pdmrg2/tests", "a2dmrg/tests", "tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
+addopts = "-v --tb=short"
+
+[tool.black]
+line-length = 100
+target-version = ['py39']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | venv
+  | \.venv-bench
+  | build
+  | dist
+  | __pycache__
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "N",  # pep8-naming
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "E741",  # ambiguous variable name (common in physics: l, I, etc.)
+]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+# Type check all packages
+files = ["pdmrg/**/*.py", "pdmrg2/**/*.py", "a2dmrg/**/*.py"]
+exclude = [
+    "venv",
+    ".venv",
+    ".venv-bench",
+    "build",
+    "dist",
+]

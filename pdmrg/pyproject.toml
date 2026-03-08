@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdmrg"
+version = "0.1.0"
+description = "Parallel Density Matrix Renormalization Group (Real-Space Parallelization)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "PDMRG Contributors"}
+]
+keywords = ["dmrg", "tensor networks", "quantum physics", "mpi", "parallel computing", "real-space"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+# Dependencies inherited from workspace root
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/YOUR_USERNAME/pdmrg"
+Documentation = "https://github.com/YOUR_USERNAME/pdmrg/blob/main/README.md"
+Repository = "https://github.com/YOUR_USERNAME/pdmrg"
+"Bug Tracker" = "https://github.com/YOUR_USERNAME/pdmrg/issues"
+
+[project.scripts]
+pdmrg = "pdmrg.__main__:main"
+
+[tool.setuptools]
+packages = ["pdmrg"]
+
+[tool.setuptools.package-data]
+pdmrg = ["py.typed"]
