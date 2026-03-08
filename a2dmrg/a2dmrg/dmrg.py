@@ -69,6 +69,7 @@ def a2dmrg_main(
     coarse_reduction_tol: float = 1e-8,
     overlap_threshold: float = 0.99,
     experimental_nonpaper: bool = False,
+    return_metadata: bool = False,
 ) -> Tuple[float, qtn.MatrixProductState]:
     """
     Main A2DMRG algorithm.
@@ -374,8 +375,14 @@ def a2dmrg_main(
         else:
             print(f"Starting A2DMRG: E = {energy_prev:.12f}", flush=True)
 
+    # Metadata tracking
+    start_time = time.time()
+    converged_flag = False
+    final_sweep_num = 0
+
     # Main iteration loop
     for sweep in range(max_sweeps):
+        final_sweep_num = sweep + 1
         sweep_t0 = time.perf_counter()
         phase_times = {}
 
@@ -606,6 +613,7 @@ def a2dmrg_main(
 
             if rank == 0 and verbose:
                 print(f"\nConverged after {sweep + 1} sweeps!", flush=True)
+            converged_flag = True
             break
 
         # Update energy_prev to the ACTUAL compressed energy (not coarse-space energy)
@@ -742,7 +750,9 @@ def a2dmrg_main(
         "total_time": time.time() - start_time,
     }
 
-    return final_energy, mps, metadata
+    if return_metadata:
+        return final_energy, mps, metadata
+    return final_energy, mps
 
 
 def main():
