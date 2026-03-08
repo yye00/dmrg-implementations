@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-Publication-Ready DMRG Benchmark Suite
+Publication-Ready DMRG Benchmark Suite (VALIDATED IMPLEMENTATIONS)
 
-Runs all DMRG implementations with tight convergence criteria and
+Runs all VALIDATED DMRG implementations with tight convergence criteria and
 produces clean, publication-quality results.
 
 Methods tested:
-  - quimb DMRG1 (single-site, serial)
-  - quimb DMRG2 (two-site, serial)
-  - PDMRG np=1,2,4,8 (Real-Space Parallel DMRG)
-  - A2DMRG np=1,2,4,8 (Additive Two-Level Parallel DMRG)
+  - quimb DMRG1 (single-site, serial) - reference
+  - quimb DMRG2 (two-site, serial) - reference
+  - PDMRG np=2,4,8 (Real-Space Parallel DMRG) - validated
+  - A2DMRG np=2,4,8 (Additive Two-Level Parallel DMRG) - validated
 
 Model: Josephson Junction Array (complex128)
   - Physically realistic for superconducting quantum computing
   - Requires complex128 for proper phase physics
 
 Target: All energies within 1e-10 of quimb DMRG2 reference
+
+Note: PDMRG and A2DMRG are parallel algorithms requiring np >= 2
 """
 
 import subprocess
@@ -37,7 +39,8 @@ CONFIG = {
     'match_tol': 1e-10, # Required agreement between implementations
 }
 
-NP_LIST = [1, 2, 4, 8]
+# Parallel algorithms require np >= 2
+NP_LIST = [2, 4, 8]
 
 # Get script directory and construct relative paths to virtual environments
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))

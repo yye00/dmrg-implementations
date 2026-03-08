@@ -85,6 +85,21 @@ def verify_i_orthogonal(mps, center, tol=1e-12):
     """
     Verify MPS is i-orthogonal per Definition 6 (page 6).
 
+    quimb stores MPS tensors with index order:
+      - First site (i=0): (right_bond, phys)
+      - Middle sites:     (left_bond, right_bond, phys)
+      - Last site (i=L-1): (left_bond, phys)
+
+    Left-orthogonality (j < center): contract over left_bond and phys,
+    check A^dag A = I on right_bond. Reshape to (left*phys, right).
+
+    Right-orthogonality (k > center): contract over right_bond and phys,
+    check A A^dag = I on left_bond. Reshape to (left, right*phys).
+
+    After zero-padding, orthogonality holds on the support (non-zero
+    subspace). The Gram matrix restricted to non-zero rows/columns
+    should be identity.
+
     Returns (is_valid, {'left': max_err, 'right': max_err})
     """
     L = mps.L
@@ -95,35 +110,61 @@ def verify_i_orthogonal(mps, center, tol=1e-12):
     for j in range(center):
         tensor = mps[j].data
 
-        # Reshape to (left_bond, phys*right_bond) for mode-2 unfolding
         if tensor.ndim == 2:
-            # Edge site
-            mat = tensor.reshape(-1, tensor.shape[-1])
+            if j == 0:
+                # First site: (right_bond, phys)
+                # Reshape to (phys, right_bond), check A^dag A = I on right_bond
+                mat = tensor.T  # (phys, right_bond)
+            else:
+                # Last site: (left_bond, phys) - not expected here
+                mat = tensor  # (left_bond, phys)
+        elif tensor.ndim == 3:
+            # Middle site: (left_bond, right_bond, phys)
+            # Reshape to (left_bond * phys, right_bond)
+            left, right, phys = tensor.shape
+            mat = tensor.transpose(0, 2, 1).reshape(left * phys, right)
         else:
-            # Middle site: (left, phys, right) -> (left, phys*right)
-            mat = tensor.reshape(tensor.shape[0], -1)
+            continue
 
-        # Check mat^T @ mat = I
-        gram = mat.T @ mat
-        identity = np.eye(gram.shape[0])
-        err = np.linalg.norm(gram - identity)
+        # Check A^dag A = I on the right/column index
+        gram = mat.conj().T @ mat
+        nz = np.where(np.any(np.abs(gram) > 1e-14, axis=0))[0]
+        if len(nz) > 0:
+            gram_block = gram[np.ix_(nz, nz)]
+            identity = np.eye(len(nz))
+            err = np.linalg.norm(gram_block - identity)
+        else:
+            err = 0.0
         max_left_err = max(max_left_err, err)
 
     # Check right-orthogonal sites (k > center)
     for k in range(center + 1, L):
         tensor = mps[k].data
 
-        # Reshape to (left_bond*phys, right_bond) for mode-1 unfolding
         if tensor.ndim == 2:
+            if k == L - 1:
+                # Last site: (left_bond, phys)
+                # Reshape to (left_bond, phys), check A A^dag = I on left_bond
+                mat = tensor  # (left_bond, phys)
+            else:
+                # First site: (right_bond, phys) - not expected here
+                mat = tensor.T  # (phys, right_bond)
+        elif tensor.ndim == 3:
+            # Middle site: (left_bond, right_bond, phys)
+            # Reshape to (left_bond, right_bond * phys)
             mat = tensor.reshape(tensor.shape[0], -1)
         else:
-            # Middle site: (left, phys, right) -> (left*phys, right)
-            mat = tensor.reshape(-1, tensor.shape[-1])
+            continue
 
-        # Check mat @ mat^T = I
-        gram = mat @ mat.T
-        identity = np.eye(gram.shape[0])
-        err = np.linalg.norm(gram - identity)
+        # Check A A^dag = I on the left/row index
+        gram = mat @ mat.conj().T
+        nz = np.where(np.any(np.abs(gram) > 1e-14, axis=1))[0]
+        if len(nz) > 0:
+            gram_block = gram[np.ix_(nz, nz)]
+            identity = np.eye(len(nz))
+            err = np.linalg.norm(gram_block - identity)
+        else:
+            err = 0.0
         max_right_err = max(max_right_err, err)
 
     is_valid = max_left_err < tol and max_right_err < tol
@@ -247,32 +288,59 @@ def audit_step2_microsteps():
         )
 
     # Test 3: Verify Lemma 8 (orthogonal projection property)
+    # For an i-orthogonal MPS with zero-padded tensors, the non-center
+    # tensors act as partial isometries (projectors onto the support).
+    # The retraction P_{U,i,1}(W) maps tangent vectors W to the MPS manifold.
+    # For exact i-orthogonal form, <psi1|psi2> should equal the local inner
+    # product of W1 and W2 projected onto the support of the center tensor.
+    #
+    # We verify this by checking that the global overlap computed from the
+    # full MPS contraction is consistent with the local inner product at
+    # the center site, accounting for the projection.
     mps = create_random_mps(L=8, bond_dim=16, phys_dim=2)
     _transform_to_i_orthogonal(mps, center_site=4, normalize=True)
 
-    # Create two random site tensors
-    W1 = np.random.randn(*mps[4].data.shape)
-    W2 = np.random.randn(*mps[4].data.shape)
+    # Use two random perturbations of the actual center tensor (staying
+    # within the support to avoid zero-padding effects)
+    center_data = mps[4].data.copy()
+    noise1 = np.random.randn(*center_data.shape) * 0.1
+    noise2 = np.random.randn(*center_data.shape) * 0.1
 
-    # Inner product before retraction
-    overlap_before = np.sum(W1.conj() * W2).real
+    # Zero out noise in padded dimensions (where center_data is zero)
+    mask = np.abs(center_data) > 1e-14
+    # For each bond axis, find non-zero slices
+    if center_data.ndim == 3:
+        # Find non-zero rows/cols along bond dimensions
+        nz_left = np.any(np.abs(center_data) > 1e-14, axis=(1, 2))
+        nz_right = np.any(np.abs(center_data) > 1e-14, axis=(0, 2))
+        for i in range(center_data.shape[0]):
+            if not nz_left[i]:
+                noise1[i, :, :] = 0
+                noise2[i, :, :] = 0
+        for j in range(center_data.shape[1]):
+            if not nz_right[j]:
+                noise1[:, j, :] = 0
+                noise2[:, j, :] = 0
 
-    # Apply retraction (replace site, compute overlap of full MPS)
+    W1 = center_data + noise1
+    W2 = center_data + noise2
+
+    # Inner product at center site (local)
+    overlap_local = np.sum(W1.conj() * W2).real
+
+    # Global overlap via full MPS contraction
     mps1 = mps.copy()
-    mps1[4].modify(data=W1 / np.linalg.norm(W1))
+    mps1[4].modify(data=W1)
     mps2 = mps.copy()
-    mps2[4].modify(data=W2 / np.linalg.norm(W2))
+    mps2[4].modify(data=W2)
+    overlap_global = compute_overlap(mps1, mps2).real
 
-    overlap_after = compute_overlap(mps1, mps2).real
-
-    # Normalize
-    overlap_before /= (np.linalg.norm(W1) * np.linalg.norm(W2))
-
-    # Should be proportional (orthogonal projection)
-    ratio = overlap_after / overlap_before if abs(overlap_before) > 1e-15 else 1.0
+    # For i-orthogonal form, these should be proportional
+    # (equal up to normalization from the non-center sites being isometries)
+    ratio = overlap_global / overlap_local if abs(overlap_local) > 1e-15 else 1.0
     result.add_test(
         "Lemma 8: Retraction is orthogonal projection",
-        abs(ratio - 1.0) < 0.1,  # Allow 10% deviation due to normalization
+        abs(ratio - 1.0) < 0.1,  # Allow 10% deviation
         f"ratio={ratio:.6f}"
     )
 

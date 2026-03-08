@@ -164,9 +164,10 @@ def run_heisenberg_benchmarks(problem, phase_name):
     
     print(f"\n✓ Quimb references: DMRG1={dmrg1_energy_ref:.12f}, DMRG2={dmrg2_energy_ref:.12f}")
     
-    # Step 2: Run PDMRG (np=1,2,4,8) if in Phase 1
+    # Step 2: Run PDMRG (np=2,4,8) if in Phase 1
+    # Note: PDMRG requires np >= 2 (parallel real-space algorithm)
     if 'Phase 1' in phase_name:
-        for np_val in [1, 2, 4, 8]:
+        for np_val in [2, 4, 8]:
             print(f"\n[PDMRG np={np_val}] Running...")
             mpo_builder = f"import quimb.tensor as qtn\nmpo = qtn.MPO_ham_heis(L={problem['L']}, j=1.0, bz=0.0, cyclic=False)"
             
@@ -194,34 +195,11 @@ def run_heisenberg_benchmarks(problem, phase_name):
             }
             print(f"  ✓ PDMRG np={np_val} validated!")
         
-        # Step 3: Run PDMRG2 (np=1,2,4,8)
-        for np_val in [1, 2, 4, 8]:
-            print(f"\n[PDMRG2 np={np_val}] Running...")
-            mpo_builder = f"import quimb.tensor as qtn\nmpo = qtn.MPO_ham_heis(L={problem['L']}, j=1.0, bz=0.0, cyclic=False)"
-            
-            pdmrg2_energies = []
-            pdmrg2_times = []
-            for rep in range(N_REPETITIONS):
-                energy, elapsed, error = run_pdmrg_mpi(mpo_builder, np_val, 'pdmrg2', **problem, dtype='float64')
-                if error:
-                    print(f"  ❌ Error: {error}")
-                    return None
-                pdmrg2_energies.append(energy)
-                pdmrg2_times.append(elapsed)
-                print(f"  Rep {rep+1}/{N_REPETITIONS}: E={energy:.12f}, time={elapsed:.3f}s")
-                
-                # Validate against Quimb
-                if not validate_energy(energy, dmrg2_energy_ref, f"PDMRG2 np={np_val}"):
-                    return None
-            
-            results[f'pdmrg2_np{np_val}'] = {
-                'energies': pdmrg2_energies,
-                'times': pdmrg2_times,
-                'energy_mean': np.mean(pdmrg2_energies),
-                'time_mean': np.mean(pdmrg2_times),
-                'time_std': np.std(pdmrg2_times)
-            }
-            print(f"  ✓ PDMRG2 np={np_val} validated!")
+        # Step 3: PDMRG2 - EXCLUDED (PROTOTYPE-ONLY)
+        # PDMRG2 is a prototype implementation and has not been validated for benchmarking.
+        # It is excluded from validated comparisons for scientific honesty.
+        # See pdmrg2/README.md for current status.
+        print("\n[PDMRG2] Skipped (prototype-only, not validated)")
     
     return results
 

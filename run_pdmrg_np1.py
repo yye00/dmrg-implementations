@@ -1,5 +1,20 @@
 #!/usr/bin/env python
-"""Run PDMRG np=1 benchmark standalone."""
+"""
+DEPRECATED: This script is no longer functional.
+
+PDMRG now requires np >= 2 (it is a parallel real-space algorithm).
+For serial execution, use quimb.DMRG2 instead.
+
+See: cpu-audit branch changes (2026-03-07)
+"""
+import sys
+print("=" * 80)
+print("ERROR: This script is deprecated")
+print("PDMRG requires np >= 2 (parallel real-space algorithm)")
+print("For serial execution, use quimb.DMRG2 instead")
+print("=" * 80)
+sys.exit(1)
+
 import sys
 import os
 import time

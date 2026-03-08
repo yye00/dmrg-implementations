@@ -2,18 +2,18 @@
 """
 Comprehensive DMRG Benchmark Suite
 ===================================
-Runs all CPU and GPU implementations with IDENTICAL parameters.
+Runs all VALIDATED CPU and GPU implementations with IDENTICAL parameters.
 
-CPU Implementations (14 runs per model):
-  - Quimb DMRG1 (1 run)
-  - Quimb DMRG2 (1 run)
-  - PDMRG (np=1,2,4,8) (4 runs)
-  - PDMRG2 (np=1,2,4,8) (4 runs)
-  - A2DMRG (np=1,2,4,8) (4 runs)
+CPU Implementations (11 runs per model):
+  - Quimb DMRG1 (1 run - reference)
+  - Quimb DMRG2 (1 run - reference)
+  - PDMRG (np=2,4,8) (3 runs - validated)
+  - A2DMRG (np=2,4,8) (3 runs - validated)
+  - PDMRG2: EXCLUDED (prototype-only, not validated)
 
-GPU Implementations (8 runs per model):
-  - PDMRG (streams=1,2,4,8) (4 runs)
-  - PDMRG2 (streams=1,2,4,8) (4 runs)
+GPU Implementations (4 runs per model):
+  - PDMRG-GPU (streams=1,2,4,8) (4 runs)
+  - PDMRG2-GPU: EXCLUDED (prototype-only)
 
 Test Cases:
   - Heisenberg: L=12, D=100, sweeps=20, tol=1e-10
@@ -60,7 +60,8 @@ JOSEPHSON_PARAMS = {
 HEISENBERG_REFERENCE = -5.142090632841
 JOSEPHSON_REFERENCE = -2.843801043291333
 
-NP_VALUES = [1, 2, 4, 8]
+# Parallel algorithms require np >= 2 (PDMRG, A2DMRG are parallel real-space algorithms)
+NP_VALUES = [2, 4, 8]
 STREAM_VALUES = [1, 2, 4, 8]
 
 # ============================================================================
@@ -365,16 +366,18 @@ class BenchmarkRunner:
                 ref1 = self.run_quimb_dmrg1(params)
                 ref2 = self.run_quimb_dmrg2(params)
 
-                # MPI implementations
-                for impl in ['pdmrg', 'pdmrg2', 'a2dmrg']:
+                # MPI implementations (validated only)
+                # PDMRG2 excluded: prototype-only, not validated
+                for impl in ['pdmrg', 'a2dmrg']:
                     self.log("")
                     self.log(f"--- {impl.upper()} (MPI) ---")
                     for np in NP_VALUES:
                         self.run_mpi_implementation(impl, params, np)
 
             if run_gpu:
-                # GPU implementations
-                for impl in ['pdmrg', 'pdmrg2']:
+                # GPU implementations (validated only)
+                # PDMRG2-GPU excluded: prototype-only, not validated
+                for impl in ['pdmrg']:
                     self.log("")
                     self.log(f"--- GPU-{impl.upper()} ---")
                     for streams in STREAM_VALUES:
