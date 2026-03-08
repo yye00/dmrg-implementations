@@ -34,11 +34,18 @@ from pdmrg.hamiltonians.heisenberg import build_heisenberg_mpo
 
 
 def serial_warmup(mpo, L, bond_dim_warmup=50, n_warmup_sweeps=5,
-                  dtype='float64'):
+                  dtype='float64', initial_mps=None):
     """Phase 0: Use quimb DMRG2 for a high-quality initial state.
 
     Returns MPS in right-canonical form (canonical center at site 0).
     This means all R_envs are correct after distribution.
+
+    Parameters
+    ----------
+    initial_mps : quimb.tensor.MatrixProductState, optional
+        If provided, used as the starting state for DMRG2 warmup.
+        This ensures reproducible benchmarks when all implementations
+        start from the same stored MPS.
     """
     mpo_arrays = [get_mpo_tensor_data(mpo, i) for i in range(L)]
 
@@ -48,7 +55,8 @@ def serial_warmup(mpo, L, bond_dim_warmup=50, n_warmup_sweeps=5,
         bond_ramp.append(m)
         m *= 2
     bond_ramp.append(bond_dim_warmup)
-    dmrg = qtn.DMRG2(mpo, bond_dims=bond_ramp, cutoffs=1e-14)
+    dmrg = qtn.DMRG2(mpo, bond_dims=bond_ramp, cutoffs=1e-14,
+                      p0=initial_mps)
     # Use enough sweeps to fully converge the warmup state.
     # The warmup quality directly determines parallel accuracy.
     min_sweeps = max(n_warmup_sweeps, len(bond_ramp) + 5)
@@ -538,7 +546,8 @@ def recompute_boundary_v(pmps, comm, which_boundary):
 def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
                n_warmup_sweeps=5, tol=1e-8, dtype='float64',
                comm=None, verbose=True,
-               random_init_flag=False, return_metadata=False):
+               random_init_flag=False, return_metadata=False,
+               initial_mps=None):
     """Run the full PDMRG algorithm.
 
     For n_procs > 1, uses staggered sweeps (Fig. 4 of the paper):
@@ -561,6 +570,10 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         If True, skip warmup and start from a random MPS.
         This requires more sweeps but is useful for testing.
         Not recommended for benchmark use.
+    initial_mps : quimb.tensor.MatrixProductState, optional
+        If provided, used as the starting state for serial warmup.
+        Ensures all implementations start from the same MPS for fair
+        benchmark comparison.
     """
     if comm is None:
         from mpi4py import MPI
@@ -635,7 +648,8 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         if rank == 0:
             mps_arrays, _, warmup_energy = serial_warmup(
                 mpo, L, bond_dim_warmup=bond_dim_warmup,
-                n_warmup_sweeps=n_warmup_sweeps, dtype=dtype
+                n_warmup_sweeps=n_warmup_sweeps, dtype=dtype,
+                initial_mps=initial_mps
             )
         else:
             mps_arrays = None

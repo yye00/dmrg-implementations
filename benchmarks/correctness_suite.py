@@ -35,26 +35,35 @@ ACCEPTANCE_THRESHOLD = 5e-10       # Validation: Acceptable agreement (order 1e-
 # Add repo root to path
 repo_root = Path(__file__).parent.parent
 sys.path.insert(0, str(repo_root))
+sys.path.insert(0, str(Path(__file__).parent))
 
 # Force single-threaded
 os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
 os.environ['MKL_NUM_THREADS'] = '1'
 
-from benchmark_data_loader import list_available_benchmarks, load_benchmark_case, convert_tensors_to_quimb_mpo
+from benchmark_data_loader import (
+    list_available_benchmarks, load_benchmark_case,
+    convert_tensors_to_quimb_mpo, convert_tensors_to_quimb_mps,
+)
 import quimb.tensor as qtn
 
 
 def run_quimb_dmrg(model, case, method='dmrg2'):
-    """Run quimb DMRG1 or DMRG2."""
+    """Run quimb DMRG1 or DMRG2, using stored initial MPS if available."""
     data = load_benchmark_case(model, case)
     mpo = convert_tensors_to_quimb_mpo(data['mpo_tensors'])
     manifest = data['manifest']
 
+    initial_mps = None
+    if data['mps_tensors'] is not None:
+        initial_mps = convert_tensors_to_quimb_mps(data['mps_tensors'])
+
     dmrg_class = qtn.DMRG2 if method == 'dmrg2' else qtn.DMRG1
 
     t0 = time.time()
-    dmrg = dmrg_class(mpo, bond_dims=manifest['bond_dim'], cutoffs=1e-14)
+    dmrg = dmrg_class(mpo, bond_dims=manifest['bond_dim'], cutoffs=1e-14,
+                       p0=initial_mps)
     dmrg.solve(max_sweeps=50, tol=GOLDEN_TOLERANCE, verbosity=0)
     t1 = time.time()
 
@@ -78,14 +87,14 @@ import sys
 import os
 import numpy as np
 sys.path.insert(0, '{repo_root / implementation}')
-sys.path.insert(0, '{repo_root}')
+sys.path.insert(0, '{repo_root / "benchmarks"}')
 
 os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
 
 from mpi4py import MPI
 from pdmrg.dmrg import pdmrg_main
-from benchmark_data_loader import load_benchmark_case, convert_tensors_to_quimb_mpo
+from benchmark_data_loader import load_benchmark_case, convert_tensors_to_quimb_mpo, convert_tensors_to_quimb_mps
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -93,6 +102,10 @@ rank = comm.Get_rank()
 data = load_benchmark_case('{model}', '{case}')
 mpo = convert_tensors_to_quimb_mpo(data['mpo_tensors'])
 manifest = data['manifest']
+
+initial_mps = None
+if data['mps_tensors'] is not None:
+    initial_mps = convert_tensors_to_quimb_mps(data['mps_tensors'])
 
 import time
 t0 = time.time()
@@ -107,7 +120,8 @@ result = pdmrg_main(
     dtype=manifest['dtype'],
     comm=comm,
     verbose=False,
-    return_metadata=True
+    return_metadata=True,
+    initial_mps=initial_mps
 )
 t1 = time.time()
 
@@ -204,14 +218,14 @@ import sys
 import os
 import numpy as np
 sys.path.insert(0, '{repo_root / "a2dmrg"}')
-sys.path.insert(0, '{repo_root}')
+sys.path.insert(0, '{repo_root / "benchmarks"}')
 
 os.environ['OMP_NUM_THREADS'] = '1'
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
 
 from mpi4py import MPI
 from a2dmrg.dmrg import a2dmrg_main
-from benchmark_data_loader import load_benchmark_case, convert_tensors_to_quimb_mpo
+from benchmark_data_loader import load_benchmark_case, convert_tensors_to_quimb_mpo, convert_tensors_to_quimb_mps
 
 comm = MPI.COMM_WORLD
 rank = comm.Get_rank()
@@ -219,6 +233,10 @@ rank = comm.Get_rank()
 data = load_benchmark_case('{model}', '{case}')
 mpo = convert_tensors_to_quimb_mpo(data['mpo_tensors'])
 manifest = data['manifest']
+
+initial_mps = None
+if data['mps_tensors'] is not None:
+    initial_mps = convert_tensors_to_quimb_mps(data['mps_tensors'])
 
 import time
 t0 = time.time()
@@ -232,7 +250,8 @@ energy, mps = a2dmrg_main(
     dtype=dtype,
     comm=comm,
     warmup_sweeps=5,
-    verbose=False
+    verbose=False,
+    initial_mps=initial_mps
 )
 t1 = time.time()
 
