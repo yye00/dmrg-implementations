@@ -270,6 +270,7 @@ void BoundaryMergeGPU::merge(BoundaryData* left, BoundaryData* right,
     int D_mpo = left->D_mpo;
 
     if (chi_bond != right->chi_bond) {
+    printf("DEBUG: left->chi_bond=%d, right->chi_bond=%d\n", chi_bond, right->chi_bond);
         throw std::runtime_error("BoundaryMergeGPU::merge: chi_bond mismatch");
     }
 

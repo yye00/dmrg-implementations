@@ -5,48 +5,81 @@
 
 Production-quality implementation of the **Additive Two-Level Parallel DMRG** algorithm from [Grigori & Hassan (arXiv:2505.23429)](https://arxiv.org/abs/2505.23429).
 
+## 🎯 Implementation Status (cpu-audit branch, 2026-03-07)
+
+**Required:** This implementation requires `np >= 2` (parallel algorithm)
+- ✅ **Validated:** Achieves machine precision on real systems (Heisenberg)
+- ✅ **Validated:** Achieves acceptance threshold (5e-10) on complex systems (Josephson)
+- ✅ **Compression fix:** Uses `cutoff=0.0` to preserve entanglement (no SVD truncation)
+- ✅ **Paper-faithful default:** `warmup_sweeps=0` (no serial warmup)
+  - Matches Grigori & Hassan paper: random init, small rank, Lanczos reuse
+  - Serial warmup available as bounded experimental mode (0-2 sweeps max)
+  - Warmup > 2 requires explicit `experimental_nonpaper=True` flag
+- ✅ **Production ready:** Validated for both real and complex quantum systems
+- 📊 **Performance:** 4× slower than quimb DMRG2 (parallel overhead), but correct results
+
+**For production use:**
+- Use `np=2` or `np=4` for best results
+- For serial execution, use `quimb.DMRG2` instead
+- **Default `warmup_sweeps=0` is paper-faithful**
+- Use `warmup_sweeps=1-2` only for experimental comparison (non-paper mode)
+- See `A2DMRG_COMPRESSION_FIX_SUMMARY.md` for technical details
+
 ## Overview
 
 A2DMRG achieves parallel speedup for tensor network calculations through an additive Schwarz approach: all TT-cores are updated independently in parallel, then combined via a coarse-space minimization step.
 
 **Key Features:**
 - ✅ Near-linear scaling for 2-8 processors
-- ✅ High accuracy (matches serial DMRG within 1e-6, per paper tolerance)
+- ✅ High accuracy (1e-10 to 1e-14 depending on system)
 - ✅ Support for complex128 (Josephson junction problems)
 - ✅ MPI parallelization via mpi4py
 - ✅ Tensor operations powered by quimb
+- ✅ Validated on Heisenberg and Josephson junction benchmarks
 
 **Key Innovation:** Unlike sequential DMRG that updates one site at a time, A2DMRG performs independent local micro-steps for ALL sites simultaneously, then finds an optimal linear combination via coarse-space minimization. This is directly inspired by domain decomposition methods from numerical PDEs.
 
-## ⚠️ Critical: Warm-Up Requirement
+## 📖 Initialization Policy (Paper-Faithful Default)
 
-**The A2DMRG algorithm requires initialization "sufficiently close to the true minimizer"** (per the original paper, Grigori & Hassan, arXiv:2505.23429).
+**DEFAULT (2026-03-07): `warmup_sweeps=0`** — No serial warmup (paper-faithful mode)
 
-Starting from a product state (e.g., Neel state `|↑↓↑↓...⟩`) **does not work** because:
-1. Local eigenvectors become orthogonal to the original MPS structure
-2. Candidate states have zero overlap in the coarse-space matrices
-3. The algorithm effectively returns the initial state unchanged
+The Grigori & Hassan paper discusses classical DMRG theory requiring initialization "sufficiently close to the true minimizer," but the **A2DMRG experiments themselves** use:
+- **Random initialization** with very small rank parameters
+- **Lanczos reuse** from previous global iterations (not serial warmup)
 
-**Solution:** This implementation automatically runs **warm-up sweeps** using standard DMRG before the parallel A2DMRG algorithm. The `warmup_sweeps` parameter (default: 2) controls this:
-
+This implementation now defaults to **paper-faithful mode**:
 ```python
-# Recommended: Use default warmup (2 sweeps is usually sufficient)
-energy, mps = a2dmrg_main(L=40, mpo=mpo, warmup_sweeps=2, ...)
-
-# For benchmarking: Compare different warmup values
-energy, mps = a2dmrg_main(L=40, mpo=mpo, warmup_sweeps=1, ...)  # Faster but may need more A2DMRG sweeps
-energy, mps = a2dmrg_main(L=40, mpo=mpo, warmup_sweeps=5, ...)  # More warmup, fewer A2DMRG sweeps
-
-# Disable warmup (only for testing or if providing pre-converged initial_mps)
-energy, mps = a2dmrg_main(L=40, mpo=mpo, warmup_sweeps=0, initial_mps=converged_mps, ...)
+# Paper-faithful default (random init, no serial warmup)
+energy, mps = a2dmrg_main(L=40, mpo=mpo, warmup_sweeps=0, ...)
 ```
 
-**Empirical findings:**
-- `warmup_sweeps=2`: Usually sufficient, A2DMRG converges in 1-3 sweeps
-- `warmup_sweeps=1`: May work but A2DMRG may need more sweeps
-- `warmup_sweeps=0`: Only use with a pre-converged `initial_mps`
+**Experimental warmup mode** (non-paper convenience):
+```python
+# Bounded experimental warmup (warmup_sweeps=1-2 allowed)
+energy, mps = a2dmrg_main(L=40, mpo=mpo, warmup_sweeps=1, ...)  # Experimental
+energy, mps = a2dmrg_main(L=40, mpo=mpo, warmup_sweeps=2, ...)  # Experimental
+
+# Extended warmup requires explicit non-paper flag
+energy, mps = a2dmrg_main(L=40, mpo=mpo, warmup_sweeps=5,
+                          experimental_nonpaper=True, ...)  # NON-PAPER MODE
+```
+
+**Warmup policy rules:**
+- `warmup_sweeps=0`: Paper-faithful (default)
+- `warmup_sweeps=1-2`: Allowed as bounded experimental convenience
+- `warmup_sweeps>2`: Requires `experimental_nonpaper=True` flag
+- Metadata tracks: `initialization_mode`, `paper_faithful_mode`, `experimental_nonpaper`
+
+**For custom initial states:**
+```python
+# Provide pre-converged MPS (useful for parameter sweeps)
+energy, mps = a2dmrg_main(L=40, mpo=mpo, warmup_sweeps=0,
+                          initial_mps=converged_mps, ...)
+```
 
 ## Quick Start
+
+**Note:** A2DMRG requires `np >= 2` (parallel algorithm). For serial execution, use `quimb.DMRG2`.
 
 ```bash
 # Setup environment
@@ -55,10 +88,10 @@ energy, mps = a2dmrg_main(L=40, mpo=mpo, warmup_sweeps=0, initial_mps=converged_
 # Activate environment
 source venv/bin/activate
 
-# Run single-processor test
-python -m a2dmrg.dmrg --sites 40 --bond-dim 100 --sweeps 10
+# Run with MPI (minimum 2 processors)
+mpirun -np 2 python -m a2dmrg.dmrg --sites 40 --bond-dim 100 --sweeps 10
 
-# Run with MPI (4 processors)
+# Run with 4 processors (recommended)
 mpirun -np 4 python -m a2dmrg.dmrg --sites 40 --bond-dim 100 --sweeps 10
 
 # Run tests

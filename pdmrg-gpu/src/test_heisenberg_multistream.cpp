@@ -60,6 +60,24 @@ int main(int argc, char** argv) {
         std::cout << "Setting MPO..." << std::endl;
         coordinator.set_mpo(d_mpo_tensors.data());
 
+
+        // Load initial MPS from binary file
+        std::cout << "Loading MPS from binary..." << std::endl;
+        if (!coordinator.load_mps_from_binary("/tmp/heisenberg_L8_mps_initial.bin")) {
+            std::cerr << "ERROR: Failed to load MPS" << std::endl;
+            return 1;
+        }
+        std::cout << "✓ MPS loaded" << std::endl;
+    
+    // Build environments now that both MPS and MPO are loaded
+    std::cout << "Building environments from MPS..." << std::endl;
+    coordinator.build_all_environments();
+    std::cout << "✓ Environments built" << std::endl;
+        
+        // Build environments now that both MPS and MPO are loaded
+        std::cout << "Building environments from MPS..." << std::endl;
+        coordinator.build_all_environments();
+        std::cout << "✓ Environments built" << std::endl;
         std::cout << "✓ Initialization complete\n" << std::endl;
 
         // Run multiple DMRG iterations

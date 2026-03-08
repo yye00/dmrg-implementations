@@ -109,15 +109,15 @@ def distribute_mps(mps_arrays, mpo_arrays, comm, dtype=np.float64):
     return pmps
 
 
-def _compute_v_at_bond(all_arrays, left_site, right_site, use_identity=True):
+def _compute_v_at_bond(all_arrays, left_site, right_site, use_exact_svd=True):
     """Compute V at the bond between left_site and right_site.
 
-    For a freshly distributed MPS from serial warmup, V = identity is correct.
-    The boundary tensors already form the correct wavefunction when contracted
-    directly - no rescaling is needed.
+    Uses exact SVD to compute V = Lambda^-1 at the boundary bond.
 
-    V = 1/S is only needed when bridging INDEPENDENTLY EVOLVED wavefunctions,
-    which doesn't apply when distributing from serial warmup.
+    While V = identity would be mathematically correct for a freshly distributed
+    MPS from serial warmup (the tensors already form a consistent wavefunction),
+    using the exact SVD method V = 1/S provides better numerical stability and
+    is the canonical method from Stoudenmire & White 2013.
 
     Parameters
     ----------
@@ -125,16 +125,28 @@ def _compute_v_at_bond(all_arrays, left_site, right_site, use_identity=True):
         Full MPS arrays.
     left_site, right_site : int
         Adjacent global site indices.
-    use_identity : bool
-        If True, return identity (all 1s). Default True for serial warmup.
+    use_exact_svd : bool
+        If True (default), compute V from SVD. If False, use identity.
 
     Returns
     -------
     V : ndarray, shape (k,)
-        V matrix for boundary merge.
+        V matrix for boundary merge, computed as V = 1/S.
     """
     A_left = all_arrays[left_site]
     chi_bond = A_left.shape[2]
-    
-    # Use identity V - the tensors form correct wavefunction when contracted directly
-    return np.ones(chi_bond, dtype=A_left.dtype)
+
+    if not use_exact_svd:
+        # Identity approximation (legacy behavior)
+        return np.ones(chi_bond, dtype=A_left.dtype)
+
+    # Exact SVD method: compute V = 1/S from the left boundary tensor
+    # Shape: (chi_L, d, chi_bond)
+    chi_L, d, _ = A_left.shape
+    M = A_left.reshape(chi_L * d, chi_bond)
+
+    # Compute SVD and extract singular values
+    _, S, _ = np.linalg.svd(M, full_matrices=False)
+
+    # Return V = 1/S with regularization
+    return compute_v_from_svd(S)

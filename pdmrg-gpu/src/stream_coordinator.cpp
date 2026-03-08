@@ -24,7 +24,8 @@ StreamCoordinator::StreamCoordinator(int n_streams, int chain_length,
                                      int chi_max, int d, int D_mpo, int max_bond)
     : n_streams_(n_streams), chain_length_(chain_length),
       chi_max_(chi_max), d_(d), D_mpo_(D_mpo), max_bond_(max_bond),
-      total_energy_(0.0)
+      total_energy_(0.0),
+      bond_dims_(chain_length + 1, 0)
 {
     if (n_streams_ < 1) {
         throw std::runtime_error("StreamCoordinator: n_streams must be >= 1");
@@ -107,7 +108,7 @@ void StreamCoordinator::distribute_sites() {
         StreamSegment* seg = new StreamSegment(
             i, start_site, end_site,
             chi_max_, d_, D_mpo_,
-            streams_[i]
+            streams_[i], chain_length_
         );
 
         segments_.push_back(seg);
@@ -273,7 +274,7 @@ double StreamCoordinator::merge_boundary(int left_idx, int right_idx) {
 
     BoundaryMergeGPU* merger = mergers_[left_idx];  // Use merger for this boundary
     merger->merge(left_boundary, right_boundary, energy, trunc_err,
-                  false,  // skip_optimization = false (do optimize)
+                  false,  // skip_optimization = false (optimize from random init) (do optimize)
                   streams_[left_idx]);
 
     return energy;
@@ -341,33 +342,23 @@ void StreamCoordinator::collect_energy() {
 double StreamCoordinator::compute_full_chain_energy() {
     // Compute ⟨ψ|H|ψ⟩ for the full MPS chain
     //
-    // Strategy: Use boundary merge energies and scale by number of bonds
-    // This is an approximation until we implement full environment contractions
-    // for all bonds (not just segment boundaries).
+    // The boundary merge energy IS the total system energy because
+    // the left and right environments encode contributions from all
+    // sites outside the optimized bond.
     //
-    // segment_energies_ is reset to 0.0 at start of each iteration,
-    // then populated only for boundaries that are actually merged.
+    // segment_energies_ contains energies from boundary merges.
+    // We just need one non-zero value.
 
     double total = 0.0;
-    int n_bonds = chain_length_ - 1;
     int n_boundaries = n_streams_ - 1;
 
     if (n_boundaries > 0) {
-        // Count only non-zero boundary energies (actually computed this iteration)
-        double sum_boundary_energy = 0.0;
-        int count = 0;
+        // Use the first non-zero boundary energy
         for (int i = 0; i < n_boundaries; i++) {
             if (segment_energies_[i] != 0.0) {
-                sum_boundary_energy += segment_energies_[i];
-                count++;
+                total = segment_energies_[i];
+                break;  // Only need one boundary energy
             }
-        }
-
-        if (count > 0) {
-            double avg_boundary_energy = sum_boundary_energy / count;
-            // Scale to full chain
-            // Assumption: Boundary energies are representative of all bonds
-            total = avg_boundary_energy * n_bonds;
         }
     }
 
@@ -409,3 +400,44 @@ void StreamCoordinator::initialize_mps_random() {
     // This method is for consistency with external interface
     std::cout << "MPS initialized randomly in each segment" << std::endl;
 }
+
+bool StreamCoordinator::load_mps_from_binary(const char* filename) {
+    printf("StreamCoordinator: Loading MPS from %s\\n", filename);
+
+    std::vector<int> bond_dims;
+    if (chain_length_ == 8) {
+        bond_dims = {1, 2, 4, 8, 16, 8, 4, 2, 1};
+    } else {
+        bond_dims.push_back(1);
+        for (int i = 1; i < chain_length_; i++) {
+            int chi = std::min(chi_max_, (int)std::pow(2, std::min(i, chain_length_ - i)));
+            bond_dims.push_back(chi);
+        }
+        bond_dims.push_back(1);
+    }
+    bond_dims_ = bond_dims;
+
+    printf("Bond dimensions: [");
+    for (int i = 0; i <= chain_length_; i++) {
+        printf("%d%s", bond_dims[i], i < chain_length_ ? ", " : "");
+    }
+    printf("]\n");
+
+    for (int i = 0; i < n_streams_; i++) {
+        if (!segments_[i]->load_mps_from_binary(filename, bond_dims.data())) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void StreamCoordinator::build_all_environments() {
+    printf("StreamCoordinator: Building environments from loaded MPS...\n");
+    
+    for (int i = 0; i < n_streams_; i++) {
+        segments_[i]->build_environments_from_mps();
+    }
+    
+    printf("StreamCoordinator: ✓ All environments built\n");
+}
+

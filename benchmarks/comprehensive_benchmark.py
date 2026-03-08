@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-Comprehensive CPU + GPU DMRG Benchmark Suite
-==============================================
+Comprehensive CPU + GPU DMRG Benchmark Suite (VALIDATED ONLY)
+==============================================================
 
-Runs all implementations with IDENTICAL problems and tolerances:
+Runs all VALIDATED implementations with IDENTICAL problems and tolerances:
 
-CPU (14 runs per model):
-  - Quimb DMRG1 (1 run)
-  - Quimb DMRG2 (1 run)
-  - PDMRG (np=1,2,4,8) - 4 runs
-  - PDMRG2 (np=1,2,4,8) - 4 runs
-  - A2DMRG (np=1,2,4,8) - 4 runs
+CPU (11 runs per model):
+  - Quimb DMRG1 (1 run - reference)
+  - Quimb DMRG2 (1 run - reference)
+  - PDMRG (np=2,4,8) - 3 runs (validated)
+  - A2DMRG (np=2,4,8) - 3 runs (validated)
+  - PDMRG2: EXCLUDED (prototype-only, not validated)
 
-GPU (8 runs per model):
+GPU (4 runs per model):
   - PDMRG_GPU (streams=1,2,4,8) - 4 runs
-  - PDMRG2_GPU (streams=1,2,4,8) - 4 runs
+  - PDMRG2_GPU: EXCLUDED (prototype-only)
 
 Models:
   - Heisenberg: L=12, D=100, d=2 (real)
@@ -394,11 +394,12 @@ def run_model_benchmarks(model_name, params, mpo):
             return False
 
     # =========================================================================
-    # 3. CPU MPI Implementations (PDMRG, PDMRG2, A2DMRG) - np = 1,2,4,8
+    # 3. CPU MPI Implementations (PDMRG, A2DMRG) - np = 2,4,8
+    # PDMRG2 excluded: prototype-only, not validated
     # =========================================================================
-    print(f"\n--- CPU MPI Implementations ---")
-    for impl in ["pdmrg", "pdmrg2", "a2dmrg"]:
-        for np in [1, 2, 4, 8]:
+    print(f"\n--- CPU MPI Implementations (Validated) ---")
+    for impl in ["pdmrg", "a2dmrg"]:
+        for np in [2, 4, 8]:
             energy, wall_time = run_mpi_implementation(impl, model_key, params, np)
             if energy is not None:
                 if not results.add_result(model_key, impl, f"np={np}", energy, wall_time):
@@ -406,10 +407,11 @@ def run_model_benchmarks(model_name, params, mpo):
                     return False
 
     # =========================================================================
-    # 4. GPU Implementations (PDMRG_GPU, PDMRG2_GPU) - streams = 1,2,4,8
+    # 4. GPU Implementations (PDMRG_GPU) - streams = 1,2,4,8
+    # PDMRG2_GPU excluded: prototype-only, not validated
     # =========================================================================
-    print(f"\n--- GPU Implementations ---")
-    for impl in ["pdmrg_gpu", "pdmrg2_gpu"]:
+    print(f"\n--- GPU Implementations (Validated) ---")
+    for impl in ["pdmrg_gpu"]:
         for streams in [1, 2, 4, 8]:
             energy, wall_time = run_gpu_implementation(impl, model_key, params, streams)
             if energy is not None:

@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdmrg2"
+version = "0.1.0"
+description = "PDMRG2: PROTOTYPE-ONLY parallel DMRG with GPU hooks (not for production use)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "PDMRG2 Contributors"}
+]
+keywords = ["dmrg", "tensor networks", "quantum physics", "mpi", "parallel computing", "gpu", "prototype"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+# Dependencies inherited from workspace root
+dependencies = []
+
+[project.optional-dependencies]
+# GPU support for future work
+gpu = [
+    "cupy>=12.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/YOUR_USERNAME/pdmrg2"
+Documentation = "https://github.com/YOUR_USERNAME/pdmrg2/blob/main/README.md"
+Repository = "https://github.com/YOUR_USERNAME/pdmrg2"
+"Bug Tracker" = "https://github.com/YOUR_USERNAME/pdmrg2/issues"
+
+[project.scripts]
+pdmrg2 = "pdmrg.__main__:main"
+
+[tool.setuptools]
+packages = ["pdmrg"]
+
+[tool.setuptools.package-data]
+pdmrg = ["py.typed"]

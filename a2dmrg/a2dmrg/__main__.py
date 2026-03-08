@@ -174,16 +174,13 @@ def build_mpo(args):
         raise NotImplementedError("Bose-Hubbard MPO builder not yet fully implemented. Use --model heisenberg for now.")
 
     elif args.model == 'josephson':
-        # Josephson junction array model
-        # For now, use Heisenberg as placeholder
-        # TODO: Implement full Josephson model
-        from quimb.tensor import SpinHam1D
-        builder = SpinHam1D(S=1/2)
-        builder += args.J, 'X', 'X'
-        builder += args.J, 'Y', 'Y'
-        builder += args.J, 'Z', 'Z'
-        mpo = builder.build_mpo(args.sites)
-        return mpo
+        # Josephson junction array model not implemented
+        raise NotImplementedError(
+            "Josephson junction model not yet implemented for A2DMRG CLI.\n"
+            "The model requires proper Bose-Hubbard operators with local dimension d>2.\n"
+            "Use benchmark_data loader with pre-generated Josephson MPOs instead,\n"
+            "or use --model heisenberg for testing."
+        )
 
     else:
         raise ValueError(f"Unknown model: {args.model}")
