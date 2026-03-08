@@ -696,12 +696,20 @@ Completed three major refactoring priorities in single session:
 2. **Metadata format:** V_computation and boundary_optimization fields updated
 3. **A2DMRG warmup:** Default changed from 0 → 2
 
-### Next Priorities
-1. Refactor shared pdmrg/pdmrg2 components (reduce duplication)
-2. Add comprehensive tests (Josephson, boundary SVD, warmup, reproducibility)
-3. Update documentation (algorithm relationships, exact SVD rationale)
-4. Run validation tests to verify exact SVD improvements
-5. Performance benchmarks to measure impact
+### External Audit Issues - ALL FIXED ✅ (2026-03-08)
+
+Issue #1 (PDMRG boundary optimization): DONE in prev session + this session
+Issue #2 (A2DMRG bond preservation): DONE - zero-padding in _transform_to_i_orthogonal
+Issue #3 (Convergence sentinel): DONE - energy=None (not 0.0) for idle ranks
+Issue #4 (A2DMRG metadata): DONE - comprehensive metadata dict returned
+
+Convergence sentinel change: boundary_merge() now returns None for idle ranks.
+check_convergence() filters `e is not None` (was `e != 0.0`).
+Applied to both pdmrg and pdmrg2 communication.py and dmrg.py.
+
+PDMRG2 syntax bug fixed: stray `')` in CLI arg parser (line 864) removed.
+
+All changes committed in 6 commits on cpu-audit branch (commits b058d89..7e00b6b).
 
 ### Files Modified This Session (11 total)
 - pyproject.toml (root) - NEW
