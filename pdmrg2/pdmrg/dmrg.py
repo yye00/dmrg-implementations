@@ -25,7 +25,7 @@ from pdmrg.environments.update import (
 )
 from pdmrg.numerics.eigensolver import optimize_two_site
 from pdmrg.numerics.accurate_svd import truncated_svd, accurate_svd, compute_v_from_svd
-from pdmrg.numerics.linalg_utils import newton_schulz_polar, rsvd_cholesky
+from pdmrg.numerics.linalg_utils import newton_schulz_polar
 from pdmrg.parallel.distribute import compute_site_distribution, distribute_mps
 from pdmrg.parallel.merge import merge_boundary_tensors
 from pdmrg.parallel.communication import safe_exchange, check_convergence
@@ -65,43 +65,44 @@ def serial_warmup(mpo, L, bond_dim_warmup=50, n_warmup_sweeps=5,
     return A, mpo_arrays, warmup_energy
 
 
+
+
 def canonize_block(pmps, env_mgr, mpo_arrays, direction):
     """Canonize the local block for the initial sweep direction.
 
-    For sweep 'left': QR sweep right to put canonical center at right edge,
+    For sweep 'left': polar sweep right to put canonical center at right edge,
                        building correct L_envs along the way.
-    For sweep 'right': LQ sweep left to put canonical center at left edge,
+    For sweep 'right': polar sweep left to put canonical center at left edge,
                         building correct R_envs along the way.
+
+    Uses Newton-Schulz polar decomposition (BLAS-3, GPU-ready) instead of QR.
     """
     n_local = pmps.n_local
     global_start = pmps.my_sites[0]
 
     if direction == 'left':
-        # Put canonical center at RIGHT edge (left-canonize all but last).
-        # Newton-Schulz polar replaces QR: U is left-isometric, P is gauge factor.
+        # Put canonical center at RIGHT edge (left-canonize all but last)
         for j in range(n_local - 1):
             gi = global_start + j
             A = pmps.arrays[j]
             chi_L, d, chi_R = A.shape
             M = A.reshape(chi_L * d, chi_R)
-            U, P = newton_schulz_polar(M)          # U: (m,k) iso; P: (k, chi_R)
+            U, P = newton_schulz_polar(M)
             pmps.arrays[j] = U.reshape(chi_L, d, -1)
             pmps.arrays[j + 1] = np.tensordot(P, pmps.arrays[j + 1], axes=(1, 0))
             env_mgr.L_envs[gi + 1] = update_left_env(
                 env_mgr.L_envs[gi], pmps.arrays[j], mpo_arrays[gi])
     else:
-        # Put canonical center at LEFT edge (right-canonize all but first).
-        # Apply Newton-Schulz to M^H (typically tall), then extract L and Q.
+        # Put canonical center at LEFT edge (right-canonize all but first)
         for j in range(n_local - 1, 0, -1):
             gi = global_start + j
             B = pmps.arrays[j]
             chi_L, d, chi_R = B.shape
             M = B.reshape(chi_L, d * chi_R)
-            # M^H = U_T P_T  →  M = P_T^H U_T^H
-            U_T, P_T = newton_schulz_polar(M.conj().T)
-            L_mat = P_T.conj().T                   # (chi_L, k)
-            Q_mat = U_T.conj().T                   # (k, d*chi_R) right-isometric
-            pmps.arrays[j] = Q_mat.reshape(-1, d, chi_R)
+            U, P = newton_schulz_polar(M.conj().T)
+            Q = U.conj().T
+            L_mat = P.conj().T
+            pmps.arrays[j] = Q.reshape(-1, d, chi_R)
             pmps.arrays[j - 1] = np.tensordot(pmps.arrays[j - 1], L_mat, axes=(2, 0))
             env_mgr.R_envs[gi - 1] = update_right_env(
                 env_mgr.R_envs[gi], pmps.arrays[j], mpo_arrays[gi])
@@ -133,8 +134,7 @@ def local_sweep(pmps, env_mgr, mpo_arrays, direction, max_bond,
 
             chi_L, d_L, d_R, chi_R = theta_opt.shape
             M = theta_opt.reshape(chi_L * d_L, d_R * chi_R)
-            # rSVD for internal sweeps (NOT boundary merges — see merge.py).
-            U, S, Vh, _ = rsvd_cholesky(M, max_bond)
+            U, S, Vh, _ = truncated_svd(M, max_bond)
 
             pmps.arrays[j] = U.reshape(chi_L, d_L, -1)
             pmps.arrays[j + 1] = (np.diag(S) @ Vh).reshape(-1, d_R, chi_R)
@@ -161,8 +161,7 @@ def local_sweep(pmps, env_mgr, mpo_arrays, direction, max_bond,
 
             chi_L, d_L, d_R, chi_R = theta_opt.shape
             M = theta_opt.reshape(chi_L * d_L, d_R * chi_R)
-            # rSVD for internal sweeps (NOT boundary merges — see merge.py).
-            U, S, Vh, _ = rsvd_cholesky(M, max_bond)
+            U, S, Vh, _ = truncated_svd(M, max_bond)
 
             pmps.arrays[j + 1] = Vh.reshape(-1, d_R, chi_R)
             pmps.arrays[j] = (U @ np.diag(S)).reshape(chi_L, d_L, -1)
@@ -364,16 +363,16 @@ def rebuild_boundary_r_env(pmps, env_mgr, mpo_arrays):
         # No interior sites to right-canonize
         return
     
-    # Right-canonize sites from n_local-1 down to 1 (Newton-Schulz polar).
+    # Right-canonize sites from n_local-1 down to 1 (polar decomposition)
     # This puts sites 1..n_local-1 in right-canonical form with OC at site 0
     for j in range(n_local - 1, 0, -1):
         A = pmps.arrays[j]
         chi_L, d, chi_R = A.shape
         M = A.reshape(chi_L, d * chi_R)
-        # M^H = U_T P_T  →  M = P_T^H U_T^H
-        U_T, P_T = newton_schulz_polar(M.conj().T)
-        L = P_T.conj().T                             # (chi_L, k)
-        Q_right = U_T.conj().T.reshape(-1, d, chi_R) # (k, d, chi_R) right-iso
+        # Polar decomposition of M^H, then transpose back
+        U, P = newton_schulz_polar(M.conj().T)
+        L = P.conj().T  # L = P^H
+        Q_right = U.conj().T.reshape(-1, d, chi_R)  # Q = U^H
         pmps.arrays[j] = Q_right
         pmps.arrays[j - 1] = np.tensordot(pmps.arrays[j - 1], L, axes=(2, 0))
     
@@ -415,12 +414,12 @@ def rebuild_boundary_l_env(pmps, env_mgr, mpo_arrays):
     if n_local <= 1:
         return
     
-    # Left-canonize sites from 0 to n_local-2 (Newton-Schulz polar).
+    # Left-canonize sites from 0 to n_local-2 (polar decomposition)
     for j in range(n_local - 1):
         A = pmps.arrays[j]
         chi_L, d, chi_R = A.shape
         M = A.reshape(chi_L * d, chi_R)
-        U, P = newton_schulz_polar(M)              # U: (m,k) iso; P: (k, chi_R)
+        U, P = newton_schulz_polar(M)
         pmps.arrays[j] = U.reshape(chi_L, d, -1)
         pmps.arrays[j + 1] = np.tensordot(P, pmps.arrays[j + 1], axes=(1, 0))
     
@@ -475,11 +474,13 @@ def compute_v_from_boundary_tensor(tensor, boundary_side='right'):
 
 def recompute_boundary_v(pmps, comm, which_boundary):
     """Update V at a boundary after canonization.
-    
-    After serial warmup and distribution, the MPS is a single coherent wavefunction.
-    The boundary tensors, when contracted directly, form the correct two-site
-    wavefunction. Therefore V = identity (all 1s) is correct.
-    
+
+    Computes V = Lambda^-1 where Lambda comes from the SVD of the boundary
+    tensor, following Stoudenmire & White 2013 Eq. 5.
+
+    After independent local sweeps, the blocks have evolved separately and
+    V = Lambda^-1 is needed to properly bridge them during the merge.
+
     Parameters
     ----------
     pmps : ParallelMPS
@@ -490,51 +491,54 @@ def recompute_boundary_v(pmps, comm, which_boundary):
         'left' or 'right'
     """
     from pdmrg.parallel.communication import safe_exchange
-    
+    from pdmrg.numerics.accurate_svd import compute_v_from_svd
+
     rank = pmps.rank
     n_procs = pmps.n_procs
-    
+
     if which_boundary == 'right':
         if rank < n_procs - 1:
             neighbor = rank + 1
             chi_bond = pmps.arrays[-1].shape[2]
-            
-            # Simple sync exchange
-            my_data = {'chi': chi_bond}
+
+            # Compute V = Lambda^-1 from SVD of boundary tensor
+            pmps.V_right = compute_v_from_boundary_tensor(pmps.arrays[-1], 'right')
+
+            # Exchange with neighbor for synchronization
+            my_data = {'chi': chi_bond, 'v_size': len(pmps.V_right)}
             safe_exchange(comm, rank, neighbor, my_data)
-            
-            # Use identity V
-            pmps.V_right = np.ones(chi_bond, dtype=pmps.arrays[-1].dtype)
-            
+
         if rank > 0:
             neighbor = rank - 1
             chi_bond = pmps.arrays[0].shape[0]
-            
+
             my_data = {'chi': chi_bond}
             safe_exchange(comm, rank, neighbor, my_data)
-            
+
     elif which_boundary == 'left':
         if rank > 0:
             neighbor = rank - 1
             chi_bond = pmps.arrays[0].shape[0]
-            
-            my_data = {'chi': chi_bond}
+
+            # Compute V = Lambda^-1 from SVD of boundary tensor
+            pmps.V_left = compute_v_from_boundary_tensor(pmps.arrays[0], 'left')
+
+            # Exchange with neighbor for synchronization
+            my_data = {'chi': chi_bond, 'v_size': len(pmps.V_left)}
             safe_exchange(comm, rank, neighbor, my_data)
-            
-            # Use identity V
-            pmps.V_left = np.ones(chi_bond, dtype=pmps.arrays[0].dtype)
-            
+
         if rank < n_procs - 1:
             neighbor = rank + 1
             chi_bond = pmps.arrays[-1].shape[2]
-            
+
             my_data = {'chi': chi_bond}
             safe_exchange(comm, rank, neighbor, my_data)
 
 
 def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
                n_warmup_sweeps=5, tol=1e-8, dtype='float64',
-               comm=None, verbose=True, random_init_flag=False, return_metadata=False):
+               comm=None, verbose=True,
+               random_init_flag=False, return_metadata=False):
     """Run the full PDMRG algorithm.
 
     For n_procs > 1, uses staggered sweeps (Fig. 4 of the paper):
@@ -543,18 +547,20 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
       - After sweeps reach boundaries, merge with neighbor using V
       - Sweep back, merge with other neighbor
 
+    Warmup policy:
+      - Serial warmup only: rank 0 runs quimb DMRG2, then MPS is scattered
+      - Parallel warmup removed for algorithmic fidelity (2026-03-07)
+      - Use random_init_flag=True only for experimental testing
+
     Parameters
     ----------
     return_metadata : bool, optional
         If True, return (energy, pmps, metadata) tuple.
         If False (default), return (energy, pmps) for backward compatibility.
-    parallel_warmup_flag : bool
-        If True, use parallel warmup instead of serial warmup.
-        Each processor warms up its own segment independently,
-        which is much faster for large systems.
     random_init_flag : bool
         If True, skip warmup and start from a random MPS.
         This requires more sweeps but is useful for testing.
+        Not recommended for benchmark use.
     """
     if comm is None:
         from mpi4py import MPI
@@ -563,15 +569,15 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
     rank = comm.Get_rank()
     n_procs = comm.Get_size()
 
-    # PDMRG2 is a parallel algorithm and requires at least 2 MPI ranks.
-    # NOTE: PDMRG2 is currently PROTOTYPE/DEFERRED pending PDMRG fixes.
-    # It shares structural issues with PDMRG and should not be benchmarked yet.
+    # PDMRG is a parallel algorithm and requires at least 2 MPI ranks.
+    # Running with np=1 provides no parallelism and masks algorithmic issues.
+    # For serial DMRG, use quimb.DMRG2 directly.
     if n_procs < 2:
         raise ValueError(
-            f"PDMRG2 requires at least 2 MPI ranks (got np={n_procs}). "
-            "PDMRG2 is a parallel algorithm based on 2-site DMRG primitives. "
-            "For serial execution, use quimb.DMRG2 instead. "
-            "NOTE: PDMRG2 is currently PROTOTYPE-ONLY and not validated for benchmarking."
+            f"PDMRG requires at least 2 MPI ranks (got np={n_procs}). "
+            "PDMRG is a parallel real-space DMRG algorithm (Stoudenmire & White 2013) "
+            "that divides the MPS chain across processors. "
+            "For serial execution, use quimb.DMRG2 instead."
         )
 
     mpo_arrays = [get_mpo_tensor_data(mpo, i) for i in range(L)]
@@ -650,15 +656,13 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         site_ranges = compute_site_distribution(L, n_procs)
         my_sites = site_ranges[rank]
         
-        # Initialize V matrices at boundaries
+        # Initialize V matrices at boundaries using exact SVD
         V_left = None
         V_right = None
         if rank < n_procs - 1:
-            chi_R = local_mps[-1].shape[2]
             # Compute V from SVD of right boundary tensor
             V_right = compute_v_from_boundary_tensor(local_mps[-1], 'right')
         if rank > 0:
-            chi_L = local_mps[0].shape[0]
             # Compute V from SVD of left boundary tensor
             V_left = compute_v_from_boundary_tensor(local_mps[0], 'left')
         
@@ -689,10 +693,7 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         if hasattr(pmps, '_global_arrays'):
             del pmps._global_arrays
 
-    # For np=1 with serial warmup: the warmup (quimb DMRG2 at tol=1e-12) is already
-    # optimal.  The local_sweep path uses rsvd_cholesky whose stochastic approximation
-    # errors compound across 50 sweeps, preventing convergence and degrading the state.
-    # NOTE: np=1 early return was removed. PDMRG2 now requires np >= 2.
+    # NOTE: np=1 early return was removed. PDMRG now requires np >= 2.
     # Validation check at function entry enforces this requirement.
 
     if rank == 0 and verbose:
@@ -704,74 +705,104 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
     E_prev = 0.0
     E_global = 0.0
     converged_flag = False
-    final_sweep_num = 0
+    final_sweep_num = max_sweeps
 
     eigsolver_max_iter = 30
     eigsolver_tol = tol / 10
 
-    # Multi-rank parallel DMRG:
+    # NOTE: n_procs==1 path removed - validation at entry ensures np >= 2
+
+    # Multi-rank parallel PDMRG (Stoudenmire & White 2013):
+    # Real-space parallelization with staggered local sweeps and boundary merges.
     #
-    # MPS starts right-canonical (from warmup), so R_envs are correct.
-    # Each full sweep:
-    #   1. All ranks QR sweep right (builds L_envs, OC -> right edge)
-    #   2. Merge at even boundaries (0↔1, 2↔3, ...)
-    #   3. All ranks QR sweep left (builds R_envs, OC -> left edge)
+    # ALGORITHMIC FIX (2026-03-07):
+    # Previous implementation did NOT perform local optimization within blocks!
+    # It only called canonize_block() which does QR decomposition without energy minimization.
+    # This fix adds proper local_sweep() calls that optimize energy using 2-site DMRG.
+    #
+    # Algorithm structure per Stoudenmire & White 2013:
+    #   1. Local optimization sweeps within each rank's block (parallel, independent)
+    #   2. Merge at even boundaries (0↔1, 2↔3, ...) with V = Lambda^-1 bridge
+    #   3. Local optimization sweeps in opposite direction
     #   4. Merge at odd boundaries (1↔2, 3↔4, ...)
     #
-    # The QR sweeps rebuild consistent environments before each merge.
-    # All optimization happens at the merge steps.
+    # Staggered pattern: even ranks sweep right first, odd ranks sweep left first.
+    # This maximizes parallel efficiency by preventing idle waiting.
+
+    # Initialize sweep direction based on rank (staggered pattern)
+    direction = 'right' if rank % 2 == 0 else 'left'
 
     for sweep in range(max_sweeps):
-        final_sweep_num = sweep
         t0 = time.time()
 
-        # QR sweep right on all ranks (parallel, no communication)
-        canonize_block(pmps, env_mgr, mpo_arrays, 'left')
-        # Now: OC at right edge of each block, L_envs correct
-        
-        # For even boundary merge (0↔1, 2↔3):
-        # - Even ranks (0, 2, ...) are "left" side with L_env correct
-        # - Odd ranks (1, 3, ...) are "right" side, need to rebuild R_env
-        if rank % 2 == 1:  # Odd ranks participate on the right side
-            rebuild_boundary_r_env(pmps, env_mgr, mpo_arrays)
+        # ===== PHASE 1: LOCAL OPTIMIZATION SWEEPS (parallel, no communication) =====
+        # Each rank independently optimizes within its block using standard 2-site DMRG.
+        # This is the CRITICAL FIX - previous version skipped this step entirely!
+        if rank == 0 and verbose:
+            print(f"  Phase 1: Local optimization sweeps...")
 
-        # Recompute V at right boundary
+        E_local1, direction = local_sweep(
+            pmps, env_mgr, mpo_arrays, direction, bond_dim,
+            max_iter=eigsolver_max_iter, tol=eigsolver_tol)
+        # After sweep, direction is flipped and OC is at opposite edge of block
+
+        # ===== PHASE 2: MERGE AT EVEN BOUNDARIES (0↔1, 2↔3, ...) =====
+        # Prepare environments for merge
+        if direction == 'left':  # Just swept right, OC at right edge
+            # For even boundaries: even ranks are left side, odd ranks are right side
+            if rank % 2 == 1:  # Odd ranks need R_env at their left edge
+                rebuild_boundary_r_env(pmps, env_mgr, mpo_arrays)
+        else:  # Just swept left, OC at left edge
+            if rank % 2 == 0:  # Even ranks need L_env at their right edge
+                rebuild_boundary_l_env(pmps, env_mgr, mpo_arrays)
+
+        # Recompute V at right boundary using exact SVD (V = Lambda^-1)
         recompute_boundary_v(pmps, comm, 'right')
 
-        # Merge at even boundaries (0↔1, 2↔3, ...)
+        # Merge at even boundaries with boundary optimization enabled
         skip_opt = False  # Boundary optimization enabled (exact SVD method)
+
+        if rank == 0 and verbose:
+            print(f"  Phase 2: Merging even boundaries (skip_opt={skip_opt})...")
+
         E_merge1 = boundary_merge(
             pmps, env_mgr, mpo_arrays, comm, 'even',
             max_bond=bond_dim, max_iter=eigsolver_max_iter,
             tol=eigsolver_tol, skip_optimization=skip_opt)
 
-        # QR sweep left on all ranks (parallel, no communication)
-        canonize_block(pmps, env_mgr, mpo_arrays, 'right')
-        # Now: OC at left edge of each block, R_envs correct
-        
-        # For odd boundary merge (1↔2, 3↔4):
-        # - Odd ranks (1, 3, ...) are "left" side with L_env needed
-        # - Even ranks (2, 4, ...) are "right" side with R_env correct
-        # Wait, for odd boundaries: rank 1 is left side, rank 2 is right side
-        # So rank 1 needs L_env[global_end] from left-canonical sites
-        # Actually, for odd boundaries (1↔2, 3↔4, ...):
-        # - Left partner has odd rank (1, 3, 5)
-        # - Right partner has even rank > 0 (2, 4, 6)
-        if rank % 2 == 1 and rank + 1 < n_procs:  # Odd ranks are left side of odd boundary
-            rebuild_boundary_l_env(pmps, env_mgr, mpo_arrays)
+        # ===== PHASE 3: LOCAL OPTIMIZATION SWEEPS IN OPPOSITE DIRECTION =====
+        if rank == 0 and verbose:
+            print(f"  Phase 3: Local optimization sweeps (opposite direction)...")
+
+        E_local2, direction = local_sweep(
+            pmps, env_mgr, mpo_arrays, direction, bond_dim,
+            max_iter=eigsolver_max_iter, tol=eigsolver_tol)
+
+        # ===== PHASE 4: MERGE AT ODD BOUNDARIES (1↔2, 3↔4, ...) =====
+        # Prepare environments for merge
+        if direction == 'left':  # Just swept right
+            if rank % 2 == 0 and rank > 0:  # Even ranks (except 0) need R_env at left edge
+                rebuild_boundary_r_env(pmps, env_mgr, mpo_arrays)
+        else:  # Just swept left
+            if rank % 2 == 1:  # Odd ranks need L_env at right edge
+                rebuild_boundary_l_env(pmps, env_mgr, mpo_arrays)
 
         # Recompute V at left boundary
         recompute_boundary_v(pmps, comm, 'left')
 
-        # Merge at odd boundaries (1↔2, 3↔4, ...)
+        # Merge at odd boundaries
+        if rank == 0 and verbose:
+            print(f"  Phase 4: Merging odd boundaries (skip_opt={skip_opt})...")
+
         E_merge2 = boundary_merge(
             pmps, env_mgr, mpo_arrays, comm, 'odd',
             max_bond=bond_dim, max_iter=eigsolver_max_iter,
             tol=eigsolver_tol, skip_optimization=skip_opt)
 
-        # Convergence check
+        # ===== CONVERGENCE CHECK =====
+        # Use best energy from merges (local sweep energies are rank-local only)
         merge_energies = [e for e in [E_merge1, E_merge2] if e is not None]
-        E_best = min(merge_energies) if merge_energies else E_prev
+        E_best = min(merge_energies) if merge_energies else E_local2
 
         converged, E_global = check_convergence(
             E_best, E_prev, tol, comm)
@@ -786,33 +817,39 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
             if rank == 0 and verbose:
                 print(f"Converged after {sweep + 1} sweeps!")
             converged_flag = True
+            final_sweep_num = sweep + 1
             break
 
         E_prev = E_global
+
 
     if rank == 0 and verbose:
         print(f"Final energy: {E_global:.12f}")
 
     if return_metadata:
-        # Determine warmup method
-        # Note: PDMRG2 is PROTOTYPE-ONLY and requires np >= 2
+        # Determine algorithm executed and warmup method
+        # NOTE: np=1 path removed - PDMRG now requires np >= 2
+        # NOTE: parallel warmup removed 2026-03-07 - serial warmup only
         if random_init_flag:
             warmup_method_str = None
-        elif parallel_warmup_flag:
-            warmup_method_str = "parallel rank-local quimb DMRG2"
         else:
             warmup_method_str = "quimb DMRG2 serial"
 
+        algorithm_executed_str = "PDMRG parallel sweeps with local optimization"
+
         metadata = {
-            "algorithm_executed": "PDMRG2 parallel sweeps (PROTOTYPE-ONLY)",
+            "algorithm_executed": algorithm_executed_str,
+            "local_sweeps_enabled": True,
+            "boundary_optimization_enabled": True,
+            "V_computation": "exact_svd_Lambda_inverse",
+            "eigensolver": "block_davidson",  # BLAS-3 block-Davidson with eigsh fallback
+            "canonization": "newton_schulz_polar",  # BLAS-3 polar decomposition with QR fallback
             "early_return": False,
             "early_return_reason": None,
             "warmup_used": not random_init_flag,
             "warmup_sweeps": n_warmup_sweeps if not random_init_flag else 0,
             "warmup_method": warmup_method_str,
-            "boundary_optimization_enabled": True,  # Enabled with exact SVD
-            "V_computation": "exact_svd_Lambda_inverse",  # Exact SVD method
-            "skip_opt": False,  # Boundary optimization enabled (exact SVD)
+            "skip_opt": False,
             "random_init": random_init_flag,
             "np": n_procs,
             "converged": converged_flag,
@@ -855,7 +892,7 @@ def main():
     parser.add_argument('--warmup-dim', type=int, default=50)
     parser.add_argument('--warmup-sweeps', type=int, default=5)
     parser.add_argument('--sweeps', type=int, default=20)
-    parser.add_argument('--tol', type=float, default=1e-8)
+    parser.add_argument('--tol', type=float, default=1e-10)
     parser.add_argument('--model', type=str, default='heisenberg',
                         choices=['heisenberg', 'josephson', 'random_tfim'])
     parser.add_argument('--dtype', type=str, default='float64',

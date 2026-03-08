@@ -9,9 +9,8 @@ quimb convention (MPS_rand_state):
 
 We provide helpers to convert between these conventions.
 
-Gauge-shifting (left_canonize_site / right_canonize_site) uses
-Newton-Schulz polar decomposition from linalg_utils for BLAS-3 efficiency,
-falling back to numpy QR for wide matrices (rare boundary case).
+Canonization uses Newton-Schulz iterative polar decomposition (BLAS-3)
+instead of QR, for GPU readiness. Falls back to QR for wide matrices.
 """
 
 import numpy as np
@@ -176,11 +175,11 @@ def left_canonize_site(A):
     """Left-canonize an MPS tensor via Newton-Schulz polar decomposition.
 
     A has shape (left, phys, right).
-    Returns Q (left, phys, new_right), P (new_right, right).
-    Q is left-isometric: Σ_s Q†Q = I.
+    Returns U (left, phys, new_right), P (new_right, right).
+    U is left-isometric: sum_s U^H U = I.
 
-    Uses Newton-Schulz for tall/square matrices (BLAS-3).
-    Falls back to numpy QR for wide matrices (rare boundary case).
+    Uses BLAS-3 Newton-Schulz iteration (GPU-ready), falls back to QR
+    for wide matrices (chain boundaries where chi_L=1).
 
     Parameters
     ----------
@@ -188,17 +187,15 @@ def left_canonize_site(A):
 
     Returns
     -------
-    Q : ndarray, shape (chi_L, d, min(chi_L*d, chi_R))
-        Left-isometric tensor.
+    U : ndarray, shape (chi_L, d, min(chi_L*d, chi_R))
     P : ndarray, shape (min(chi_L*d, chi_R), chi_R)
-        Remainder factor (absorbed into next site).
     """
     chi_L, d, chi_R = A.shape
-    M = A.reshape(chi_L * d, chi_R)      # (m, n)
-    U, P = newton_schulz_polar(M)        # U: (m, k), P: (k, n), k=min(m,n)
+    M = A.reshape(chi_L * d, chi_R)
+    U, P = newton_schulz_polar(M)
     new_dim = U.shape[1]
-    Q = U.reshape(chi_L, d, new_dim)
-    return Q, P
+    U = U.reshape(chi_L, d, new_dim)
+    return U, P
 
 
 def right_canonize_site(B):
@@ -206,9 +203,10 @@ def right_canonize_site(B):
 
     B has shape (left, phys, right).
     Returns L (left, new_left), Q (new_left, phys, right).
-    Q is right-isometric: Σ_s QQ† = I.
+    Q is right-isometric: sum_s Q Q^H = I.
 
-    Applies Newton-Schulz to B^H (typically tall: d*chi_R ≥ chi_L).
+    Uses BLAS-3 Newton-Schulz iteration (GPU-ready), falls back to QR
+    for wide matrices (chain boundaries).
 
     Parameters
     ----------
@@ -217,20 +215,15 @@ def right_canonize_site(B):
     Returns
     -------
     L : ndarray, shape (chi_L, new_left)
-        Remainder factor (absorbed into previous site).
     Q : ndarray, shape (new_left, d, chi_R)
-        Right-isometric tensor.
     """
     chi_L, d, chi_R = B.shape
-    M = B.reshape(chi_L, d * chi_R)      # (chi_L, d*chi_R)
-
-    # Apply Newton-Schulz to M^H  (shape: d*chi_R × chi_L, typically tall)
-    # M^H = U P  →  M = P^H U^H
-    U_T, P_T = newton_schulz_polar(M.conj().T)
-    # U_T: (d*chi_R, k),  P_T: (k, chi_L)  where k = min(d*chi_R, chi_L)
-    # M = P_T^H U_T^H
-    L = P_T.conj().T                     # (chi_L, k)
-    Qr = U_T.conj().T                   # (k, d*chi_R)  right-isometric
+    M = B.reshape(chi_L, d * chi_R)
+    # Polar decomposition of M^H, then transpose back
+    U, P = newton_schulz_polar(M.conj().T)
+    # M^H = U P -> M = P^H U^H
+    L = P.conj().T  # shape (chi_L, new_dim)
+    Qr = U.conj().T  # shape (new_dim, d*chi_R)
     new_dim = Qr.shape[0]
     Qr = Qr.reshape(new_dim, d, chi_R)
     return L, Qr

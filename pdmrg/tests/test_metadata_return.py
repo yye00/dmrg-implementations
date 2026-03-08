@@ -108,9 +108,9 @@ def main():
 
         # Verify metadata
         assert meta3["early_return"] == False, "Expected early_return=False"
-        assert meta3["algorithm_executed"] == "PDMRG parallel sweeps"
+        assert meta3["algorithm_executed"] == "PDMRG parallel sweeps with local optimization"
         assert meta3["warmup_used"] == True
-        assert meta3["skip_opt"] == True  # Always True for multi-rank
+        assert meta3["skip_opt"] == False  # Boundary optimization enabled (exact SVD)
         assert meta3["np"] == n_procs
 
         if rank == 0:

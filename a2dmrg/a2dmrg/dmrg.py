@@ -642,7 +642,8 @@ def a2dmrg_main(
         print(f"\n=== Final Compression to bond_dim={bond_dim} ===", flush=True)
 
     # Use quimb's compress for final compression too
-    mps.compress(max_bond=bond_dim, cutoff=1e-12)
+    # cutoff=0.0 to preserve all singular values up to max_bond (consistent with sweep compression)
+    mps.compress(max_bond=bond_dim, cutoff=0.0)
     mps /= mps.norm()
 
     # Compute energy after A2DMRG (before finalization)
