@@ -1,0 +1,14 @@
+{
+  "model": "heisenberg",
+  "L": 64,
+  "bond_dim": 20,
+  "dtype": "float64",
+  "parameters": {
+    "j": 1.0,
+    "bz": 0.0,
+    "cyclic": false
+  },
+  "initial_mps_gauge": "left",
+  "generator_version": "1.0",
+  "created_timestamp": "2026-03-08T12:13:10.807014"
+}
