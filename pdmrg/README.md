@@ -16,6 +16,29 @@ PDMRG enables parallel execution of DMRG calculations by dividing the system in 
 - Built on [quimb](https://quimb.readthedocs.io/) for tensor network operations
 - MPI-based parallelization via [mpi4py](https://mpi4py.readthedocs.io/)
 
+## 🚧 Implementation Status (cpu-audit branch, 2026-03-07)
+
+**Required:** This implementation requires `np >= 2` (parallel algorithm)
+- ✅ **Local sweeps**: Restored in multi-rank path (was missing, now fixed)
+- ✅ **Warmup policy**: Serial warmup only (parallel warmup removed 2026-03-07)
+  - Rank 0 runs quimb DMRG2 warmup, then MPS is scattered to all ranks
+  - Ensures consistent initialization across all processors
+  - No more parallel warmup or rank-local initialization
+- ✅ **V-matrix computation**: Exact SVD method (V = Λ⁻¹) enforced throughout (2026-03-07)
+  - Uses `compute_v_from_svd()` with accurate SVD for numerical stability
+  - Applied to initialization, recomputation, and boundary merge
+  - No more identity approximation
+- ✅ **Boundary optimization**: Enabled (`skip_opt=False`) with exact SVD (2026-03-07)
+- ✅ **Staggered sweeps**: Correctly implemented (even/odd rank pattern)
+- ✅ **Energy accuracy**: Achieves ~10⁻¹⁰ for np=2,4,8 on validated test cases
+
+**For production use:**
+- Use `np=2` or `np=4` for best accuracy vs performance trade-off
+- For serial execution, use `quimb.DMRG2` instead
+- Serial warmup ensures consistent initialization (no parallel warmup shortcuts)
+- Exact SVD method provides canonical V = Λ⁻¹ computation (Stoudenmire & White 2013)
+- See `EXACT_SVD_IMPLEMENTATION.md` for technical details on V-matrix computation
+
 ## Installation
 
 ```bash
@@ -40,13 +63,14 @@ pip install -e .
 
 ## Quick Start
 
-### Serial Execution (1 process)
-```bash
-python -m pdmrg --sites 40 --bond-dim 50 --model heisenberg --sweeps 20 --tol 1e-10
-```
+**Note:** PDMRG requires `np >= 2` (parallel algorithm). For serial execution, use `quimb.DMRG2`.
 
-### Parallel Execution
+### Parallel Execution (minimum 2 processes)
 ```bash
+# Minimum configuration (np=2)
+mpirun -np 2 python -m pdmrg --sites 40 --bond-dim 50 --model heisenberg --sweeps 20 --tol 1e-10
+
+# Typical configuration (np=4)
 mpirun -np 4 python -m pdmrg --sites 40 --bond-dim 50 --model heisenberg --sweeps 20 --tol 1e-10
 ```
 

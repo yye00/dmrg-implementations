@@ -67,16 +67,16 @@ def check_convergence(E_local, E_prev, tol, comm, rtol=1e-12):
     if n_procs == 1:
         E_global = E_local
     else:
-        # Gather all energies and use the minimum non-zero merge energy.
+        # Gather all energies and use the minimum active merge energy.
         # Each merge produces the total system energy; at convergence they
-        # agree.  Use MIN of the actual merge energies (skip 0.0 sentinels
-        # from ranks that had no merge on a given side).
+        # agree.  Use MIN of active merge energies (None for idle ranks
+        # that had no merge on a given side).
         all_E = comm.allgather(E_local)
-        merge_energies = [e for e in all_E if e != 0.0]
+        merge_energies = [e for e in all_E if e is not None]
         if merge_energies:
             E_global = min(merge_energies)
         else:
-            E_global = E_local
+            E_global = E_local if E_local is not None else 0.0
 
     # numpy.allclose style: |dE| < atol + rtol * |E|
     # This combines absolute tolerance (good for small E) with

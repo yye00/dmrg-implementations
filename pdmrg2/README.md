@@ -1,20 +1,45 @@
-# PDMRG: Parallel Density Matrix Renormalization Group
+# PDMRG2: Parallel DMRG (Two-Site Primitive Variant)
 
-A Python implementation of the real-space parallel DMRG algorithm based on [Stoudenmire & White (2013)](https://arxiv.org/abs/1301.3494).
+## ⚠️ **PROTOTYPE-ONLY - NOT VALIDATED FOR BENCHMARKING**
+
+**Status:** This implementation is a **research prototype** and has not been validated against reference implementations. It is **excluded from all validated benchmark comparisons** for scientific honesty.
+
+**Do not use for:**
+- ❌ Production simulations
+- ❌ Benchmark comparisons
+- ❌ Publication-quality results
+
+**Use instead:**
+- ✅ `../pdmrg/` for validated parallel DMRG (real-space parallelization)
+- ✅ `../a2dmrg/` for validated parallel DMRG (additive two-level)
+- ✅ `quimb.DMRG2` for serial execution
+
+---
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Status: Prototype](https://img.shields.io/badge/Status-Prototype-orange.svg)](https://shields.io/)
 
 ## Overview
 
-PDMRG enables parallel execution of DMRG calculations by dividing the system in real space across multiple processors. Each processor handles a contiguous segment of sites, with boundary information exchanged through MPI communication.
+PDMRG2 is an **experimental variant** of parallel DMRG that uses two-site DMRG primitives with QR canonization sweeps and boundary merges. This approach differs from the validated PDMRG implementation.
 
-**Key Features:**
-- Real-space parallelization for DMRG ground state calculations
-- Near-linear speedup for the sweep phase (demonstrated: 15× at 2 processors)
-- Maintains accuracy comparable to serial DMRG (~10⁻¹¹ relative precision)
-- Built on [quimb](https://quimb.readthedocs.io/) for tensor network operations
-- MPI-based parallelization via [mpi4py](https://mpi4py.readthedocs.io/)
+**Implementation Details:**
+- Built on quimb's two-site DMRG primitives
+- QR canonization sweeps between boundary merges
+- Requires `np >= 2` (parallel algorithm)
+- **Validation status:** ❌ Not validated against reference implementations
+
+**Why prototype-only:**
+- Has not undergone comprehensive correctness validation
+- Energy accuracy not systematically characterized
+- Algorithmic approach differs from peer-reviewed literature (Stoudenmire & White 2013)
+- May contain unidentified numerical issues
+
+**Recent changes (2026-03-07):**
+- ✅ Parallel warmup removed (serial warmup only, same as validated PDMRG)
+- ✅ np>=2 enforcement (no np=1 execution)
+- ⚠️ Still prototype: awaits validation after PDMRG is fully fixed
 
 ## Installation
 
@@ -38,16 +63,16 @@ pip install -e .
 - mpi4py ≥ 3.0 (MPI bindings)
 - OpenMPI or MPICH
 
-## Quick Start
+## Quick Start (For Research/Development Only)
 
-### Serial Execution (1 process)
-```bash
-python -m pdmrg --sites 40 --bond-dim 50 --model heisenberg --sweeps 20 --tol 1e-10
-```
+**⚠️ REMINDER:** This is a prototype implementation. Use `../pdmrg/` or `../a2dmrg/` for validated results.
 
-### Parallel Execution
+**Note:** PDMRG2 requires `np >= 2` (parallel algorithm).
+
+### Parallel Execution (minimum 2 processes)
 ```bash
-mpirun -np 4 python -m pdmrg --sites 40 --bond-dim 50 --model heisenberg --sweeps 20 --tol 1e-10
+# Experimental use only - not for benchmarks
+mpirun -np 2 python -m pdmrg --sites 40 --bond-dim 50 --model heisenberg --sweeps 20 --tol 1e-10
 ```
 
 ### Command Line Options
