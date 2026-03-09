@@ -7,7 +7,7 @@ optimize the two-site wavefunction, and split via SVD.
 
 import numpy as np
 from pdmrg.numerics.eigensolver import optimize_two_site
-from pdmrg.numerics.accurate_svd import accurate_svd, compute_v_from_svd, truncated_svd
+from pdmrg.numerics.accurate_svd import accurate_svd, compute_v_from_svd
 
 
 def merge_boundary_tensors(psi_left, psi_right, V,
@@ -65,7 +65,8 @@ def merge_boundary_tensors(psi_left, psi_right, V,
         max_iter=max_iter, tol=tol
     )
 
-    # Step 3: SVD to split
+    # Step 3: SVD to split using accurate_svd (per Stoudenmire & White paper,
+    # accurate SVD is needed at merge boundaries for high-precision V = 1/S)
     chi_L, d_L, d_R, chi_R = theta_opt.shape
     M = theta_opt.reshape(chi_L * d_L, d_R * chi_R)
 
@@ -87,4 +88,12 @@ def merge_boundary_tensors(psi_left, psi_right, V,
     A_left_new = U.reshape(chi_L, d_L, k)
     A_right_new = (np.diag(S) @ Vh).reshape(k, d_R, chi_R)
 
-    return A_left_new, A_right_new, V_new, energy, trunc_err
+    # Also return the right-canonical part (Vh) for correct environment building.
+    # After merge, boundary environments must be computed from CANONICAL tensors:
+    #   L_env from A_left_new (U, left-canonical) → norm = I
+    #   R_env from A_right_canonical (Vh, right-canonical) → norm = I
+    # Using A_right_new (S*Vh) for R_env gives norm = S² ≠ I, which breaks
+    # the standard eigenvalue assumption (N_eff = I) in subsequent sweeps.
+    A_right_canonical = Vh.reshape(k, d_R, chi_R)
+
+    return A_left_new, A_right_new, V_new, energy, trunc_err, A_right_canonical

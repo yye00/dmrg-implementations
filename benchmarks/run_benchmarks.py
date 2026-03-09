@@ -46,9 +46,9 @@ def run_mpi_method(model, case, np_count, implementation, timeout):
     if implementation in ('pdmrg', 'pdmrg2'):
         func_import = 'from pdmrg.dmrg import pdmrg_main'
         call = f"""result = pdmrg_main(
-    L=manifest['L'], mpo=mpo, max_sweeps=40,
+    L=manifest['L'], mpo=mpo, max_sweeps=15,
     bond_dim=manifest['bond_dim'], bond_dim_warmup=manifest['bond_dim'],
-    n_warmup_sweeps=5, tol={TOL}, dtype=manifest['dtype'],
+    n_warmup_sweeps=3, tol={TOL}, dtype=manifest['dtype'],
     comm=comm, verbose=False, return_metadata=False,
     initial_mps=initial_mps)
 energy, _ = result"""

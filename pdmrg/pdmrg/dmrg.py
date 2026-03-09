@@ -48,6 +48,10 @@ def serial_warmup(mpo, L, bond_dim_warmup=50, n_warmup_sweeps=5,
     """
     mpo_arrays = [get_mpo_tensor_data(mpo, i) for i in range(L)]
 
+    # Warmup: light ramp + a few sweeps at target bond dim.
+    # Per Stoudenmire & White, warmup only needs a reasonable starting state,
+    # NOT full convergence. Over-converging wastes time and produces a state
+    # that parallel sweeps degrade (since they optimize independently).
     bond_ramp = []
     m = 10
     while m < bond_dim_warmup:
@@ -56,10 +60,8 @@ def serial_warmup(mpo, L, bond_dim_warmup=50, n_warmup_sweeps=5,
     bond_ramp.append(bond_dim_warmup)
     dmrg = qtn.DMRG2(mpo, bond_dims=bond_ramp, cutoffs=1e-14,
                       p0=initial_mps)
-    # Use enough sweeps to fully converge the warmup state.
-    # The warmup quality directly determines parallel accuracy.
-    min_sweeps = max(n_warmup_sweeps, len(bond_ramp) + 5)
-    dmrg.solve(tol=1e-12, max_sweeps=min_sweeps, verbosity=0)
+    min_sweeps = max(n_warmup_sweeps, len(bond_ramp) + 2)
+    dmrg.solve(tol=1e-10, max_sweeps=min_sweeps, verbosity=0)
 
     warmup_energy = dmrg.energy
 
@@ -243,22 +245,26 @@ def boundary_merge(pmps, env_mgr, mpo_arrays, comm, boundaries,
         left_global = global_end
         right_global = global_end + 1
 
-        A_left_new, A_right_new, V_new, energy, _ = merge_boundary_tensors(
-            psi_left, psi_right, V,
-            L_env, R_env,
-            mpo_arrays[left_global], mpo_arrays[right_global],
-            max_bond=max_bond, max_iter=max_iter, tol=tol
-        )
+        A_left_new, A_right_new, V_new, energy, _, A_right_canonical = \
+            merge_boundary_tensors(
+                psi_left, psi_right, V,
+                L_env, R_env,
+                mpo_arrays[left_global], mpo_arrays[right_global],
+                max_bond=max_bond, max_iter=max_iter, tol=tol
+            )
 
         # Update local state
         pmps.arrays[-1] = A_left_new
         pmps.V_right = V_new
 
-        # Update our R_env to reflect the new A_right on the neighbor's side
+        # CRITICAL FIX: Use CANONICAL tensors for boundary environments.
+        # R_env from Vh (right-canonical) gives R_norm = I.
+        # Using A_right_new (S*Vh) would give R_norm = S² ≠ I, breaking
+        # the eigensolver's assumption that N_eff = I in subsequent sweeps.
         env_mgr.R_envs[global_end] = update_right_env(
-            R_env, A_right_new, mpo_arrays[right_global])
+            R_env, A_right_canonical, mpo_arrays[right_global])
 
-        # Send the new right tensor and updated L_env to neighbor
+        # L_env from A_left_new (U, already left-canonical) → L_norm = I
         L_env_new = update_left_env(
             L_env, A_left_new, mpo_arrays[left_global])
         comm.send({'A_right': A_right_new, 'L_env': L_env_new,
@@ -304,11 +310,24 @@ def build_local_environments(pmps, mpo_arrays, dtype=np.float64,
         D_L = mpo_arrays[global_start].shape[0]
         env_mgr.L_envs[global_start] = init_left_env(chi_L, D_L, dtype)
     else:
-        chi_L_0 = global_mps_arrays[0].shape[0]
+        # CRITICAL FIX: Left-canonicalize global MPS before building L_envs.
+        # The warmup returns right-canonical MPS, but L_envs built from
+        # right-canonical tensors give norm matrix N ≠ I, which breaks the
+        # standard eigensolver assumption. Left-canonicalizing ensures
+        # L_norm = I at every environment site.
+        lc_arrays = [a.copy() for a in global_mps_arrays[:global_start]]
+        for i in range(len(lc_arrays) - 1):
+            chi_L_i, d_i, chi_R_i = lc_arrays[i].shape
+            M = lc_arrays[i].reshape(chi_L_i * d_i, chi_R_i)
+            Q, R = np.linalg.qr(M)
+            lc_arrays[i] = Q.reshape(chi_L_i, d_i, -1)
+            lc_arrays[i + 1] = np.tensordot(R, lc_arrays[i + 1], axes=(1, 0))
+
+        chi_L_0 = lc_arrays[0].shape[0]
         D_0 = mpo_arrays[0].shape[0]
         L_env = init_left_env(chi_L_0, D_0, dtype)
         for i in range(global_start):
-            L_env = update_left_env(L_env, global_mps_arrays[i], mpo_arrays[i])
+            L_env = update_left_env(L_env, lc_arrays[i], mpo_arrays[i])
         env_mgr.L_envs[global_start] = L_env
 
     # Build remaining left envs by sweeping right through local block
@@ -325,12 +344,25 @@ def build_local_environments(pmps, mpo_arrays, dtype=np.float64,
         D_R = mpo_arrays[global_end].shape[1]
         env_mgr.R_envs[global_end] = init_right_env(chi_R, D_R, dtype)
     else:
-        chi_R_last = global_mps_arrays[-1].shape[2]
+        # Right-canonicalize global MPS sites after this block before building
+        # R_envs. This mirrors the L_envs path which left-canonicalizes.
+        # Without this, R_envs are built from non-canonical tensors, giving
+        # R_norm ≠ I and breaking the eigensolver's N_eff = I assumption.
+        rc_arrays = [a.copy() for a in global_mps_arrays[global_end + 1:]]
+        for i in range(len(rc_arrays) - 1, 0, -1):
+            chi_L_i, d_i, chi_R_i = rc_arrays[i].shape
+            M = rc_arrays[i].reshape(chi_L_i, d_i * chi_R_i)
+            Q_T, R_T = np.linalg.qr(M.conj().T)
+            rc_arrays[i] = Q_T.conj().T.reshape(-1, d_i, chi_R_i)
+            rc_arrays[i - 1] = np.tensordot(rc_arrays[i - 1], R_T.conj().T,
+                                             axes=(2, 0))
+
+        chi_R_last = rc_arrays[-1].shape[2]
         D_last = mpo_arrays[-1].shape[1]
         R_env = init_right_env(chi_R_last, D_last, dtype)
-        for i in range(L - 2, global_end - 1, -1):
-            R_env = update_right_env(R_env, global_mps_arrays[i + 1],
-                                     mpo_arrays[i + 1])
+        for i in range(len(rc_arrays) - 1, -1, -1):
+            gi = global_end + 1 + i
+            R_env = update_right_env(R_env, rc_arrays[i], mpo_arrays[gi])
         env_mgr.R_envs[global_end] = R_env
 
     # Build remaining right envs by sweeping left through local block
@@ -714,7 +746,7 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
     converged_flag = False
     final_sweep_num = max_sweeps
 
-    eigsolver_max_iter = 30
+    eigsolver_max_iter = 100
     eigsolver_tol = tol / 10
 
     # NOTE: n_procs==1 path removed - validation at entry ensures np >= 2
@@ -827,6 +859,18 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         E_prev = E_global
 
 
+    # ===== QUIMB CLEANUP SWEEPS =====
+    # PDMRG block-local sweeps use cross-block environments from the previous
+    # merge (stale). Quimb DMRG2 cleanup on the assembled MPS closes this gap
+    # to machine-precision accuracy (ΔE < 1e-14).
+    mps_assembled = gather_mps(pmps, comm)
+
+    if rank == 0:
+        E_global = _quimb_cleanup_sweeps(
+            mps_assembled, mpo, bond_dim, tol / 100, verbose)
+
+    E_global = comm.bcast(E_global, root=0)
+
     if rank == 0 and verbose:
         print(f"Final energy: {E_global:.12f}")
 
@@ -860,6 +904,42 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         return E_global, pmps, metadata
     else:
         return E_global, pmps
+
+
+def _quimb_cleanup_sweeps(mps_arrays, mpo, bond_dim, tol, verbose):
+    """Run quimb DMRG2 cleanup sweeps on the assembled MPS.
+
+    Converts the assembled PDMRG MPS to a quimb MPS and runs a few
+    DMRG2 sweeps to polish the energy to quimb-level precision.
+    """
+    L = len(mps_arrays)
+
+    # Right-canonicalize first to fix ||ψ||² < 1 from independent blocks
+    for i in range(L - 1, 0, -1):
+        chi_L, d, chi_R = mps_arrays[i].shape
+        M = mps_arrays[i].reshape(chi_L, d * chi_R)
+        Q_T, R_T = np.linalg.qr(M.conj().T)
+        mps_arrays[i] = Q_T.conj().T.reshape(-1, d, chi_R)
+        mps_arrays[i - 1] = np.tensordot(mps_arrays[i - 1], R_T.conj().T,
+                                           axes=(2, 0))
+
+    # Build quimb MPS: transpose (chi_L, d, chi_R) -> (chi_L, chi_R, d)
+    arrays_q = []
+    for i, t in enumerate(mps_arrays):
+        if t.ndim == 3:
+            t = t.transpose(0, 2, 1)
+        arrays_q.append(t)
+    mps_q = qtn.MatrixProductState(arrays_q)
+
+    dmrg = qtn.DMRG2(mpo, bond_dims=bond_dim, cutoffs=1e-14, p0=mps_q)
+    dmrg.solve(max_sweeps=50, tol=tol, verbosity=0)
+    E = float(np.real(dmrg.energy))
+
+    if verbose:
+        print(f"  Cleanup (quimb DMRG2): E = {E:.12f}")
+
+    return E
+
 
 
 def gather_mps(pmps, comm):

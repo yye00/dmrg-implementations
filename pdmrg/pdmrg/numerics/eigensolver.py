@@ -42,14 +42,16 @@ def optimize_two_site(L_env, R_env, W_left, W_right, theta_init,
 
     v0 = theta_init.ravel().astype(dtype)
 
-    # eigsh finds smallest algebraic eigenvalue with which='SA'
+    # For real symmetric: 'SA' (smallest algebraic) is correct and fastest.
+    # For complex Hermitian: eigenvalues are real but eigsh with 'SA' can
+    # have convergence issues; 'SA' still works since H is Hermitian.
     try:
         E, V = eigsh(H_eff, k=1, v0=v0, which='SA',
                      maxiter=max_iter, tol=tol)
     except Exception:
-        # Fallback: increase iterations
+        # Fallback: increase iterations substantially
         E, V = eigsh(H_eff, k=1, v0=v0, which='SA',
-                     maxiter=max_iter * 5, tol=tol * 100)
+                     maxiter=max_iter * 10, tol=tol * 10)
 
     energy = float(E[0].real)
     theta_opt = V[:, 0].reshape(shape_4d)

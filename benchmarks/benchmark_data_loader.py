@@ -102,24 +102,46 @@ def convert_tensors_to_quimb_mpo(mpo_tensors):
     return qtn.MatrixProductOperator(list(mpo_tensors))
 
 
-def convert_tensors_to_quimb_mps(mps_tensors, dtype=None):
+def convert_tensors_to_quimb_mps(mps_tensors, dtype=None, phys_dim=None):
     """Convert a list of MPS tensor arrays to a quimb MPS.
 
-    Stored convention: (chi_L, d, chi_R) for bulk, (d, chi) or (chi, d) for boundaries.
+    Auto-detects whether stored in internal format (chi_L, d, chi_R) or
+    quimb format (chi_L, chi_R, d) by checking a bulk tensor's axis sizes
+    against the physical dimension.
+
     Quimb convention: (chi_L, chi_R, d) for bulk, (chi, d) for boundaries.
     """
     L = len(mps_tensors)
+
+    # Detect physical dimension from a bulk tensor (one where all dims are known)
+    if phys_dim is None:
+        for t in mps_tensors:
+            if t.ndim == 3:
+                # Find the smallest axis — likely the physical dim
+                phys_dim = min(t.shape)
+                break
+        if phys_dim is None:
+            phys_dim = 2  # fallback
+
+    # Detect format from a bulk tensor deep in the chain (avoids boundary ambiguity)
+    needs_transpose = True  # default: assume internal format
+    for t in mps_tensors[L // 3 : 2 * L // 3]:
+        if t.ndim == 3 and t.shape[1] != t.shape[2]:
+            # Unambiguous: check if axis 1 or axis 2 is the physical dim
+            if t.shape[2] == phys_dim and t.shape[1] != phys_dim:
+                needs_transpose = False  # already in quimb format
+            break
+
     arrays = []
     for i, t in enumerate(mps_tensors):
         if dtype is not None:
             t = t.astype(dtype)
-        if t.ndim == 3:
-            # Bulk: (chi_L, d, chi_R) -> (chi_L, chi_R, d)
+        if t.ndim == 3 and needs_transpose:
+            # Internal: (chi_L, d, chi_R) -> quimb: (chi_L, chi_R, d)
             t = t.transpose(0, 2, 1)
         elif t.ndim == 2:
-            if i == 0:
+            if i == 0 and needs_transpose:
                 # Left boundary: (d, chi_R) -> (chi_R, d)
                 t = t.transpose(1, 0)
-            # Right boundary: (chi_L, d) -> already correct
         arrays.append(t)
     return qtn.MatrixProductState(arrays)
