@@ -3,20 +3,17 @@
 
 #include <hip/hip_runtime.h>
 #include <rocblas/rocblas.h>
-#include <hiptensor/hiptensor.h>
-#include <hiptensor/hiptensor_types.h>
 #include <vector>
 #include <string>
-#include <map>
-#include <utility>
 
 /**
  * GPU-native DMRG - Single-site optimization
  *
- * ALL tensor contractions run on GPU via hipTensor.
- * ALL linear algebra runs on GPU via rocBLAS/rocSOLVER.
+ * ALL tensor contractions on GPU via rocBLAS dgemm.
+ * ALL linear algebra on GPU via rocBLAS/rocSOLVER.
  * Only CPU work: control flow, convergence checks on scalars,
- *                small tridiagonal eigensolve (Lanczos, ~100 elements).
+ *                small tridiagonal eigensolve (Lanczos, ~100 elements),
+ *                loops over small MPO bond dimension (D=5, d=2) to dispatch GEMMs.
  */
 class DMRGGPU {
 public:
@@ -53,6 +50,10 @@ private:
     std::vector<double*> d_L_envs_;
     std::vector<double*> d_R_envs_;
 
+    // W_matrix[site]: (D*d, d*D) matrix for GEMM-based contractions
+    // W_matrix[w*d+s, w'*d+s'] = W[w,s,s',w']
+    std::vector<double*> d_W_matrices_;
+
     std::vector<int> L_env_alloc_chi_;
     std::vector<int> R_env_alloc_chi_;
 
@@ -60,35 +61,9 @@ private:
     hipStream_t stream_;
     rocblas_handle rocblas_h_;
 
-public:
-    // Single hipTensor contraction step with all resources kept alive
-    struct ContractionStep {
-        hiptensorTensorDescriptor_t descA, descB, descC;
-        hiptensorOperationDescriptor_t opDesc;
-        hiptensorPlanPreference_t pref;
-        hiptensorPlan_t plan;
-        void* workspace = nullptr;
-        uint64_t ws_size = 0;
-    };
-
-    // 3-step contraction plan with all resources
-    struct CachedPlans {
-        ContractionStep steps[3];
-    };
-
-private:
-    // hipTensor handle and contraction intermediates
-    hiptensorHandle_t ht_handle_;
-    double* d_T1_;  // max-sized contraction intermediate
-    double* d_T2_;  // max-sized contraction intermediate
-
-    std::map<std::pair<int,int>, CachedPlans*> heff_plan_cache_;
-    std::map<std::pair<int,int>, CachedPlans*> lenv_plan_cache_;
-    std::map<std::pair<int,int>, CachedPlans*> renv_plan_cache_;
-
-    CachedPlans* get_heff_plans(int chi_L, int chi_R);
-    CachedPlans* get_lenv_plans(int chi_in, int chi_out);
-    CachedPlans* get_renv_plans(int chi_in, int chi_out);
+    // Contraction intermediates (V and U buffers for GEMM-based contractions)
+    double* d_T1_;  // V buffer: D*d * chi_max^2
+    double* d_T2_;  // U buffer: d*D * chi_max^2
 
     // Lanczos / optimization workspace
     double* d_theta_;

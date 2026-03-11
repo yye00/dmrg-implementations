@@ -27,84 +27,9 @@
         } \
     } while(0)
 
-#define HIPTENSOR_CHECK(call) \
-    do { \
-        hiptensorStatus_t st = call; \
-        if (st != HIPTENSOR_STATUS_SUCCESS) { \
-            std::cerr << "hipTensor error in " << __FILE__ << ":" << __LINE__ \
-                      << " - " << hiptensorGetErrorString(st) << std::endl; \
-            throw std::runtime_error("hipTensor error"); \
-        } \
-    } while(0)
-
 // LAPACK tridiagonal eigensolver (kept for Lanczos - negligible cost)
 extern "C" void dstev_(const char* jobz, const int* n, double* d, double* e,
                        double* z, const int* ldz, double* work, int* info);
-
-// Mode labels for hipTensor contractions
-enum : int32_t {
-    M_a  = 10,   // left bond (ket)
-    M_w  = 11,   // MPO left bond
-    M_ap = 12,   // left bond (bra)
-    M_s  = 13,   // physical (ket)
-    M_b  = 14,   // right bond (ket)
-    M_sp = 15,   // physical (bra)
-    M_wp = 16,   // MPO right bond
-    M_bp = 17,   // right bond (bra)
-};
-
-// ============================================================================
-// Helper: create a single hipTensor contraction step (keeps all resources alive)
-// ============================================================================
-static void create_contraction_step(
-    hiptensorHandle_t handle,
-    DMRGGPU::ContractionStep& step,
-    int nA, const int64_t* extA, const int32_t* modesA,
-    int nB, const int64_t* extB, const int32_t* modesB,
-    int nC, const int64_t* extC, const int32_t* modesC)
-{
-    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &step.descA,
-        nA, extA, nullptr, HIPTENSOR_R_64F, HIPTENSOR_OP_IDENTITY));
-    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &step.descB,
-        nB, extB, nullptr, HIPTENSOR_R_64F, HIPTENSOR_OP_IDENTITY));
-    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &step.descC,
-        nC, extC, nullptr, HIPTENSOR_R_64F, HIPTENSOR_OP_IDENTITY));
-
-    HIPTENSOR_CHECK(hiptensorCreateContraction(handle, &step.opDesc,
-        step.descA, modesA, HIPTENSOR_OP_IDENTITY,
-        step.descB, modesB, HIPTENSOR_OP_IDENTITY,
-        step.descC, modesC, HIPTENSOR_OP_IDENTITY,
-        step.descC, modesC,
-        HIPTENSOR_COMPUTE_DESC_64F));
-
-    HIPTENSOR_CHECK(hiptensorCreatePlanPreference(handle, &step.pref,
-        HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_DEFAULT));
-
-    HIPTENSOR_CHECK(hiptensorCreatePlan(handle, &step.plan, step.opDesc,
-        step.pref, 0));
-
-    step.ws_size = 0;
-    HIPTENSOR_CHECK(hiptensorPlanGetAttribute(handle, step.plan,
-        HIPTENSOR_PLAN_REQUIRED_WORKSPACE, &step.ws_size, sizeof(step.ws_size)));
-    step.workspace = nullptr;
-    if (step.ws_size > 0) HIP_CHECK(hipMalloc(&step.workspace, step.ws_size));
-}
-
-// Helper to destroy a CachedPlans and free all resources
-static void destroy_cached_plans(DMRGGPU::CachedPlans* p) {
-    if (!p) return;
-    for (int i = 0; i < 3; i++) {
-        auto& s = p->steps[i];
-        hiptensorDestroyPlan(s.plan);
-        hiptensorDestroyPlanPreference(s.pref);
-        hiptensorDestroyOperationDescriptor(s.opDesc);
-        hiptensorDestroyTensorDescriptor(s.descC);
-        hiptensorDestroyTensorDescriptor(s.descB);
-        hiptensorDestroyTensorDescriptor(s.descA);
-        if (s.workspace) hipFree(s.workspace);
-    }
-    delete p;
-}
 
 // ============================================================================
 // Constructor
@@ -126,10 +51,8 @@ DMRGGPU::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
     ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
 
-    // hipTensor handle
-    HIPTENSOR_CHECK(hiptensorCreate(&ht_handle_));
-
-    // Contraction intermediates (max-sized: D_mpo * d * chi_max^2)
+    // Contraction intermediates: V and U buffers
+    // Size: D_mpo * d * chi_max^2 (enough for all contraction steps)
     int t_max = D_mpo_ * d_ * chi_max_ * chi_max_;
     HIP_CHECK(hipMalloc(&d_T1_, t_max * sizeof(double)));
     HIP_CHECK(hipMalloc(&d_T2_, t_max * sizeof(double)));
@@ -142,6 +65,9 @@ DMRGGPU::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
 
     // MPO tensors
     d_mpo_tensors_.resize(L, nullptr);
+
+    // W_matrices (allocated in set_mpo)
+    d_W_matrices_.resize(L, nullptr);
 
     // Environments (allocate interior at chi_max to avoid reallocation)
     d_L_envs_.resize(L + 1, nullptr);
@@ -187,6 +113,7 @@ DMRGGPU::~DMRGGPU() {
 void DMRGGPU::free_gpu_resources() {
     for (auto ptr : d_mps_tensors_) if (ptr) hipFree(ptr);
     for (auto ptr : d_mpo_tensors_) if (ptr) hipFree(ptr);
+    for (auto ptr : d_W_matrices_) if (ptr) hipFree(ptr);
     for (auto ptr : d_L_envs_) if (ptr) hipFree(ptr);
     for (auto ptr : d_R_envs_) if (ptr) hipFree(ptr);
 
@@ -202,11 +129,6 @@ void DMRGGPU::free_gpu_resources() {
     if (d_svd_info_) hipFree(d_svd_info_);
     if (d_svd_work_) hipFree(d_svd_work_);
 
-    for (auto& [k, v] : heff_plan_cache_) destroy_cached_plans(v);
-    for (auto& [k, v] : lenv_plan_cache_) destroy_cached_plans(v);
-    for (auto& [k, v] : renv_plan_cache_) destroy_cached_plans(v);
-
-    hiptensorDestroy(ht_handle_);
     rocblas_destroy_handle(rocblas_h_);
     hipStreamDestroy(stream_);
 }
@@ -239,7 +161,7 @@ void DMRGGPU::ensure_R_env_alloc(int idx, int chi) {
 }
 
 // ============================================================================
-// MPS initialization (host -> device copies, unchanged)
+// MPS initialization (host -> device copies)
 // ============================================================================
 
 void DMRGGPU::initialize_mps_random(double scale) {
@@ -284,163 +206,248 @@ void DMRGGPU::initialize_mps_neel() {
 }
 
 void DMRGGPU::set_mpo(const std::vector<double*>& h_mpo_tensors) {
+    int D = D_mpo_, d = d_;
     for (int i = 0; i < L_; i++) {
-        int size = D_mpo_ * d_ * d_ * D_mpo_;
+        int size = D * d * d * D;
         HIP_CHECK(hipMalloc(&d_mpo_tensors_[i], size * sizeof(double)));
         HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_mpo_tensors[i],
                             size * sizeof(double), hipMemcpyHostToDevice));
+
+        // Precompute W_matrix[w*d+s, w'*d+s'] = W[w,s,s',w']
+        // W stored as W[w + s*D + s'*D*d + w'*D*d*d]
+        int wm_size = D * d * d * D;  // (D*d, d*D)
+        std::vector<double> h_Wm(wm_size, 0.0);
+        for (int w = 0; w < D; w++)
+            for (int s = 0; s < d; s++)
+                for (int sp = 0; sp < d; sp++)
+                    for (int wp = 0; wp < D; wp++) {
+                        int row = w * d + s;
+                        int col = wp * d + sp;
+                        // Column-major: h_Wm[row + col * (D*d)]
+                        h_Wm[row + col * D * d] =
+                            h_mpo_tensors[i][w + s*D + sp*D*d + wp*D*d*d];
+                    }
+        HIP_CHECK(hipMalloc(&d_W_matrices_[i], wm_size * sizeof(double)));
+        HIP_CHECK(hipMemcpy(d_W_matrices_[i], h_Wm.data(),
+                            wm_size * sizeof(double), hipMemcpyHostToDevice));
     }
 }
 
 // ============================================================================
-// hipTensor plan creation (cached by dimensions)
+// GEMM-based tensor contractions
 // ============================================================================
+//
+// All contractions factored as loops over small MPO dims (D, d) dispatching
+// rocBLAS dgemm. CPU does NO arithmetic — only control flow for kernel dispatch.
+//
+// H_eff application: result[a',s',b'] = sum L[a,w,a'] W[w,s,s',w'] R[b,w',b'] theta[a,s,b]
+//
+//   Step 1: V[a',b, ws] = sum_a L_w^T[a',a] * theta_s[a,b]     (D*d GEMMs)
+//   Step 2: U[a',b, ws'] = sum_ws W_matrix[ws, ws'] * V[a',b, ws]  (1 GEMM)
+//   Step 3: result[a',s',b'] = sum_{w',b} U[a',b, w'*d+s'] * R_w'[b,b']  (D*d GEMMs)
+//
 
-// H_eff plans: T1 = L*theta, T2 = W*T1, result = R*T2
-DMRGGPU::CachedPlans* DMRGGPU::get_heff_plans(int cL, int cR) {
-    auto key = std::make_pair(cL, cR);
-    auto it = heff_plan_cache_.find(key);
-    if (it != heff_plan_cache_.end()) return it->second;
-
-    auto* p = new CachedPlans();
+void DMRGGPU::apply_heff(int site, const double* d_theta_in, double* d_result) {
+    int cL = chi_L(site);
+    int cR = chi_R(site);
     int D = D_mpo_, d = d_;
+    double one = 1.0, zero = 0.0;
 
-    // Step 1: T1[w, a', s, b] = sum_a L[a, w, a'] * theta[a, s, b]
-    {
-        int64_t eA[] = {(int64_t)cL, (int64_t)D, (int64_t)cL};
-        int32_t mA[] = {M_a, M_w, M_ap};
-        int64_t eB[] = {(int64_t)cL, (int64_t)d, (int64_t)cR};
-        int32_t mB[] = {M_a, M_s, M_b};
-        int64_t eC[] = {(int64_t)D, (int64_t)cL, (int64_t)d, (int64_t)cR};
-        int32_t mC[] = {M_w, M_ap, M_s, M_b};
-        create_contraction_step(ht_handle_, p->steps[0],
-            3, eA, mA, 3, eB, mB, 4, eC, mC);
+    double* L_env = d_L_envs_[site];      // (cL, D, cL) col-major
+    double* R_env = d_R_envs_[site + 1];  // (cR, D, cR) col-major
+    double* W_mat = d_W_matrices_[site];   // (D*d, d*D) col-major
+    double* V = d_T1_;  // (cL*cR, D*d) buffer
+    double* U = d_T2_;  // (cL*cR, d*D) buffer
+
+    // Step 1: V_ws[a',b] = L_w^T[a',a] * theta_s[a,b]
+    // L_w at &L[w*cL], lda = cL*D. theta_s at &theta[s*cL], lda = cL*d.
+    // V_ws at &V[(w*d+s)*cL*cR], lda = cL.
+    for (int w = 0; w < D; w++) {
+        for (int s = 0; s < d; s++) {
+            int ws = w * d + s;
+            ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
+                rocblas_operation_transpose, rocblas_operation_none,
+                cL, cR, cL,
+                &one,
+                L_env + w * cL, cL * D,            // L_w^T
+                d_theta_in + s * cL, cL * d,        // theta_s
+                &zero,
+                V + ws * cL * cR, cL));             // V_ws
+        }
     }
 
-    // Step 2: T2[a', s', w', b] = sum_{w,s} W[w, s, s', w'] * T1[w, a', s, b]
-    {
-        int64_t eA[] = {(int64_t)D, (int64_t)d, (int64_t)d, (int64_t)D};
-        int32_t mA[] = {M_w, M_s, M_sp, M_wp};
-        int64_t eB[] = {(int64_t)D, (int64_t)cL, (int64_t)d, (int64_t)cR};
-        int32_t mB[] = {M_w, M_ap, M_s, M_b};
-        int64_t eC[] = {(int64_t)cL, (int64_t)d, (int64_t)D, (int64_t)cR};
-        int32_t mC[] = {M_ap, M_sp, M_wp, M_b};
-        create_contraction_step(ht_handle_, p->steps[1],
-            4, eA, mA, 4, eB, mB, 4, eC, mC);
-    }
+    // Step 2: U = V * W_matrix
+    // V is (cL*cR, D*d), W_matrix is (D*d, d*D), U is (cL*cR, d*D)
+    ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
+        rocblas_operation_none, rocblas_operation_none,
+        cL * cR, d * D, D * d,
+        &one,
+        V, cL * cR,
+        W_mat, D * d,
+        &zero,
+        U, cL * cR));
 
-    // Step 3: result[a', s', b'] = sum_{w',b} R[b, w', b'] * T2[a', s', w', b]
-    {
-        int64_t eA[] = {(int64_t)cR, (int64_t)D, (int64_t)cR};
-        int32_t mA[] = {M_b, M_wp, M_bp};
-        int64_t eB[] = {(int64_t)cL, (int64_t)d, (int64_t)D, (int64_t)cR};
-        int32_t mB[] = {M_ap, M_sp, M_wp, M_b};
-        int64_t eC[] = {(int64_t)cL, (int64_t)d, (int64_t)cR};
-        int32_t mC[] = {M_ap, M_sp, M_bp};
-        create_contraction_step(ht_handle_, p->steps[2],
-            3, eA, mA, 4, eB, mB, 3, eC, mC);
+    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
+    // U_{ws'} at &U[(w'*d+s')*cL*cR], lda = cL. Shape (cL, cR).
+    // R_w' at &R[w'*cR], lda = cR*D. Shape (cR, cR).
+    // result_s' at &result[s'*cL], lda = cL*d. Shape (cL, cR).
+    for (int wp = 0; wp < D; wp++) {
+        double beta = (wp == 0) ? 0.0 : 1.0;
+        for (int sp = 0; sp < d; sp++) {
+            int ws_out = wp * d + sp;
+            ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                cL, cR, cR,
+                &one,
+                U + ws_out * cL * cR, cL,          // U_{ws'}
+                R_env + wp * cR, cR * D,            // R_w'
+                &beta,
+                d_result + sp * cL, cL * d));       // result_s'
+        }
     }
-
-    heff_plan_cache_[key] = p;
-    return p;
 }
 
-// Left environment update plans
-DMRGGPU::CachedPlans* DMRGGPU::get_lenv_plans(int chi_in, int chi_out) {
-    auto key = std::make_pair(chi_in, chi_out);
-    auto it = lenv_plan_cache_.find(key);
-    if (it != lenv_plan_cache_.end()) return it->second;
+// ============================================================================
+// GPU left environment update via rocBLAS dgemm
+// ============================================================================
+// L_new[b, w', b'] = sum_{a,s,w,s'} L[a,w,a'] * A[a,s,b] * W[w,s,s',w'] * A[a',s',b']
+//
+// Step 1: V_ws[a',b] = L_w^T @ A_s            (D*d GEMMs)
+// Step 2: U = V * W_matrix                     (1 GEMM)
+// Step 3: L_new_w'[b,b'] = sum_s' A_s'^T @ U_ws'  (D*d GEMMs)
 
-    auto* p = new CachedPlans();
+void DMRGGPU::update_left_env(int site) {
+    int chi_in = bond_dims_[site];
+    int chi_out = bond_dims_[site + 1];
     int D = D_mpo_, d = d_;
+    double one = 1.0, zero = 0.0;
 
-    // Step 1: T1[w, a', s, b] = sum_a L[a, w, a'] * A[a, s, b]
-    {
-        int64_t eA[] = {(int64_t)chi_in, (int64_t)D, (int64_t)chi_in};
-        int32_t mA[] = {M_a, M_w, M_ap};
-        int64_t eB[] = {(int64_t)chi_in, (int64_t)d, (int64_t)chi_out};
-        int32_t mB[] = {M_a, M_s, M_b};
-        int64_t eC[] = {(int64_t)D, (int64_t)chi_in, (int64_t)d, (int64_t)chi_out};
-        int32_t mC[] = {M_w, M_ap, M_s, M_b};
-        create_contraction_step(ht_handle_, p->steps[0],
-            3, eA, mA, 3, eB, mB, 4, eC, mC);
+    ensure_L_env_alloc(site + 1, chi_out);
+
+    double* L_env = d_L_envs_[site];           // (chi_in, D, chi_in)
+    double* A = d_mps_tensors_[site];           // (chi_in, d, chi_out)
+    double* W_mat = d_W_matrices_[site];        // (D*d, d*D)
+    double* L_new = d_L_envs_[site + 1];       // (chi_out, D, chi_out)
+    double* V = d_T1_;
+    double* U = d_T2_;
+
+    // Step 1: V_ws[a',b] = L_w^T[a',a] * A_s[a,b]
+    for (int w = 0; w < D; w++) {
+        for (int s = 0; s < d; s++) {
+            int ws = w * d + s;
+            ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
+                rocblas_operation_transpose, rocblas_operation_none,
+                chi_in, chi_out, chi_in,
+                &one,
+                L_env + w * chi_in, chi_in * D,     // L_w^T
+                A + s * chi_in, chi_in * d,          // A_s
+                &zero,
+                V + ws * chi_in * chi_out, chi_in)); // V_ws
+        }
     }
 
-    // Step 2: T2[a', s', w', b] = sum_{w,s} W[w, s, s', w'] * T1[w, a', s, b]
-    {
-        int64_t eA[] = {(int64_t)D, (int64_t)d, (int64_t)d, (int64_t)D};
-        int32_t mA[] = {M_w, M_s, M_sp, M_wp};
-        int64_t eB[] = {(int64_t)D, (int64_t)chi_in, (int64_t)d, (int64_t)chi_out};
-        int32_t mB[] = {M_w, M_ap, M_s, M_b};
-        int64_t eC[] = {(int64_t)chi_in, (int64_t)d, (int64_t)D, (int64_t)chi_out};
-        int32_t mC[] = {M_ap, M_sp, M_wp, M_b};
-        create_contraction_step(ht_handle_, p->steps[1],
-            4, eA, mA, 4, eB, mB, 4, eC, mC);
-    }
+    // Step 2: U = V * W_matrix
+    ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
+        rocblas_operation_none, rocblas_operation_none,
+        chi_in * chi_out, d * D, D * d,
+        &one,
+        V, chi_in * chi_out,
+        W_mat, D * d,
+        &zero,
+        U, chi_in * chi_out));
 
-    // Step 3: L_new[b, w', b'] = sum_{a',s'} A*[a', s', b'] * T2[a', s', w', b]
-    {
-        int64_t eA[] = {(int64_t)chi_in, (int64_t)d, (int64_t)chi_out};
-        int32_t mA[] = {M_ap, M_sp, M_bp};
-        int64_t eB[] = {(int64_t)chi_in, (int64_t)d, (int64_t)D, (int64_t)chi_out};
-        int32_t mB[] = {M_ap, M_sp, M_wp, M_b};
-        int64_t eC[] = {(int64_t)chi_out, (int64_t)D, (int64_t)chi_out};
-        int32_t mC[] = {M_b, M_wp, M_bp};
-        create_contraction_step(ht_handle_, p->steps[2],
-            3, eA, mA, 4, eB, mB, 3, eC, mC);
+    // Step 3: L_new_w'[b,b'] = sum_s' A_s'^T[b',a'] * U_ws'[a',b]
+    // A_s' at &A[s'*chi_in], lda = chi_in*d. Shape (chi_in, chi_out).
+    // U_ws' at &U[(w'*d+s')*chi_in*chi_out], lda = chi_in. Shape (chi_in, chi_out).
+    // L_new_w' at &L_new[w'*chi_out], lda = chi_out*D. Shape (chi_out, chi_out).
+    for (int wp = 0; wp < D; wp++) {
+        for (int sp = 0; sp < d; sp++) {
+            double beta = (sp == 0) ? 0.0 : 1.0;
+            int ws_out = wp * d + sp;
+            ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
+                rocblas_operation_transpose, rocblas_operation_none,
+                chi_out, chi_out, chi_in,
+                &one,
+                A + sp * chi_in, chi_in * d,              // A_s'^T
+                U + ws_out * chi_in * chi_out, chi_in,    // U_ws'
+                &beta,
+                L_new + wp * chi_out, chi_out * D));      // L_new_w'
+        }
     }
-
-    lenv_plan_cache_[key] = p;
-    return p;
 }
 
-// Right environment update plans
-DMRGGPU::CachedPlans* DMRGGPU::get_renv_plans(int chi_in, int chi_out) {
-    auto key = std::make_pair(chi_in, chi_out);
-    auto it = renv_plan_cache_.find(key);
-    if (it != renv_plan_cache_.end()) return it->second;
+// ============================================================================
+// GPU right environment update via rocBLAS dgemm
+// ============================================================================
+// R_new[a, w, a'] = sum_{s,s',w',b,b'} A[a,s,b] * W[w,s,s',w'] * R[b,w',b'] * A[a',s',b']
+//
+// Step 1: V_ws[a,b'] = A_s[a,b] * R_w'[b,b']      (D*d GEMMs, ws = w'*d+s)
+// Step 2: U = V * W_matrix                          (1 GEMM)
+// Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^T[b',a']  (D*d GEMMs)
 
-    auto* p = new CachedPlans();
+void DMRGGPU::update_right_env(int site) {
+    int chi_in = bond_dims_[site + 1];
+    int chi_out = bond_dims_[site];
     int D = D_mpo_, d = d_;
+    double one = 1.0, zero = 0.0;
 
-    // Step 1: T1[a, s, w', b'] = sum_b A[a, s, b] * R[b, w', b']
-    {
-        int64_t eA[] = {(int64_t)chi_out, (int64_t)d, (int64_t)chi_in};
-        int32_t mA[] = {M_a, M_s, M_b};
-        int64_t eB[] = {(int64_t)chi_in, (int64_t)D, (int64_t)chi_in};
-        int32_t mB[] = {M_b, M_wp, M_bp};
-        int64_t eC[] = {(int64_t)chi_out, (int64_t)d, (int64_t)D, (int64_t)chi_in};
-        int32_t mC[] = {M_a, M_s, M_wp, M_bp};
-        create_contraction_step(ht_handle_, p->steps[0],
-            3, eA, mA, 3, eB, mB, 4, eC, mC);
+    ensure_R_env_alloc(site, chi_out);
+
+    double* A = d_mps_tensors_[site];           // (chi_out, d, chi_in)
+    double* R_env = d_R_envs_[site + 1];        // (chi_in, D, chi_in)
+    double* W_mat = d_W_matrices_[site];         // (D*d, d*D)
+    double* R_new = d_R_envs_[site];             // (chi_out, D, chi_out)
+    double* V = d_T1_;
+    double* U = d_T2_;
+
+    // Step 1: V_ws[a,b'] = A_s[a,b] * R_w'[b,b']
+    // ws index = w'*d + s (iterate over w' and s)
+    // A_s at &A[s*chi_out], lda = chi_out*d. Shape (chi_out, chi_in).
+    // R_w' at &R[w'*chi_in], lda = chi_in*D. Shape (chi_in, chi_in).
+    // V_ws at &V[ws*chi_out*chi_in], lda = chi_out. Shape (chi_out, chi_in).
+    for (int wp = 0; wp < D; wp++) {
+        for (int s = 0; s < d; s++) {
+            int ws = wp * d + s;
+            ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                chi_out, chi_in, chi_in,
+                &one,
+                A + s * chi_out, chi_out * d,               // A_s
+                R_env + wp * chi_in, chi_in * D,             // R_w'
+                &zero,
+                V + ws * chi_out * chi_in, chi_out));        // V_ws
+        }
     }
 
-    // Step 2: T2[a, s', w, b'] = sum_{s,w'} W[w, s, s', w'] * T1[a, s, w', b']
-    {
-        int64_t eA[] = {(int64_t)D, (int64_t)d, (int64_t)d, (int64_t)D};
-        int32_t mA[] = {M_w, M_s, M_sp, M_wp};
-        int64_t eB[] = {(int64_t)chi_out, (int64_t)d, (int64_t)D, (int64_t)chi_in};
-        int32_t mB[] = {M_a, M_s, M_wp, M_bp};
-        int64_t eC[] = {(int64_t)chi_out, (int64_t)d, (int64_t)D, (int64_t)chi_in};
-        int32_t mC[] = {M_a, M_sp, M_w, M_bp};
-        create_contraction_step(ht_handle_, p->steps[1],
-            4, eA, mA, 4, eB, mB, 4, eC, mC);
-    }
+    // Step 2: U = V * W_matrix
+    // V is (chi_out*chi_in, D*d), W_matrix is (D*d, d*D), U is (chi_out*chi_in, d*D)
+    ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
+        rocblas_operation_none, rocblas_operation_none,
+        chi_out * chi_in, d * D, D * d,
+        &one,
+        V, chi_out * chi_in,
+        W_mat, D * d,
+        &zero,
+        U, chi_out * chi_in));
 
-    // Step 3: R_new[a, w, a'] = sum_{s',b'} A*[a', s', b'] * T2[a, s', w, b']
-    {
-        int64_t eA[] = {(int64_t)chi_out, (int64_t)d, (int64_t)chi_in};
-        int32_t mA[] = {M_ap, M_sp, M_bp};
-        int64_t eB[] = {(int64_t)chi_out, (int64_t)d, (int64_t)D, (int64_t)chi_in};
-        int32_t mB[] = {M_a, M_sp, M_w, M_bp};
-        int64_t eC[] = {(int64_t)chi_out, (int64_t)D, (int64_t)chi_out};
-        int32_t mC[] = {M_a, M_w, M_ap};
-        create_contraction_step(ht_handle_, p->steps[2],
-            3, eA, mA, 4, eB, mB, 3, eC, mC);
+    // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'[a',b']^T
+    // ws' = w*d+s'. U_ws' at &U[(w*d+s')*chi_out*chi_in], lda=chi_out. (chi_out, chi_in).
+    // A_s' at &A[s'*chi_out], lda = chi_out*d. Shape (chi_out, chi_in).
+    // R_new_w at &R_new[w*chi_out], lda = chi_out*D. Shape (chi_out, chi_out).
+    for (int w = 0; w < D; w++) {
+        for (int sp = 0; sp < d; sp++) {
+            double beta = (sp == 0) ? 0.0 : 1.0;
+            int ws_out = w * d + sp;
+            ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_transpose,
+                chi_out, chi_out, chi_in,
+                &one,
+                U + ws_out * chi_out * chi_in, chi_out,     // U_ws'
+                A + sp * chi_out, chi_out * d,               // A_s'^T
+                &beta,
+                R_new + w * chi_out, chi_out * D));          // R_new_w
+        }
     }
-
-    renv_plan_cache_[key] = p;
-    return p;
 }
 
 // ============================================================================
@@ -464,72 +471,14 @@ void DMRGGPU::build_initial_environments() {
                             D_mpo_ * sizeof(double), hipMemcpyHostToDevice));
     }
 
-    // Build all R environments from right to left (uses GPU contractions)
+    // Build all R environments from right to left
     for (int i = L_ - 1; i >= 0; i--) {
         update_right_env(i);
     }
 }
 
-// GPU left environment update via hipTensor
-void DMRGGPU::update_left_env(int site) {
-    int chi_in = bond_dims_[site];
-    int chi_out = bond_dims_[site + 1];
-
-    ensure_L_env_alloc(site + 1, chi_out);
-
-    auto* plans = get_lenv_plans(chi_in, chi_out);
-    double alpha = 1.0, beta = 0.0;
-
-    // Step 1: T1 = L * A
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[0].plan,
-        &alpha, d_L_envs_[site], d_mps_tensors_[site],
-        &beta, d_T1_, d_T1_,
-        plans->steps[0].workspace, plans->steps[0].ws_size, stream_));
-
-    // Step 2: T2 = W * T1
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[1].plan,
-        &alpha, d_mpo_tensors_[site], d_T1_,
-        &beta, d_T2_, d_T2_,
-        plans->steps[1].workspace, plans->steps[1].ws_size, stream_));
-
-    // Step 3: L_new = A* . T2 (A* = A for real tensors)
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[2].plan,
-        &alpha, d_mps_tensors_[site], d_T2_,
-        &beta, d_L_envs_[site + 1], d_L_envs_[site + 1],
-        plans->steps[2].workspace, plans->steps[2].ws_size, stream_));
-}
-
-// GPU right environment update via hipTensor
-void DMRGGPU::update_right_env(int site) {
-    int chi_in = bond_dims_[site + 1];
-    int chi_out = bond_dims_[site];
-
-    ensure_R_env_alloc(site, chi_out);
-
-    auto* plans = get_renv_plans(chi_in, chi_out);
-    double alpha = 1.0, beta = 0.0;
-
-    // Step 1: T1 = A * R
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[0].plan,
-        &alpha, d_mps_tensors_[site], d_R_envs_[site + 1],
-        &beta, d_T1_, d_T1_,
-        plans->steps[0].workspace, plans->steps[0].ws_size, stream_));
-
-    // Step 2: T2 = W * T1
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[1].plan,
-        &alpha, d_mpo_tensors_[site], d_T1_,
-        &beta, d_T2_, d_T2_,
-        plans->steps[1].workspace, plans->steps[1].ws_size, stream_));
-
-    // Step 3: R_new = A* . T2
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[2].plan,
-        &alpha, d_mps_tensors_[site], d_T2_,
-        &beta, d_R_envs_[site], d_R_envs_[site],
-        plans->steps[2].workspace, plans->steps[2].ws_size, stream_));
-}
-
 // ============================================================================
-// GPU H_eff application via hipTensor (THE CRITICAL HOT PATH)
+// Theta formation and Lanczos
 // ============================================================================
 
 void DMRGGPU::form_theta(int site, double* d_theta) {
@@ -537,37 +486,6 @@ void DMRGGPU::form_theta(int site, double* d_theta) {
     HIP_CHECK(hipMemcpy(d_theta, d_mps_tensors_[site],
                         size * sizeof(double), hipMemcpyDeviceToDevice));
 }
-
-void DMRGGPU::apply_heff(int site, const double* d_theta_in, double* d_result) {
-    int cL = chi_L(site);
-    int cR = chi_R(site);
-
-    auto* plans = get_heff_plans(cL, cR);
-    double alpha = 1.0, beta = 0.0;
-
-    // Step 1: T1[w, a', s, b] = sum_a L[a, w, a'] * theta[a, s, b]
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[0].plan,
-        &alpha, d_L_envs_[site], d_theta_in,
-        &beta, d_T1_, d_T1_,
-        plans->steps[0].workspace, plans->steps[0].ws_size, stream_));
-
-    // Step 2: T2[a', s', w', b] = sum_{w,s} W[w, s, s', w'] * T1[w, a', s, b]
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[1].plan,
-        &alpha, d_mpo_tensors_[site], d_T1_,
-        &beta, d_T2_, d_T2_,
-        plans->steps[1].workspace, plans->steps[1].ws_size, stream_));
-
-    // Step 3: result[a', s', b'] = sum_{w',b} R[b, w', b'] * T2[a', s', w', b]
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[2].plan,
-        &alpha, d_R_envs_[site + 1], d_T2_,
-        &beta, d_result, d_result,
-        plans->steps[2].workspace, plans->steps[2].ws_size, stream_));
-}
-
-// ============================================================================
-// Lanczos eigensolver with FULL reorthogonalization
-// (GPU BLAS for vectors, CPU LAPACK for small tridiagonal matrix)
-// ============================================================================
 
 double DMRGGPU::lanczos_eigensolver(int site, double* d_theta) {
     int n = chi_L(site) * d_ * chi_R(site);
@@ -600,10 +518,10 @@ double DMRGGPU::lanczos_eigensolver(int site, double* d_theta) {
     for (iter = 0; iter < max_iter; iter++) {
         double* d_vi = d_lanczos_v + iter * n;
 
-        // w = H|v_i> (GPU hipTensor contraction)
+        // w = H|v_i> (GPU GEMM-based contraction)
         apply_heff(site, d_vi, d_heff_result_);
 
-        // alpha_i = <v_i|w> (GPU dot product)
+        // alpha_i = <v_i|w>
         double alpha_i;
         ROCBLAS_CHECK(rocblas_ddot(rocblas_h_, n, d_vi, 1, d_heff_result_, 1, &alpha_i));
         h_alpha[iter] = alpha_i;
@@ -670,18 +588,18 @@ double DMRGGPU::lanczos_eigensolver(int site, double* d_theta) {
 
     double energy = h_D[0];
 
-    // Reconstruct ground state: |theta> = sum_i c[i] |v_i> (GPU BLAS)
+    // Reconstruct ground state: |theta> = sum_i c[i] |v_i>
     double* d_ritz_coeffs;
     HIP_CHECK(hipMalloc(&d_ritz_coeffs, niter * sizeof(double)));
     HIP_CHECK(hipMemcpy(d_ritz_coeffs, h_Z.data(), niter * sizeof(double), hipMemcpyHostToDevice));
 
-    const double one = 1.0, zero = 0.0;
+    const double one = 1.0, zeroval = 0.0;
     ROCBLAS_CHECK(rocblas_dgemv(
         rocblas_h_, rocblas_operation_none,
         n, niter, &one,
         d_lanczos_v, n,
         d_ritz_coeffs, 1,
-        &zero, d_theta, 1
+        &zeroval, d_theta, 1
     ));
 
     // Normalize
@@ -710,11 +628,9 @@ void DMRGGPU::svd_and_update_mps(int site, double* d_theta, char direction) {
         int k = std::min(m, n_svd);
         k = std::min(k, chi_max_);
 
-        // Copy theta to SVD workspace (rocsolver overwrites input)
         HIP_CHECK(hipMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(double),
                             hipMemcpyDeviceToDevice));
 
-        // GPU SVD via rocsolver
         rocsolver_dgesvd(rocblas_h_,
             rocblas_svect_singular, rocblas_svect_singular,
             m, n_svd,
@@ -726,7 +642,6 @@ void DMRGGPU::svd_and_update_mps(int site, double* d_theta, char direction) {
             rocblas_outofplace,
             d_svd_info_);
 
-        // Read S to host for truncation decision (small copy, scalar-like)
         int full_k = std::min(m, n_svd);
         std::vector<double> h_S(full_k);
         HIP_CHECK(hipMemcpy(h_S.data(), d_svd_S_, full_k * sizeof(double),
@@ -740,35 +655,31 @@ void DMRGGPU::svd_and_update_mps(int site, double* d_theta, char direction) {
 
         int new_chi_R = new_k;
 
-        // A[site] = U[:, :new_k] (first new_k columns of U)
+        // A[site] = U[:, :new_k]
         allocate_mps_tensor(site, cL, new_chi_R);
         HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_svd_U_,
                             m * new_chi_R * sizeof(double), hipMemcpyDeviceToDevice));
 
-        // Compute S*Vh on GPU: SV[i,j] = S[i] * Vh[i,j]
-        // Vh is (full_k, n_svd) column-major, lda=full_k
-        // SV will be (new_k, n_svd), lda=new_k
+        // S*Vh on GPU
         ROCBLAS_CHECK(rocblas_ddgmm(rocblas_h_, rocblas_side_left,
             new_k, n_svd,
-            d_svd_Vh_, full_k,     // A: first new_k rows of each column
-            d_svd_S_, 1,           // diagonal: S
-            d_svd_work_, new_k));  // C: S*Vh output
+            d_svd_Vh_, full_k,
+            d_svd_S_, 1,
+            d_svd_work_, new_k));
 
-        // Absorb SV into A[site+1] via GPU GEMM
+        // Absorb SV into A[site+1]
         if (site + 1 < L_) {
             int next_cR = chi_R(site + 1);
-            // new_A_next = SV @ old_A_next
-            // SV: (new_k, cR), old_A_next: (cR, d*next_cR), result: (new_k, d*next_cR)
             double one = 1.0, zero = 0.0;
 
             ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
                 rocblas_operation_none, rocblas_operation_none,
                 new_k, d_ * next_cR, cR,
                 &one,
-                d_svd_work_, new_k,            // SV
-                d_mps_tensors_[site + 1], cR,  // old A_next
+                d_svd_work_, new_k,
+                d_mps_tensors_[site + 1], cR,
                 &zero,
-                d_T1_, new_k));                // new A_next (temp buffer)
+                d_T1_, new_k));
 
             allocate_mps_tensor(site + 1, new_chi_R, next_cR);
             HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], d_T1_,
@@ -779,7 +690,6 @@ void DMRGGPU::svd_and_update_mps(int site, double* d_theta, char direction) {
         bond_dims_[site + 1] = new_chi_R;
 
     } else {  // direction == 'L'
-        // theta[a,s,b] reshaped to M(cL, d*cR) -> U S Vh
         int m = cL;
         int n_svd = d_ * cR;
         int k = std::min(m, n_svd);
@@ -812,45 +722,40 @@ void DMRGGPU::svd_and_update_mps(int site, double* d_theta, char direction) {
 
         int new_chi_L = new_k;
 
-        // A[site] = Vh[:new_k, :] (first new_k rows of Vh)
+        // A[site] = Vh[:new_k, :]
         allocate_mps_tensor(site, new_chi_L, cR);
         if (new_chi_L == full_k) {
             HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_svd_Vh_,
                                 full_k * n_svd * sizeof(double), hipMemcpyDeviceToDevice));
         } else {
-            // Extract first new_k rows from column-major (full_k, n_svd) via 2D copy
             HIP_CHECK(hipMemcpy2D(
-                d_mps_tensors_[site], new_chi_L * sizeof(double),  // dst, dpitch
-                d_svd_Vh_,            full_k * sizeof(double),     // src, spitch
-                new_chi_L * sizeof(double),                        // width
-                n_svd,                                             // height
+                d_mps_tensors_[site], new_chi_L * sizeof(double),
+                d_svd_Vh_,            full_k * sizeof(double),
+                new_chi_L * sizeof(double),
+                n_svd,
                 hipMemcpyDeviceToDevice));
         }
 
-        // Compute U*S on GPU: US[i,j] = U[i,j] * S[j]
-        // U is (m, full_k) column-major, lda=m. Use first new_k columns.
+        // U*S on GPU
         ROCBLAS_CHECK(rocblas_ddgmm(rocblas_h_, rocblas_side_right,
             m, new_k,
-            d_svd_U_, m,          // A: first new_k columns of U
-            d_svd_S_, 1,          // diagonal: S
-            d_svd_work_, m));     // C: U*S output
+            d_svd_U_, m,
+            d_svd_S_, 1,
+            d_svd_work_, m));
 
-        // Absorb US into A[site-1] via GPU GEMM
+        // Absorb US into A[site-1]
         if (site > 0) {
             int prev_cL = chi_L(site - 1);
-            // new_A_prev = old_A_prev @ US
-            // old_A_prev viewed as (prev_cL*d, cL), US: (cL, new_k)
-            // result: (prev_cL*d, new_k)
             double one = 1.0, zero = 0.0;
 
             ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
                 rocblas_operation_none, rocblas_operation_none,
-                prev_cL * d_, new_k, m,   // m = cL
+                prev_cL * d_, new_k, m,
                 &one,
-                d_mps_tensors_[site - 1], prev_cL * d_,  // old A_prev
-                d_svd_work_, m,                           // US
+                d_mps_tensors_[site - 1], prev_cL * d_,
+                d_svd_work_, m,
                 &zero,
-                d_T1_, prev_cL * d_));                    // new A_prev (temp)
+                d_T1_, prev_cL * d_));
 
             allocate_mps_tensor(site - 1, prev_cL, new_chi_L);
             HIP_CHECK(hipMemcpy(d_mps_tensors_[site - 1], d_T1_,
@@ -922,7 +827,7 @@ double DMRGGPU::sweep_right_to_left() {
 // ============================================================================
 
 double DMRGGPU::run(int n_sweeps) {
-    printf("=== GPU-Native DMRG (hipTensor + rocBLAS) ===\n");
+    printf("=== GPU-Native DMRG (rocBLAS GEMM) ===\n");
     printf("L = %d, d = %d, chi_max = %d, D_mpo = %d\n", L_, d_, chi_max_, D_mpo_);
     printf("Running %d sweeps...\n\n", n_sweeps);
 

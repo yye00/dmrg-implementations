@@ -7,9 +7,9 @@ set(CMAKE_CXX_COMPILER /opt/rocm/llvm/bin/clang++)
 project(DMRG_GPU LANGUAGES CXX HIP)
 
 # ==========================================
-# GPU-Native DMRG (hipTensor + rocBLAS)
+# GPU-Native DMRG (rocBLAS/rocSOLVER GEMM)
 # ==========================================
-# All tensor contractions on GPU via hipTensor
+# All tensor contractions on GPU via rocBLAS dgemm
 # All linear algebra on GPU via rocBLAS/rocSOLVER
 
 set(CMAKE_CXX_STANDARD 17)
@@ -30,18 +30,6 @@ find_package(hip REQUIRED)
 find_package(rocblas REQUIRED)
 find_package(rocsolver REQUIRED)
 
-# Find hipTensor
-find_library(HIPTENSOR_LIBRARY NAMES hiptensor
-    PATHS ${ROCM_PATH}/lib ${ROCM_PATH}/lib64)
-find_path(HIPTENSOR_INCLUDE_DIR hiptensor/hiptensor.h
-    PATHS ${ROCM_PATH}/include)
-if(NOT HIPTENSOR_LIBRARY)
-    message(FATAL_ERROR "hipTensor not found at ${ROCM_PATH}")
-endif()
-message(STATUS "hipTensor library: ${HIPTENSOR_LIBRARY}")
-message(STATUS "hipTensor include: ${HIPTENSOR_INCLUDE_DIR}")
-include_directories(${HIPTENSOR_INCLUDE_DIR})
-
 # Find LAPACK (for Lanczos tridiagonal eigensolve)
 find_package(LAPACK REQUIRED)
 
@@ -56,13 +44,11 @@ include_directories(
 add_executable(dmrg_gpu
     src/test_dmrg_gpu.cpp
     src/dmrg_gpu.cpp
-    src/accurate_svd_gpu.cpp
 )
 
 set_source_files_properties(
     src/test_dmrg_gpu.cpp
     src/dmrg_gpu.cpp
-    src/accurate_svd_gpu.cpp
     PROPERTIES LANGUAGE HIP
 )
 
@@ -75,7 +61,6 @@ target_link_libraries(dmrg_gpu
     hip::device
     roc::rocblas
     roc::rocsolver
-    ${HIPTENSOR_LIBRARY}
     ${LAPACK_LIBRARIES}
 )
 
@@ -86,5 +71,5 @@ message(STATUS "==============================================")
 message(STATUS "GPU-Native DMRG Build Configuration")
 message(STATUS "==============================================")
 message(STATUS "GPU targets: ${GPU_TARGETS}")
-message(STATUS "hipTensor: ${HIPTENSOR_LIBRARY}")
+message(STATUS "Backend: rocBLAS GEMM (no hipTensor)")
 message(STATUS "==============================================")
