@@ -1,10 +1,11 @@
 #include "dmrg_gpu.h"
-#include "accurate_svd_gpu.h"
+#include <rocsolver/rocsolver.h>
 #include <iostream>
 #include <cmath>
 #include <algorithm>
 #include <cstring>
 #include <fstream>
+#include <chrono>
 
 #define HIP_CHECK(call) \
     do { \
@@ -20,21 +21,107 @@
     do { \
         rocblas_status status = call; \
         if (status != rocblas_status_success) { \
-            std::cerr << "rocBLAS error in " << __FILE__ << ":" << __LINE__ << std::endl; \
+            std::cerr << "rocBLAS error in " << __FILE__ << ":" << __LINE__ \
+                      << " - status " << status << std::endl; \
             throw std::runtime_error("rocBLAS error"); \
         } \
     } while(0)
 
-// LAPACK dstev
+#define HIPTENSOR_CHECK(call) \
+    do { \
+        hiptensorStatus_t st = call; \
+        if (st != HIPTENSOR_STATUS_SUCCESS) { \
+            std::cerr << "hipTensor error in " << __FILE__ << ":" << __LINE__ \
+                      << " - status " << st << std::endl; \
+            throw std::runtime_error("hipTensor error"); \
+        } \
+    } while(0)
+
+// LAPACK tridiagonal eigensolver (kept for Lanczos - negligible cost)
 extern "C" void dstev_(const char* jobz, const int* n, double* d, double* e,
                        double* z, const int* ldz, double* work, int* info);
 
+// Mode labels for hipTensor contractions
+enum : int32_t {
+    M_a  = 10,   // left bond (ket)
+    M_w  = 11,   // MPO left bond
+    M_ap = 12,   // left bond (bra)
+    M_s  = 13,   // physical (ket)
+    M_b  = 14,   // right bond (ket)
+    M_sp = 15,   // physical (bra)
+    M_wp = 16,   // MPO right bond
+    M_bp = 17,   // right bond (bra)
+};
+
+// ============================================================================
+// Helper: create a single hipTensor contraction plan
+// ============================================================================
+static hiptensorPlan_t create_contraction_plan(
+    hiptensorHandle_t handle,
+    int nA, const int64_t* extA, const int32_t* modesA,
+    int nB, const int64_t* extB, const int32_t* modesB,
+    int nC, const int64_t* extC, const int32_t* modesC,
+    void** d_workspace, uint64_t* ws_size)
+{
+    hiptensorTensorDescriptor_t descA, descB, descC;
+    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &descA,
+        nA, extA, NULL, HIP_R_64F, 0));
+    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &descB,
+        nB, extB, NULL, HIP_R_64F, 0));
+    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &descC,
+        nC, extC, NULL, HIP_R_64F, 0));
+
+    hiptensorOperationDescriptor_t opDesc;
+    HIPTENSOR_CHECK(hiptensorCreateContraction(handle, &opDesc,
+        descA, modesA, HIPTENSOR_OP_IDENTITY,
+        descB, modesB, HIPTENSOR_OP_IDENTITY,
+        descC, modesC, HIPTENSOR_OP_IDENTITY,
+        descC, modesC,
+        HIPTENSOR_COMPUTE_DESC_64F));
+
+    hiptensorPlanPreference_t pref;
+    HIPTENSOR_CHECK(hiptensorCreatePlanPreference(handle, &pref,
+        HIPTENSOR_ALGO_DEFAULT));
+
+    hiptensorPlan_t plan;
+    HIPTENSOR_CHECK(hiptensorCreatePlan(handle, &plan, opDesc, pref, 0));
+
+    *ws_size = 0;
+    HIPTENSOR_CHECK(hiptensorPlanGetAttribute(handle, plan,
+        HIPTENSOR_PLAN_REQUIRED_WORKSPACE, ws_size, sizeof(*ws_size)));
+    *d_workspace = nullptr;
+    if (*ws_size > 0) HIP_CHECK(hipMalloc(d_workspace, *ws_size));
+
+    // Plans capture all info; descriptors can be destroyed
+    HIPTENSOR_CHECK(hiptensorDestroyPlanPreference(pref));
+    HIPTENSOR_CHECK(hiptensorDestroyOperationDescriptor(opDesc));
+    HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(descC));
+    HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(descB));
+    HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(descA));
+
+    return plan;
+}
+
+// Helper to destroy a CachedPlans and free its workspace
+static void destroy_cached_plans(DMRGGPU::CachedPlans* p) {
+    if (!p) return;
+    hiptensorDestroyPlan(p->plan1);
+    hiptensorDestroyPlan(p->plan2);
+    hiptensorDestroyPlan(p->plan3);
+    if (p->ws1) hipFree(p->ws1);
+    if (p->ws2) hipFree(p->ws2);
+    if (p->ws3) hipFree(p->ws3);
+    delete p;
+}
+
+// ============================================================================
+// Constructor
+// ============================================================================
 
 DMRGGPU::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), tol_(tol), energy_(0.0) {
 
-    // Initialize bond dimensions using a single array
-    // bond_dims_[i] = dimension of bond between site i-1 and site i
+    // Bond dimensions
     bond_dims_.resize(L + 1);
     bond_dims_[0] = 1;
     bond_dims_[L] = 1;
@@ -42,39 +129,36 @@ DMRGGPU::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
         bond_dims_[i] = std::min(chi_max_, (int)pow(d_, std::min(i, L - i)));
     }
 
-    // Allocate GPU resources
+    // GPU handles
     HIP_CHECK(hipStreamCreate(&stream_));
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
     ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
 
-    svd_ = new AccurateSVD_GPU(1e-14, 0);  // No recursion needed
+    // hipTensor handle
+    HIPTENSOR_CHECK(hiptensorCreate(&ht_handle_));
 
-    // Allocate MPS tensors
+    // Contraction intermediates (max-sized: D_mpo * d * chi_max^2)
+    int t_max = D_mpo_ * d_ * chi_max_ * chi_max_;
+    HIP_CHECK(hipMalloc(&d_T1_, t_max * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_T2_, t_max * sizeof(double)));
+
+    // MPS tensors
     d_mps_tensors_.resize(L, nullptr);
     for (int i = 0; i < L; i++) {
         allocate_mps_tensor(i, chi_L(i), chi_R(i));
     }
 
-    // Allocate MPO tensors (will be set later)
+    // MPO tensors
     d_mpo_tensors_.resize(L, nullptr);
 
-    // Allocate environments with chi_max for non-boundary sites
-    // This avoids reallocation when bond dimensions change during sweeps
+    // Environments (allocate interior at chi_max to avoid reallocation)
     d_L_envs_.resize(L + 1, nullptr);
     d_R_envs_.resize(L + 1, nullptr);
     L_env_alloc_chi_.resize(L + 1, 0);
     R_env_alloc_chi_.resize(L + 1, 0);
 
     for (int i = 0; i <= L; i++) {
-        // L_env[i] has shape (chi_i, D_mpo, chi_i) where chi_i = bond_dims_[i]
-        // R_env[i] has shape (chi_i, D_mpo, chi_i) where chi_i = bond_dims_[i]
-        // Use chi_max for interior bonds to avoid reallocation
-        int chi_alloc;
-        if (i == 0 || i == L) {
-            chi_alloc = 1;
-        } else {
-            chi_alloc = chi_max_;
-        }
+        int chi_alloc = (i == 0 || i == L) ? 1 : chi_max_;
         int sz = chi_alloc * D_mpo_ * chi_alloc;
         HIP_CHECK(hipMalloc(&d_L_envs_[i], sz * sizeof(double)));
         HIP_CHECK(hipMalloc(&d_R_envs_[i], sz * sizeof(double)));
@@ -84,27 +168,60 @@ DMRGGPU::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
         R_env_alloc_chi_[i] = chi_alloc;
     }
 
-    // Allocate workspace
+    // Lanczos workspace
     theta_size_max_ = chi_max_ * d_ * chi_max_;
     HIP_CHECK(hipMalloc(&d_theta_, theta_size_max_ * sizeof(double)));
     HIP_CHECK(hipMalloc(&d_heff_result_, theta_size_max_ * sizeof(double)));
+
+    // SVD workspace (pre-allocated at max dimensions)
+    int svd_max_dim = chi_max_ * d_;  // max of m or n across both sweep dirs
+    HIP_CHECK(hipMalloc(&d_svd_A_,    theta_size_max_ * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_svd_U_,    svd_max_dim * chi_max_ * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_svd_S_,    chi_max_ * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_svd_Vh_,   chi_max_ * svd_max_dim * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_svd_E_,    chi_max_ * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_svd_info_, sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_svd_work_, theta_size_max_ * sizeof(double)));
 }
+
+// ============================================================================
+// Destructor
+// ============================================================================
 
 DMRGGPU::~DMRGGPU() {
     free_gpu_resources();
 }
 
 void DMRGGPU::free_gpu_resources() {
-    for (auto ptr : d_mps_tensors_) if (ptr) HIP_CHECK(hipFree(ptr));
-    for (auto ptr : d_mpo_tensors_) if (ptr) HIP_CHECK(hipFree(ptr));
-    for (auto ptr : d_L_envs_) if (ptr) HIP_CHECK(hipFree(ptr));
-    for (auto ptr : d_R_envs_) if (ptr) HIP_CHECK(hipFree(ptr));
-    if (d_theta_) HIP_CHECK(hipFree(d_theta_));
-    if (d_heff_result_) HIP_CHECK(hipFree(d_heff_result_));
-    if (svd_) delete svd_;
-    ROCBLAS_CHECK(rocblas_destroy_handle(rocblas_h_));
-    HIP_CHECK(hipStreamDestroy(stream_));
+    for (auto ptr : d_mps_tensors_) if (ptr) hipFree(ptr);
+    for (auto ptr : d_mpo_tensors_) if (ptr) hipFree(ptr);
+    for (auto ptr : d_L_envs_) if (ptr) hipFree(ptr);
+    for (auto ptr : d_R_envs_) if (ptr) hipFree(ptr);
+
+    if (d_theta_) hipFree(d_theta_);
+    if (d_heff_result_) hipFree(d_heff_result_);
+    if (d_T1_) hipFree(d_T1_);
+    if (d_T2_) hipFree(d_T2_);
+    if (d_svd_A_) hipFree(d_svd_A_);
+    if (d_svd_U_) hipFree(d_svd_U_);
+    if (d_svd_S_) hipFree(d_svd_S_);
+    if (d_svd_Vh_) hipFree(d_svd_Vh_);
+    if (d_svd_E_) hipFree(d_svd_E_);
+    if (d_svd_info_) hipFree(d_svd_info_);
+    if (d_svd_work_) hipFree(d_svd_work_);
+
+    for (auto& [k, v] : heff_plan_cache_) destroy_cached_plans(v);
+    for (auto& [k, v] : lenv_plan_cache_) destroy_cached_plans(v);
+    for (auto& [k, v] : renv_plan_cache_) destroy_cached_plans(v);
+
+    hiptensorDestroy(ht_handle_);
+    rocblas_destroy_handle(rocblas_h_);
+    hipStreamDestroy(stream_);
 }
+
+// ============================================================================
+// Memory management
+// ============================================================================
 
 void DMRGGPU::allocate_mps_tensor(int site, int cL, int cR) {
     if (d_mps_tensors_[site]) HIP_CHECK(hipFree(d_mps_tensors_[site]));
@@ -129,6 +246,10 @@ void DMRGGPU::ensure_R_env_alloc(int idx, int chi) {
     }
 }
 
+// ============================================================================
+// MPS initialization (host -> device copies, unchanged)
+// ============================================================================
+
 void DMRGGPU::initialize_mps_random(double scale) {
     for (int i = 0; i < L_; i++) {
         int size = chi_L(i) * d_ * chi_R(i);
@@ -146,7 +267,6 @@ void DMRGGPU::initialize_mps_product() {
         int cL = chi_L(i), cR = chi_R(i);
         int size = cL * d_ * cR;
         std::vector<double> h_A(size, 0.0);
-        // A[a, s=0, b] = delta(a,b) for spin up
         int chi_min = std::min(cL, cR);
         for (int a = 0; a < chi_min; a++) {
             h_A[a + 0*cL + a*cL*d_] = 1.0;
@@ -161,7 +281,7 @@ void DMRGGPU::initialize_mps_neel() {
         int cL = chi_L(i), cR = chi_R(i);
         int size = cL * d_ * cR;
         std::vector<double> h_A(size, 0.0);
-        int spin = (i % 2 == 0) ? 0 : 1;  // Alternating
+        int spin = (i % 2 == 0) ? 0 : 1;
         int chi_min = std::min(cL, cR);
         for (int a = 0; a < chi_min; a++) {
             h_A[a + spin*cL + a*cL*d_] = 1.0;
@@ -181,11 +301,162 @@ void DMRGGPU::set_mpo(const std::vector<double*>& h_mpo_tensors) {
 }
 
 // ============================================================================
-// Environment building (CPU contractions - not performance critical)
+// hipTensor plan creation (cached by dimensions)
+// ============================================================================
+
+// H_eff plans: T1 = L*theta, T2 = W*T1, result = R*T2
+DMRGGPU::CachedPlans* DMRGGPU::get_heff_plans(int cL, int cR) {
+    auto key = std::make_pair(cL, cR);
+    auto it = heff_plan_cache_.find(key);
+    if (it != heff_plan_cache_.end()) return it->second;
+
+    auto* p = new CachedPlans();
+    int D = D_mpo_, d = d_;
+
+    // Step 1: T1[w, a', s, b] = sum_a L[a, w, a'] * theta[a, s, b]
+    {
+        int64_t eA[] = {(int64_t)cL, (int64_t)D, (int64_t)cL};
+        int32_t mA[] = {M_a, M_w, M_ap};
+        int64_t eB[] = {(int64_t)cL, (int64_t)d, (int64_t)cR};
+        int32_t mB[] = {M_a, M_s, M_b};
+        int64_t eC[] = {(int64_t)D, (int64_t)cL, (int64_t)d, (int64_t)cR};
+        int32_t mC[] = {M_w, M_ap, M_s, M_b};
+        p->plan1 = create_contraction_plan(ht_handle_,
+            3, eA, mA, 3, eB, mB, 4, eC, mC, &p->ws1, &p->ws_sz1);
+    }
+
+    // Step 2: T2[a', s', w', b] = sum_{w,s} W[w, s, s', w'] * T1[w, a', s, b]
+    {
+        int64_t eA[] = {(int64_t)D, (int64_t)d, (int64_t)d, (int64_t)D};
+        int32_t mA[] = {M_w, M_s, M_sp, M_wp};
+        int64_t eB[] = {(int64_t)D, (int64_t)cL, (int64_t)d, (int64_t)cR};
+        int32_t mB[] = {M_w, M_ap, M_s, M_b};
+        int64_t eC[] = {(int64_t)cL, (int64_t)d, (int64_t)D, (int64_t)cR};
+        int32_t mC[] = {M_ap, M_sp, M_wp, M_b};
+        p->plan2 = create_contraction_plan(ht_handle_,
+            4, eA, mA, 4, eB, mB, 4, eC, mC, &p->ws2, &p->ws_sz2);
+    }
+
+    // Step 3: result[a', s', b'] = sum_{w',b} R[b, w', b'] * T2[a', s', w', b]
+    {
+        int64_t eA[] = {(int64_t)cR, (int64_t)D, (int64_t)cR};
+        int32_t mA[] = {M_b, M_wp, M_bp};
+        int64_t eB[] = {(int64_t)cL, (int64_t)d, (int64_t)D, (int64_t)cR};
+        int32_t mB[] = {M_ap, M_sp, M_wp, M_b};
+        int64_t eC[] = {(int64_t)cL, (int64_t)d, (int64_t)cR};
+        int32_t mC[] = {M_ap, M_sp, M_bp};
+        p->plan3 = create_contraction_plan(ht_handle_,
+            3, eA, mA, 4, eB, mB, 3, eC, mC, &p->ws3, &p->ws_sz3);
+    }
+
+    heff_plan_cache_[key] = p;
+    return p;
+}
+
+// Left environment update plans
+DMRGGPU::CachedPlans* DMRGGPU::get_lenv_plans(int chi_in, int chi_out) {
+    auto key = std::make_pair(chi_in, chi_out);
+    auto it = lenv_plan_cache_.find(key);
+    if (it != lenv_plan_cache_.end()) return it->second;
+
+    auto* p = new CachedPlans();
+    int D = D_mpo_, d = d_;
+
+    // Step 1: T1[w, a', s, b] = sum_a L[a, w, a'] * A[a, s, b]
+    {
+        int64_t eA[] = {(int64_t)chi_in, (int64_t)D, (int64_t)chi_in};
+        int32_t mA[] = {M_a, M_w, M_ap};
+        int64_t eB[] = {(int64_t)chi_in, (int64_t)d, (int64_t)chi_out};
+        int32_t mB[] = {M_a, M_s, M_b};
+        int64_t eC[] = {(int64_t)D, (int64_t)chi_in, (int64_t)d, (int64_t)chi_out};
+        int32_t mC[] = {M_w, M_ap, M_s, M_b};
+        p->plan1 = create_contraction_plan(ht_handle_,
+            3, eA, mA, 3, eB, mB, 4, eC, mC, &p->ws1, &p->ws_sz1);
+    }
+
+    // Step 2: T2[a', s', w', b] = sum_{w,s} W[w, s, s', w'] * T1[w, a', s, b]
+    {
+        int64_t eA[] = {(int64_t)D, (int64_t)d, (int64_t)d, (int64_t)D};
+        int32_t mA[] = {M_w, M_s, M_sp, M_wp};
+        int64_t eB[] = {(int64_t)D, (int64_t)chi_in, (int64_t)d, (int64_t)chi_out};
+        int32_t mB[] = {M_w, M_ap, M_s, M_b};
+        int64_t eC[] = {(int64_t)chi_in, (int64_t)d, (int64_t)D, (int64_t)chi_out};
+        int32_t mC[] = {M_ap, M_sp, M_wp, M_b};
+        p->plan2 = create_contraction_plan(ht_handle_,
+            4, eA, mA, 4, eB, mB, 4, eC, mC, &p->ws2, &p->ws_sz2);
+    }
+
+    // Step 3: L_new[b, w', b'] = sum_{a',s'} A*[a', s', b'] * T2[a', s', w', b]
+    {
+        int64_t eA[] = {(int64_t)chi_in, (int64_t)d, (int64_t)chi_out};
+        int32_t mA[] = {M_ap, M_sp, M_bp};
+        int64_t eB[] = {(int64_t)chi_in, (int64_t)d, (int64_t)D, (int64_t)chi_out};
+        int32_t mB[] = {M_ap, M_sp, M_wp, M_b};
+        int64_t eC[] = {(int64_t)chi_out, (int64_t)D, (int64_t)chi_out};
+        int32_t mC[] = {M_b, M_wp, M_bp};
+        p->plan3 = create_contraction_plan(ht_handle_,
+            3, eA, mA, 4, eB, mB, 3, eC, mC, &p->ws3, &p->ws_sz3);
+    }
+
+    lenv_plan_cache_[key] = p;
+    return p;
+}
+
+// Right environment update plans
+DMRGGPU::CachedPlans* DMRGGPU::get_renv_plans(int chi_in, int chi_out) {
+    auto key = std::make_pair(chi_in, chi_out);
+    auto it = renv_plan_cache_.find(key);
+    if (it != renv_plan_cache_.end()) return it->second;
+
+    auto* p = new CachedPlans();
+    int D = D_mpo_, d = d_;
+
+    // Step 1: T1[a, s, w', b'] = sum_b A[a, s, b] * R[b, w', b']
+    {
+        int64_t eA[] = {(int64_t)chi_out, (int64_t)d, (int64_t)chi_in};
+        int32_t mA[] = {M_a, M_s, M_b};
+        int64_t eB[] = {(int64_t)chi_in, (int64_t)D, (int64_t)chi_in};
+        int32_t mB[] = {M_b, M_wp, M_bp};
+        int64_t eC[] = {(int64_t)chi_out, (int64_t)d, (int64_t)D, (int64_t)chi_in};
+        int32_t mC[] = {M_a, M_s, M_wp, M_bp};
+        p->plan1 = create_contraction_plan(ht_handle_,
+            3, eA, mA, 3, eB, mB, 4, eC, mC, &p->ws1, &p->ws_sz1);
+    }
+
+    // Step 2: T2[a, s', w, b'] = sum_{s,w'} W[w, s, s', w'] * T1[a, s, w', b']
+    {
+        int64_t eA[] = {(int64_t)D, (int64_t)d, (int64_t)d, (int64_t)D};
+        int32_t mA[] = {M_w, M_s, M_sp, M_wp};
+        int64_t eB[] = {(int64_t)chi_out, (int64_t)d, (int64_t)D, (int64_t)chi_in};
+        int32_t mB[] = {M_a, M_s, M_wp, M_bp};
+        int64_t eC[] = {(int64_t)chi_out, (int64_t)d, (int64_t)D, (int64_t)chi_in};
+        int32_t mC[] = {M_a, M_sp, M_w, M_bp};
+        p->plan2 = create_contraction_plan(ht_handle_,
+            4, eA, mA, 4, eB, mB, 4, eC, mC, &p->ws2, &p->ws_sz2);
+    }
+
+    // Step 3: R_new[a, w, a'] = sum_{s',b'} A*[a', s', b'] * T2[a, s', w, b']
+    {
+        int64_t eA[] = {(int64_t)chi_out, (int64_t)d, (int64_t)chi_in};
+        int32_t mA[] = {M_ap, M_sp, M_bp};
+        int64_t eB[] = {(int64_t)chi_out, (int64_t)d, (int64_t)D, (int64_t)chi_in};
+        int32_t mB[] = {M_a, M_sp, M_w, M_bp};
+        int64_t eC[] = {(int64_t)chi_out, (int64_t)D, (int64_t)chi_out};
+        int32_t mC[] = {M_a, M_w, M_ap};
+        p->plan3 = create_contraction_plan(ht_handle_,
+            3, eA, mA, 4, eB, mB, 3, eC, mC, &p->ws3, &p->ws_sz3);
+    }
+
+    renv_plan_cache_[key] = p;
+    return p;
+}
+
+// ============================================================================
+// GPU Environment building
 // ============================================================================
 
 void DMRGGPU::build_initial_environments() {
-    // L[0] = trivial left boundary: shape (1, D_mpo, 1), L[0][0, 0, 0] = 1
+    // L[0] = trivial left boundary: (1, D_mpo, 1), L[0][0,0,0] = 1
     {
         std::vector<double> h_L(D_mpo_, 0.0);
         h_L[0] = 1.0;
@@ -193,7 +464,7 @@ void DMRGGPU::build_initial_environments() {
                             D_mpo_ * sizeof(double), hipMemcpyHostToDevice));
     }
 
-    // R[L] = trivial right boundary: shape (1, D_mpo, 1), R[L][0, D-1, 0] = 1
+    // R[L] = trivial right boundary: (1, D_mpo, 1), R[L][0,D-1,0] = 1
     {
         std::vector<double> h_R(D_mpo_, 0.0);
         h_R[D_mpo_ - 1] = 1.0;
@@ -201,180 +472,72 @@ void DMRGGPU::build_initial_environments() {
                             D_mpo_ * sizeof(double), hipMemcpyHostToDevice));
     }
 
-    // Build all R environments from right to left
+    // Build all R environments from right to left (uses GPU contractions)
     for (int i = L_ - 1; i >= 0; i--) {
         update_right_env(i);
     }
 }
 
+// GPU left environment update via hipTensor
 void DMRGGPU::update_left_env(int site) {
-    // L[site+1][b, w', b'] = sum_{a,w,s,s'} L[site][a,w,a'] * A[site][a,s,b] * W[site][w,s,s',w'] * A*[site][a',s',b']
-    // where A* = A (real)
-    int cL = chi_L(site);
-    int cR = chi_R(site);
-
-    // L_env[site] has chi = bond_dims_[site] = cL
     int chi_in = bond_dims_[site];
-    // L_env[site+1] will have chi = bond_dims_[site+1] = cR
     int chi_out = bond_dims_[site + 1];
 
     ensure_L_env_alloc(site + 1, chi_out);
 
-    int n_L = chi_in * D_mpo_ * chi_in;
-    int n_A = cL * d_ * cR;
-    int n_W = D_mpo_ * d_ * d_ * D_mpo_;
-    int n_L_out = chi_out * D_mpo_ * chi_out;
+    auto* plans = get_lenv_plans(chi_in, chi_out);
+    double alpha = 1.0, beta = 0.0;
 
-    std::vector<double> h_L(n_L), h_A(n_A), h_W(n_W), h_L_out(n_L_out, 0.0);
+    // Step 1: T1 = L * A
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan1,
+        &alpha, d_L_envs_[site], d_mps_tensors_[site],
+        &beta, d_T1_, d_T1_,
+        plans->ws1, plans->ws_sz1, stream_));
 
-    HIP_CHECK(hipMemcpy(h_L.data(), d_L_envs_[site], n_L * sizeof(double), hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(h_A.data(), d_mps_tensors_[site], n_A * sizeof(double), hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(h_W.data(), d_mpo_tensors_[site], n_W * sizeof(double), hipMemcpyDeviceToHost));
+    // Step 2: T2 = W * T1
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan2,
+        &alpha, d_mpo_tensors_[site], d_T1_,
+        &beta, d_T2_, d_T2_,
+        plans->ws2, plans->ws_sz2, stream_));
 
-    // L_out[b, w', b'] = sum_{a,w,a',s,s'} L[a,w,a'] * A[a,s,b] * W[w,s,s',w'] * A*[a',s',b']
-    // Layout: L[a + w*chi_in + ap*chi_in*D], A[a + s*cL + b*cL*d], W[w + s*D + sp*D*d + wp*D*d*d]
-
-    // Step 1: T1[w, a', s, b] = sum_a L[a, w, a'] * A[a, s, b]
-    std::vector<double> T1(D_mpo_ * chi_in * d_ * cR, 0.0);
-    for (int w = 0; w < D_mpo_; w++) {
-        for (int ap = 0; ap < chi_in; ap++) {
-            for (int s = 0; s < d_; s++) {
-                for (int b = 0; b < cR; b++) {
-                    double sum = 0.0;
-                    for (int a = 0; a < chi_in; a++) {
-                        sum += h_L[a + w*chi_in + ap*chi_in*D_mpo_] *
-                               h_A[a + s*cL + b*cL*d_];
-                    }
-                    T1[w + ap*D_mpo_ + s*D_mpo_*chi_in + b*D_mpo_*chi_in*d_] = sum;
-                }
-            }
-        }
-    }
-
-    // Step 2: T2[a', sp, w', b] = sum_{w,s} W[w, s, sp, w'] * T1[w, a', s, b]
-    std::vector<double> T2(chi_in * d_ * D_mpo_ * cR, 0.0);
-    for (int ap = 0; ap < chi_in; ap++) {
-        for (int sp = 0; sp < d_; sp++) {
-            for (int wp = 0; wp < D_mpo_; wp++) {
-                for (int b = 0; b < cR; b++) {
-                    double sum = 0.0;
-                    for (int w = 0; w < D_mpo_; w++) {
-                        for (int s = 0; s < d_; s++) {
-                            sum += h_W[w + s*D_mpo_ + sp*D_mpo_*d_ + wp*D_mpo_*d_*d_] *
-                                   T1[w + ap*D_mpo_ + s*D_mpo_*chi_in + b*D_mpo_*chi_in*d_];
-                        }
-                    }
-                    T2[ap + sp*chi_in + wp*chi_in*d_ + b*chi_in*d_*D_mpo_] = sum;
-                }
-            }
-        }
-    }
-
-    // Step 3: L_out[b, w', b'] = sum_{a',s'} A*[a', s', b'] * T2[a', s', w', b]
-    for (int b = 0; b < chi_out; b++) {
-        for (int wp = 0; wp < D_mpo_; wp++) {
-            for (int bp = 0; bp < chi_out; bp++) {
-                double sum = 0.0;
-                for (int ap = 0; ap < chi_in; ap++) {
-                    for (int sp = 0; sp < d_; sp++) {
-                        sum += h_A[ap + sp*cL + bp*cL*d_] *
-                               T2[ap + sp*chi_in + wp*chi_in*d_ + b*chi_in*d_*D_mpo_];
-                    }
-                }
-                h_L_out[b + wp*chi_out + bp*chi_out*D_mpo_] = sum;
-            }
-        }
-    }
-
-    HIP_CHECK(hipMemcpy(d_L_envs_[site + 1], h_L_out.data(), n_L_out * sizeof(double), hipMemcpyHostToDevice));
+    // Step 3: L_new = A* . T2 (A* = A for real tensors)
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan3,
+        &alpha, d_mps_tensors_[site], d_T2_,
+        &beta, d_L_envs_[site + 1], d_L_envs_[site + 1],
+        plans->ws3, plans->ws_sz3, stream_));
 }
 
+// GPU right environment update via hipTensor
 void DMRGGPU::update_right_env(int site) {
-    // R[site][a, w, a'] = sum_{b,w',s,s'} A[site][a,s,b] * W[site][w,s,s',w'] * A*[site][a',s',b'] * R[site+1][b,w',b']
-    int cL = chi_L(site);
-    int cR = chi_R(site);
-
-    // R_env[site+1] has chi = bond_dims_[site+1] = cR
     int chi_in = bond_dims_[site + 1];
-    // R_env[site] will have chi = bond_dims_[site] = cL
     int chi_out = bond_dims_[site];
 
     ensure_R_env_alloc(site, chi_out);
 
-    int n_R = chi_in * D_mpo_ * chi_in;
-    int n_A = cL * d_ * cR;
-    int n_W = D_mpo_ * d_ * d_ * D_mpo_;
-    int n_R_out = chi_out * D_mpo_ * chi_out;
+    auto* plans = get_renv_plans(chi_in, chi_out);
+    double alpha = 1.0, beta = 0.0;
 
-    std::vector<double> h_R(n_R), h_A(n_A), h_W(n_W), h_R_out(n_R_out, 0.0);
+    // Step 1: T1 = A * R
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan1,
+        &alpha, d_mps_tensors_[site], d_R_envs_[site + 1],
+        &beta, d_T1_, d_T1_,
+        plans->ws1, plans->ws_sz1, stream_));
 
-    HIP_CHECK(hipMemcpy(h_R.data(), d_R_envs_[site + 1], n_R * sizeof(double), hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(h_A.data(), d_mps_tensors_[site], n_A * sizeof(double), hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(h_W.data(), d_mpo_tensors_[site], n_W * sizeof(double), hipMemcpyDeviceToHost));
+    // Step 2: T2 = W * T1
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan2,
+        &alpha, d_mpo_tensors_[site], d_T1_,
+        &beta, d_T2_, d_T2_,
+        plans->ws2, plans->ws_sz2, stream_));
 
-    // Step 1: T1[a, s, w', b'] = sum_b A[a,s,b] * R[b,w',b']
-    // Note: We sum over bra index b' of R, but the A that connects is through index b
-    // Wait - let me be more careful. R[site+1] has shape (chi_R, D_mpo, chi_R).
-    // R[b, w', b'] where b is ket-right, b' is bra-right.
-    // A[site] has shape (cL, d, cR) = A[a, s, b].
-    // We need: sum_b A[a,s,b] * R[b, w', b'] -> T1[a, s, w', b']
-    std::vector<double> T1(cL * d_ * D_mpo_ * chi_in, 0.0);
-    for (int a = 0; a < cL; a++) {
-        for (int s = 0; s < d_; s++) {
-            for (int wp = 0; wp < D_mpo_; wp++) {
-                for (int bp = 0; bp < chi_in; bp++) {
-                    double sum = 0.0;
-                    for (int b = 0; b < cR; b++) {
-                        sum += h_A[a + s*cL + b*cL*d_] *
-                               h_R[b + wp*chi_in + bp*chi_in*D_mpo_];
-                    }
-                    T1[a + s*cL + wp*cL*d_ + bp*cL*d_*D_mpo_] = sum;
-                }
-            }
-        }
-    }
-
-    // Step 2: T2[a, sp, w, b'] = sum_{w',s} W[w, s, sp, w'] * T1[a, s, w', b']
-    std::vector<double> T2(cL * d_ * D_mpo_ * chi_in, 0.0);
-    for (int a = 0; a < cL; a++) {
-        for (int sp = 0; sp < d_; sp++) {
-            for (int w = 0; w < D_mpo_; w++) {
-                for (int bp = 0; bp < chi_in; bp++) {
-                    double sum = 0.0;
-                    for (int wp = 0; wp < D_mpo_; wp++) {
-                        for (int s = 0; s < d_; s++) {
-                            sum += h_W[w + s*D_mpo_ + sp*D_mpo_*d_ + wp*D_mpo_*d_*d_] *
-                                   T1[a + s*cL + wp*cL*d_ + bp*cL*d_*D_mpo_];
-                        }
-                    }
-                    T2[a + sp*cL + w*cL*d_ + bp*cL*d_*D_mpo_] = sum;
-                }
-            }
-        }
-    }
-
-    // Step 3: R_out[a, w, a'] = sum_{sp,b'} A*[a', sp, b'] * T2[a, sp, w, b']
-    // A*[a', sp, b'] = A[a' + sp*cL + b'*cL*d] (real case)
-    for (int a = 0; a < chi_out; a++) {
-        for (int w = 0; w < D_mpo_; w++) {
-            for (int ap = 0; ap < chi_out; ap++) {
-                double sum = 0.0;
-                for (int sp = 0; sp < d_; sp++) {
-                    for (int bp = 0; bp < chi_in; bp++) {
-                        sum += h_A[ap + sp*cL + bp*cL*d_] *
-                               T2[a + sp*cL + w*cL*d_ + bp*cL*d_*D_mpo_];
-                    }
-                }
-                h_R_out[a + w*chi_out + ap*chi_out*D_mpo_] = sum;
-            }
-        }
-    }
-
-    HIP_CHECK(hipMemcpy(d_R_envs_[site], h_R_out.data(), n_R_out * sizeof(double), hipMemcpyHostToDevice));
+    // Step 3: R_new = A* . T2
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan3,
+        &alpha, d_mps_tensors_[site], d_T2_,
+        &beta, d_R_envs_[site], d_R_envs_[site],
+        plans->ws3, plans->ws_sz3, stream_));
 }
 
 // ============================================================================
-// H_eff application (CPU contraction for correctness)
+// GPU H_eff application via hipTensor (THE CRITICAL HOT PATH)
 // ============================================================================
 
 void DMRGGPU::form_theta(int site, double* d_theta) {
@@ -384,77 +547,34 @@ void DMRGGPU::form_theta(int site, double* d_theta) {
 }
 
 void DMRGGPU::apply_heff(int site, const double* d_theta_in, double* d_result) {
-    // H_eff|theta> = sum_{a,w,a',s,w',b,b'} L[a,w,a'] * theta[a,s,b] * W[w,s,s',w'] * R[b,w',b'] -> result[a',s',b']
     int cL = chi_L(site);
     int cR = chi_R(site);
 
-    int n = cL * d_ * cR;
-    std::vector<double> h_theta(n), h_L(cL * D_mpo_ * cL),
-                        h_W(D_mpo_ * d_ * d_ * D_mpo_), h_R(cR * D_mpo_ * cR),
-                        h_result(n, 0.0);
-
-    HIP_CHECK(hipMemcpy(h_theta.data(), d_theta_in, n * sizeof(double), hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(h_L.data(), d_L_envs_[site], cL * D_mpo_ * cL * sizeof(double), hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(h_W.data(), d_mpo_tensors_[site], D_mpo_ * d_ * d_ * D_mpo_ * sizeof(double), hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(h_R.data(), d_R_envs_[site + 1], cR * D_mpo_ * cR * sizeof(double), hipMemcpyDeviceToHost));
+    auto* plans = get_heff_plans(cL, cR);
+    double alpha = 1.0, beta = 0.0;
 
     // Step 1: T1[w, a', s, b] = sum_a L[a, w, a'] * theta[a, s, b]
-    std::vector<double> T1(D_mpo_ * cL * d_ * cR, 0.0);
-    for (int w = 0; w < D_mpo_; w++) {
-        for (int ap = 0; ap < cL; ap++) {
-            for (int s = 0; s < d_; s++) {
-                for (int b = 0; b < cR; b++) {
-                    double sum = 0.0;
-                    for (int a = 0; a < cL; a++) {
-                        sum += h_L[a + w*cL + ap*cL*D_mpo_] *
-                               h_theta[a + s*cL + b*cL*d_];
-                    }
-                    T1[w + ap*D_mpo_ + s*D_mpo_*cL + b*D_mpo_*cL*d_] = sum;
-                }
-            }
-        }
-    }
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan1,
+        &alpha, d_L_envs_[site], d_theta_in,
+        &beta, d_T1_, d_T1_,
+        plans->ws1, plans->ws_sz1, stream_));
 
-    // Step 2: T2[a', sp, w', b] = sum_{w,s} W[w, s, sp, w'] * T1[w, a', s, b]
-    std::vector<double> T2(cL * d_ * D_mpo_ * cR, 0.0);
-    for (int ap = 0; ap < cL; ap++) {
-        for (int sp = 0; sp < d_; sp++) {
-            for (int wp = 0; wp < D_mpo_; wp++) {
-                for (int b = 0; b < cR; b++) {
-                    double sum = 0.0;
-                    for (int w = 0; w < D_mpo_; w++) {
-                        for (int s = 0; s < d_; s++) {
-                            sum += h_W[w + s*D_mpo_ + sp*D_mpo_*d_ + wp*D_mpo_*d_*d_] *
-                                   T1[w + ap*D_mpo_ + s*D_mpo_*cL + b*D_mpo_*cL*d_];
-                        }
-                    }
-                    T2[ap + sp*cL + wp*cL*d_ + b*cL*d_*D_mpo_] = sum;
-                }
-            }
-        }
-    }
+    // Step 2: T2[a', s', w', b] = sum_{w,s} W[w, s, s', w'] * T1[w, a', s, b]
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan2,
+        &alpha, d_mpo_tensors_[site], d_T1_,
+        &beta, d_T2_, d_T2_,
+        plans->ws2, plans->ws_sz2, stream_));
 
-    // Step 3: result[a', sp, b'] = sum_{w',b} R[b, w', b'] * T2[a', sp, w', b]
-    for (int ap = 0; ap < cL; ap++) {
-        for (int sp = 0; sp < d_; sp++) {
-            for (int bp = 0; bp < cR; bp++) {
-                double sum = 0.0;
-                for (int wp = 0; wp < D_mpo_; wp++) {
-                    for (int b = 0; b < cR; b++) {
-                        sum += h_R[b + wp*cR + bp*cR*D_mpo_] *
-                               T2[ap + sp*cL + wp*cL*d_ + b*cL*d_*D_mpo_];
-                    }
-                }
-                h_result[ap + sp*cL + bp*cL*d_] = sum;
-            }
-        }
-    }
-
-    HIP_CHECK(hipMemcpy(d_result, h_result.data(), n * sizeof(double), hipMemcpyHostToDevice));
+    // Step 3: result[a', s', b'] = sum_{w',b} R[b, w', b'] * T2[a', s', w', b]
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan3,
+        &alpha, d_R_envs_[site + 1], d_T2_,
+        &beta, d_result, d_result,
+        plans->ws3, plans->ws_sz3, stream_));
 }
 
 // ============================================================================
 // Lanczos eigensolver with FULL reorthogonalization
+// (GPU BLAS for vectors, CPU LAPACK for small tridiagonal matrix)
 // ============================================================================
 
 double DMRGGPU::lanczos_eigensolver(int site, double* d_theta) {
@@ -462,7 +582,6 @@ double DMRGGPU::lanczos_eigensolver(int site, double* d_theta) {
     int max_iter = std::min(100, n);
     double tol_lanczos = 1e-12;
 
-    // Allocate Lanczos vectors on GPU
     double* d_lanczos_v;
     HIP_CHECK(hipMalloc(&d_lanczos_v, max_iter * n * sizeof(double)));
 
@@ -489,10 +608,10 @@ double DMRGGPU::lanczos_eigensolver(int site, double* d_theta) {
     for (iter = 0; iter < max_iter; iter++) {
         double* d_vi = d_lanczos_v + iter * n;
 
-        // w = H|v_i>
+        // w = H|v_i> (GPU hipTensor contraction)
         apply_heff(site, d_vi, d_heff_result_);
 
-        // alpha_i = <v_i|w>
+        // alpha_i = <v_i|w> (GPU dot product)
         double alpha_i;
         ROCBLAS_CHECK(rocblas_ddot(rocblas_h_, n, d_vi, 1, d_heff_result_, 1, &alpha_i));
         h_alpha[iter] = alpha_i;
@@ -508,7 +627,7 @@ double DMRGGPU::lanczos_eigensolver(int site, double* d_theta) {
             ROCBLAS_CHECK(rocblas_daxpy(rocblas_h_, n, &neg_beta, d_vim1, 1, d_heff_result_, 1));
         }
 
-        // FULL REORTHOGONALIZATION: w = w - sum_j <v_j|w> v_j
+        // FULL REORTHOGONALIZATION
         for (int j = 0; j <= iter; j++) {
             double* d_vj = d_lanczos_v + j * n;
             double overlap;
@@ -538,7 +657,7 @@ double DMRGGPU::lanczos_eigensolver(int site, double* d_theta) {
 
     int niter = iter;
 
-    // Solve tridiagonal eigenvalue problem on CPU
+    // Solve tridiagonal eigenvalue problem on CPU (tiny matrix, negligible cost)
     std::vector<double> h_D(niter), h_E(niter), h_Z(niter * niter);
     std::vector<double> h_work(std::max(1, 2*niter - 2));
     int lapack_info = 0;
@@ -559,21 +678,18 @@ double DMRGGPU::lanczos_eigensolver(int site, double* d_theta) {
 
     double energy = h_D[0];
 
-    // Reconstruct ground state: |theta> = sum_i c[i] |v_i>
+    // Reconstruct ground state: |theta> = sum_i c[i] |v_i> (GPU BLAS)
     double* d_ritz_coeffs;
     HIP_CHECK(hipMalloc(&d_ritz_coeffs, niter * sizeof(double)));
     HIP_CHECK(hipMemcpy(d_ritz_coeffs, h_Z.data(), niter * sizeof(double), hipMemcpyHostToDevice));
 
     const double one = 1.0, zero = 0.0;
     ROCBLAS_CHECK(rocblas_dgemv(
-        rocblas_h_,
-        rocblas_operation_none,
-        n, niter,
-        &one,
+        rocblas_h_, rocblas_operation_none,
+        n, niter, &one,
         d_lanczos_v, n,
         d_ritz_coeffs, 1,
-        &zero,
-        d_theta, 1
+        &zero, d_theta, 1
     ));
 
     // Normalize
@@ -588,7 +704,7 @@ double DMRGGPU::lanczos_eigensolver(int site, double* d_theta) {
 }
 
 // ============================================================================
-// SVD and MPS update WITH absorption into neighbor
+// GPU SVD and MPS update (rocsolver_dgesvd + rocblas)
 // ============================================================================
 
 void DMRGGPU::svd_and_update_mps(int site, double* d_theta, char direction) {
@@ -596,192 +712,160 @@ void DMRGGPU::svd_and_update_mps(int site, double* d_theta, char direction) {
     int cR = chi_R(site);
 
     if (direction == 'R') {
-        // Moving right: theta[a,s,b] reshaped to M(cL*d, cR) -> U S Vh
-        // Store U -> A[site], absorb S*Vh -> A[site+1]
+        // theta[a,s,b] reshaped to M(cL*d, cR) -> U S Vh
         int m = cL * d_;
         int n_svd = cR;
         int k = std::min(m, n_svd);
         k = std::min(k, chi_max_);
 
-        auto result = svd_->decompose(d_theta, m, n_svd);
+        // Copy theta to SVD workspace (rocsolver overwrites input)
+        HIP_CHECK(hipMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(double),
+                            hipMemcpyDeviceToDevice));
 
-        // Read S values to host
-        std::vector<double> h_S(result.rank);
-        HIP_CHECK(hipMemcpy(h_S.data(), result.d_S, result.rank * sizeof(double), hipMemcpyDeviceToHost));
+        // GPU SVD via rocsolver
+        rocsolver_dgesvd(rocblas_h_,
+            rocblas_svect_singular, rocblas_svect_singular,
+            m, n_svd,
+            d_svd_A_, m,
+            d_svd_S_,
+            d_svd_U_, m,
+            d_svd_Vh_, std::min(m, n_svd),
+            d_svd_E_,
+            rocblas_outofplace,
+            d_svd_info_);
 
+        // Read S to host for truncation decision (small copy, scalar-like)
+        int full_k = std::min(m, n_svd);
+        std::vector<double> h_S(full_k);
+        HIP_CHECK(hipMemcpy(h_S.data(), d_svd_S_, full_k * sizeof(double),
+                            hipMemcpyDeviceToHost));
 
-        // Determine how many singular values to keep
-        int new_k = std::min(k, result.rank);
-        // Truncate small singular values
+        int new_k = std::min(k, full_k);
         for (int i = 0; i < new_k; i++) {
-            if (h_S[i] < 1e-14) {
-                new_k = i;
-                break;
-            }
+            if (h_S[i] < 1e-14) { new_k = i; break; }
         }
         if (new_k == 0) new_k = 1;
 
         int new_chi_R = new_k;
 
-        // Update A[site] = U[:, :new_k] -> shape (cL, d, new_k)
-        // U is column-major (m, result.rank), we need first new_k columns
+        // A[site] = U[:, :new_k] (first new_k columns of U)
         allocate_mps_tensor(site, cL, new_chi_R);
-        // U in column-major: column j starts at j*m. We need m*new_k elements.
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], result.d_U,
+        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_svd_U_,
                             m * new_chi_R * sizeof(double), hipMemcpyDeviceToDevice));
 
-        // Compute S * Vh on CPU: S_Vh[i, j] = S[i] * Vh[i, j]
-        // Vh is column-major (result.rank, n_svd), lda=result.rank
-        // We need first new_k rows -> S_Vh(new_k, n_svd)
-        std::vector<double> h_Vh(result.rank * n_svd);
-        HIP_CHECK(hipMemcpy(h_Vh.data(), result.d_Vh,
-                            result.rank * n_svd * sizeof(double), hipMemcpyDeviceToHost));
+        // Compute S*Vh on GPU: SV[i,j] = S[i] * Vh[i,j]
+        // Vh is (full_k, n_svd) column-major, lda=full_k
+        // SV will be (new_k, n_svd), lda=new_k
+        ROCBLAS_CHECK(rocblas_ddgmm(rocblas_h_, rocblas_side_left,
+            new_k, n_svd,
+            d_svd_Vh_, full_k,     // A: first new_k rows of each column
+            d_svd_S_, 1,           // diagonal: S
+            d_svd_work_, new_k));  // C: S*Vh output
 
-        std::vector<double> h_SVh(new_chi_R * n_svd);
-        for (int j = 0; j < n_svd; j++) {
-            for (int i = 0; i < new_chi_R; i++) {
-                h_SVh[i + j * new_chi_R] = h_S[i] * h_Vh[i + j * result.rank];
-            }
-        }
-
-        // Absorb S*Vh into A[site+1]
-        // A_next has shape (chi_L_next=cR, d, chi_R_next)
-        // New A_next = (S*Vh) @ A_next reshaped:
-        //   (S*Vh)(new_k, cR) @ A_next(cR, d*chi_R_next) -> new_A_next(new_k, d*chi_R_next)
+        // Absorb SV into A[site+1] via GPU GEMM
         if (site + 1 < L_) {
             int next_cR = chi_R(site + 1);
-            int next_size = cR * d_ * next_cR;
-            std::vector<double> h_A_next(next_size);
-            HIP_CHECK(hipMemcpy(h_A_next.data(), d_mps_tensors_[site + 1],
-                                next_size * sizeof(double), hipMemcpyDeviceToHost));
+            // new_A_next = SV @ old_A_next
+            // SV: (new_k, cR), old_A_next: (cR, d*next_cR), result: (new_k, d*next_cR)
+            double one = 1.0, zero = 0.0;
 
-            // Matrix multiply: new_A_next = S_Vh @ A_next
-            // S_Vh is (new_chi_R, cR) column-major
-            // A_next is (cR, d*next_cR) column-major
-            // Result is (new_chi_R, d*next_cR) column-major
-            int M = new_chi_R;
-            int N = d_ * next_cR;
-            int K = cR;
+            ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                new_k, d_ * next_cR, cR,
+                &one,
+                d_svd_work_, new_k,            // SV
+                d_mps_tensors_[site + 1], cR,  // old A_next
+                &zero,
+                d_T1_, new_k));                // new A_next (temp buffer)
 
-            std::vector<double> h_new_A_next(M * N, 0.0);
-            for (int jj = 0; jj < N; jj++) {
-                for (int ii = 0; ii < M; ii++) {
-                    double sum = 0.0;
-                    for (int kk = 0; kk < K; kk++) {
-                        sum += h_SVh[ii + kk * M] * h_A_next[kk + jj * K];
-                    }
-                    h_new_A_next[ii + jj * M] = sum;
-                }
-            }
-
-            // Reallocate and write new A[site+1]
             allocate_mps_tensor(site + 1, new_chi_R, next_cR);
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_new_A_next.data(),
-                                M * N * sizeof(double), hipMemcpyHostToDevice));
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], d_T1_,
+                                new_k * d_ * next_cR * sizeof(double),
+                                hipMemcpyDeviceToDevice));
         }
 
-        // Update bond dimensions
         bond_dims_[site + 1] = new_chi_R;
 
     } else {  // direction == 'L'
-        // Moving left: theta[a,s,b] reshaped to M(cL, d*cR) -> U S Vh
-        // Absorb U*S -> A[site-1], store Vh -> A[site]
+        // theta[a,s,b] reshaped to M(cL, d*cR) -> U S Vh
         int m = cL;
         int n_svd = d_ * cR;
         int k = std::min(m, n_svd);
         k = std::min(k, chi_max_);
 
-        auto result = svd_->decompose(d_theta, m, n_svd);
+        HIP_CHECK(hipMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(double),
+                            hipMemcpyDeviceToDevice));
 
-        std::vector<double> h_S(result.rank);
-        HIP_CHECK(hipMemcpy(h_S.data(), result.d_S, result.rank * sizeof(double), hipMemcpyDeviceToHost));
+        rocsolver_dgesvd(rocblas_h_,
+            rocblas_svect_singular, rocblas_svect_singular,
+            m, n_svd,
+            d_svd_A_, m,
+            d_svd_S_,
+            d_svd_U_, m,
+            d_svd_Vh_, std::min(m, n_svd),
+            d_svd_E_,
+            rocblas_outofplace,
+            d_svd_info_);
 
+        int full_k = std::min(m, n_svd);
+        std::vector<double> h_S(full_k);
+        HIP_CHECK(hipMemcpy(h_S.data(), d_svd_S_, full_k * sizeof(double),
+                            hipMemcpyDeviceToHost));
 
-        int new_k = std::min(k, result.rank);
+        int new_k = std::min(k, full_k);
         for (int i = 0; i < new_k; i++) {
-            if (h_S[i] < 1e-14) {
-                new_k = i;
-                break;
-            }
+            if (h_S[i] < 1e-14) { new_k = i; break; }
         }
         if (new_k == 0) new_k = 1;
 
         int new_chi_L = new_k;
 
-        // Update A[site] = Vh[:new_k, :] -> shape (new_k, d, cR)
-        // Vh is column-major (result.rank, n_svd), lda=result.rank
-        // We need first new_k rows of Vh
-        // In column-major storage, row i of column j is at Vh[i + j*lda]
-        // We need to extract a submatrix: rows 0..new_k-1 of Vh(result.rank, n_svd)
-        if (new_chi_L == result.rank) {
-            // No truncation needed, direct copy
-            allocate_mps_tensor(site, new_chi_L, cR);
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], result.d_Vh,
-                                new_chi_L * n_svd * sizeof(double), hipMemcpyDeviceToDevice));
+        // A[site] = Vh[:new_k, :] (first new_k rows of Vh)
+        allocate_mps_tensor(site, new_chi_L, cR);
+        if (new_chi_L == full_k) {
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_svd_Vh_,
+                                full_k * n_svd * sizeof(double), hipMemcpyDeviceToDevice));
         } else {
-            // Need to extract first new_k rows from column-major Vh
-            std::vector<double> h_Vh(result.rank * n_svd);
-            HIP_CHECK(hipMemcpy(h_Vh.data(), result.d_Vh,
-                                result.rank * n_svd * sizeof(double), hipMemcpyDeviceToHost));
-
-            std::vector<double> h_Vh_trunc(new_chi_L * n_svd);
-            for (int j = 0; j < n_svd; j++) {
-                for (int i = 0; i < new_chi_L; i++) {
-                    h_Vh_trunc[i + j * new_chi_L] = h_Vh[i + j * result.rank];
-                }
-            }
-            allocate_mps_tensor(site, new_chi_L, cR);
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_Vh_trunc.data(),
-                                new_chi_L * n_svd * sizeof(double), hipMemcpyHostToDevice));
+            // Extract first new_k rows from column-major (full_k, n_svd) via 2D copy
+            HIP_CHECK(hipMemcpy2D(
+                d_mps_tensors_[site], new_chi_L * sizeof(double),  // dst, dpitch
+                d_svd_Vh_,            full_k * sizeof(double),     // src, spitch
+                new_chi_L * sizeof(double),                        // width
+                n_svd,                                             // height
+                hipMemcpyDeviceToDevice));
         }
 
-        // Compute U * S: U_S[i, j] = U[i, j] * S[j]
-        // U is column-major (m, result.rank), lda=m
-        // We need first new_k columns
-        std::vector<double> h_U(m * result.rank);
-        HIP_CHECK(hipMemcpy(h_U.data(), result.d_U,
-                            m * result.rank * sizeof(double), hipMemcpyDeviceToHost));
+        // Compute U*S on GPU: US[i,j] = U[i,j] * S[j]
+        // U is (m, full_k) column-major, lda=m. Use first new_k columns.
+        ROCBLAS_CHECK(rocblas_ddgmm(rocblas_h_, rocblas_side_right,
+            m, new_k,
+            d_svd_U_, m,          // A: first new_k columns of U
+            d_svd_S_, 1,          // diagonal: S
+            d_svd_work_, m));     // C: U*S output
 
-        std::vector<double> h_US(m * new_chi_L);
-        for (int j = 0; j < new_chi_L; j++) {
-            for (int i = 0; i < m; i++) {
-                h_US[i + j * m] = h_U[i + j * m] * h_S[j];
-            }
-        }
-
-        // Absorb U*S into A[site-1]
-        // A_prev has shape (chi_L_prev, d, cL) = (chi_L_prev, d, old_cL)
-        // New A_prev = A_prev @ (U*S):
-        //   A_prev reshaped (chi_L_prev*d, cL) @ U_S(cL, new_k) -> new_A_prev(chi_L_prev*d, new_k)
+        // Absorb US into A[site-1] via GPU GEMM
         if (site > 0) {
             int prev_cL = chi_L(site - 1);
-            int prev_size = prev_cL * d_ * cL;
-            std::vector<double> h_A_prev(prev_size);
-            HIP_CHECK(hipMemcpy(h_A_prev.data(), d_mps_tensors_[site - 1],
-                                prev_size * sizeof(double), hipMemcpyDeviceToHost));
+            // new_A_prev = old_A_prev @ US
+            // old_A_prev viewed as (prev_cL*d, cL), US: (cL, new_k)
+            // result: (prev_cL*d, new_k)
+            double one = 1.0, zero = 0.0;
 
-            // A_prev is (prev_cL, d, cL) column-major = (prev_cL*d, cL) matrix
-            int M = prev_cL * d_;
-            int N = new_chi_L;
-            int K = cL;  // = m
-
-            std::vector<double> h_new_A_prev(M * N, 0.0);
-            for (int jj = 0; jj < N; jj++) {
-                for (int ii = 0; ii < M; ii++) {
-                    double sum = 0.0;
-                    for (int kk = 0; kk < K; kk++) {
-                        sum += h_A_prev[ii + kk * M] * h_US[kk + jj * K];
-                    }
-                    h_new_A_prev[ii + jj * M] = sum;
-                }
-            }
+            ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                prev_cL * d_, new_k, m,   // m = cL
+                &one,
+                d_mps_tensors_[site - 1], prev_cL * d_,  // old A_prev
+                d_svd_work_, m,                           // US
+                &zero,
+                d_T1_, prev_cL * d_));                    // new A_prev (temp)
 
             allocate_mps_tensor(site - 1, prev_cL, new_chi_L);
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site - 1], h_new_A_prev.data(),
-                                M * N * sizeof(double), hipMemcpyHostToDevice));
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site - 1], d_T1_,
+                                prev_cL * d_ * new_k * sizeof(double),
+                                hipMemcpyDeviceToDevice));
         }
 
-        // Update bond dimensions
         bond_dims_[site] = new_chi_L;
     }
 }
@@ -808,14 +892,14 @@ double DMRGGPU::sweep_left_to_right() {
         energy = optimize_site(site, 'R');
         update_left_env(site);
     }
-    // Optimize last site without SVD (just eigensolve)
+    // Optimize last site without SVD
     {
         int site = L_ - 1;
         form_theta(site, d_theta_);
         energy = lanczos_eigensolver(site, d_theta_);
-        // Copy optimized theta back to MPS
         int sz = chi_L(site) * d_ * chi_R(site);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_theta_, sz * sizeof(double), hipMemcpyDeviceToDevice));
+        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_theta_, sz * sizeof(double),
+                            hipMemcpyDeviceToDevice));
     }
 
     return energy;
@@ -834,7 +918,8 @@ double DMRGGPU::sweep_right_to_left() {
         form_theta(site, d_theta_);
         energy = lanczos_eigensolver(site, d_theta_);
         int sz = chi_L(site) * d_ * chi_R(site);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_theta_, sz * sizeof(double), hipMemcpyDeviceToDevice));
+        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_theta_, sz * sizeof(double),
+                            hipMemcpyDeviceToDevice));
     }
 
     return energy;
@@ -845,28 +930,35 @@ double DMRGGPU::sweep_right_to_left() {
 // ============================================================================
 
 double DMRGGPU::run(int n_sweeps) {
-    printf("=== Reference DMRG-GPU ===\n");
+    printf("=== GPU-Native DMRG (hipTensor + rocBLAS) ===\n");
     printf("L = %d, d = %d, chi_max = %d, D_mpo = %d\n", L_, d_, chi_max_, D_mpo_);
     printf("Running %d sweeps...\n\n", n_sweeps);
+
+    auto t_start = std::chrono::high_resolution_clock::now();
 
     printf("Building initial environments...\n");
     build_initial_environments();
 
+    auto t_envs = std::chrono::high_resolution_clock::now();
+    double env_time = std::chrono::duration<double>(t_envs - t_start).count();
+    printf("  Environment build: %.3f s\n\n", env_time);
+
     double energy_prev = 0.0;
 
     for (int sweep = 0; sweep < n_sweeps; sweep++) {
-        printf("Sweep %3d (L->R):\n", sweep);
+        auto t_sweep = std::chrono::high_resolution_clock::now();
+
         double energy_LR = sweep_left_to_right();
-
-        printf("  E(L->R) = %.12f\n", energy_LR);
-
-        printf("Sweep %3d (R->L):\n", sweep);
         double energy_RL = sweep_right_to_left();
+
+        auto t_sweep_end = std::chrono::high_resolution_clock::now();
+        double sweep_time = std::chrono::duration<double>(t_sweep_end - t_sweep).count();
 
         energy_ = energy_RL;
         double dE = std::abs(energy_ - energy_prev);
 
-        printf("  E(R->L) = %.12f, dE = %.2e\n\n", energy_, dE);
+        printf("Sweep %3d: E = %.12f, dE = %.2e, time = %.3f s\n",
+               sweep, energy_, dE, sweep_time);
 
         if (dE < tol_ && sweep > 0) {
             printf("Converged after %d sweeps!\n", sweep + 1);
@@ -875,6 +967,10 @@ double DMRGGPU::run(int n_sweeps) {
 
         energy_prev = energy_;
     }
+
+    auto t_end = std::chrono::high_resolution_clock::now();
+    double total_time = std::chrono::duration<double>(t_end - t_start).count();
+    printf("\nTotal wall time: %.3f s\n", total_time);
 
     return energy_;
 }

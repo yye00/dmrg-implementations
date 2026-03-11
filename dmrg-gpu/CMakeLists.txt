@@ -7,10 +7,10 @@ set(CMAKE_CXX_COMPILER /opt/rocm/llvm/bin/clang++)
 project(DMRG_GPU LANGUAGES CXX HIP)
 
 # ==========================================
-# Reference DMRG-GPU (Single-Site Baseline)
+# GPU-Native DMRG (hipTensor + rocBLAS)
 # ==========================================
-# Standalone GPU DMRG for AMD MI300X
-# Achieves <1e-10 accuracy on Heisenberg chain
+# All tensor contractions on GPU via hipTensor
+# All linear algebra on GPU via rocBLAS/rocSOLVER
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -30,7 +30,19 @@ find_package(hip REQUIRED)
 find_package(rocblas REQUIRED)
 find_package(rocsolver REQUIRED)
 
-# Find LAPACK
+# Find hipTensor
+find_library(HIPTENSOR_LIBRARY NAMES hiptensor
+    PATHS ${ROCM_PATH}/lib ${ROCM_PATH}/lib64)
+find_path(HIPTENSOR_INCLUDE_DIR hiptensor/hiptensor.h
+    PATHS ${ROCM_PATH}/include)
+if(NOT HIPTENSOR_LIBRARY)
+    message(FATAL_ERROR "hipTensor not found at ${ROCM_PATH}")
+endif()
+message(STATUS "hipTensor library: ${HIPTENSOR_LIBRARY}")
+message(STATUS "hipTensor include: ${HIPTENSOR_INCLUDE_DIR}")
+include_directories(${HIPTENSOR_INCLUDE_DIR})
+
+# Find LAPACK (for Lanczos tridiagonal eigensolve)
 find_package(LAPACK REQUIRED)
 
 # Include directories
@@ -39,7 +51,7 @@ include_directories(
 )
 
 # ==========================================
-# Reference DMRG-GPU executable
+# GPU-Native DMRG executable
 # ==========================================
 add_executable(dmrg_gpu
     src/test_dmrg_gpu.cpp
@@ -63,6 +75,7 @@ target_link_libraries(dmrg_gpu
     hip::device
     roc::rocblas
     roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
     ${LAPACK_LIBRARIES}
 )
 
@@ -70,7 +83,8 @@ target_link_libraries(dmrg_gpu
 # Build info
 # ==========================================
 message(STATUS "==============================================")
-message(STATUS "Reference DMRG-GPU Build Configuration")
+message(STATUS "GPU-Native DMRG Build Configuration")
 message(STATUS "==============================================")
 message(STATUS "GPU targets: ${GPU_TARGETS}")
+message(STATUS "hipTensor: ${HIPTENSOR_LIBRARY}")
 message(STATUS "==============================================")
