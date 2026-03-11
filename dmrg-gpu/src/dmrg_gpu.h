@@ -60,12 +60,8 @@ private:
     hipStream_t stream_;
     rocblas_handle rocblas_h_;
 
-    // hipTensor handle and contraction intermediates
-    hiptensorHandle_t ht_handle_;
-    double* d_T1_;  // max-sized contraction intermediate
-    double* d_T2_;  // max-sized contraction intermediate
-
-    // Cached hipTensor plans keyed by (dim1, dim2)
+public:
+    // Cached hipTensor plans keyed by (dim1, dim2) — public for helper access
     struct CachedPlans {
         hiptensorPlan_t plan1, plan2, plan3;
         void* ws1 = nullptr;
@@ -73,6 +69,12 @@ private:
         void* ws3 = nullptr;
         uint64_t ws_sz1 = 0, ws_sz2 = 0, ws_sz3 = 0;
     };
+
+private:
+    // hipTensor handle and contraction intermediates
+    hiptensorHandle_t ht_handle_;
+    double* d_T1_;  // max-sized contraction intermediate
+    double* d_T2_;  // max-sized contraction intermediate
 
     std::map<std::pair<int,int>, CachedPlans*> heff_plan_cache_;
     std::map<std::pair<int,int>, CachedPlans*> lenv_plan_cache_;

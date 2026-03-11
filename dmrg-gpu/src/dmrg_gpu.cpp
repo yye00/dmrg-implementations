@@ -65,11 +65,11 @@ static hiptensorPlan_t create_contraction_plan(
 {
     hiptensorTensorDescriptor_t descA, descB, descC;
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &descA,
-        nA, extA, NULL, HIP_R_64F, 0));
+        nA, extA, NULL, HIPTENSOR_R_64F, 0));
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &descB,
-        nB, extB, NULL, HIP_R_64F, 0));
+        nB, extB, NULL, HIPTENSOR_R_64F, 0));
     HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &descC,
-        nC, extC, NULL, HIP_R_64F, 0));
+        nC, extC, NULL, HIPTENSOR_R_64F, 0));
 
     hiptensorOperationDescriptor_t opDesc;
     HIPTENSOR_CHECK(hiptensorCreateContraction(handle, &opDesc,
@@ -81,7 +81,7 @@ static hiptensorPlan_t create_contraction_plan(
 
     hiptensorPlanPreference_t pref;
     HIPTENSOR_CHECK(hiptensorCreatePlanPreference(handle, &pref,
-        HIPTENSOR_ALGO_DEFAULT));
+        HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_NONE));
 
     hiptensorPlan_t plan;
     HIPTENSOR_CHECK(hiptensorCreatePlan(handle, &plan, opDesc, pref, 0));
