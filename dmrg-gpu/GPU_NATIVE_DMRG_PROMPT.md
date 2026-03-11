@@ -12,14 +12,36 @@ scalars).
 CPU numpy time). Realistically, with proper GPU contractions on MI300X, this should be **well
 under 1 second**.
 
-## Machine and Build Environment
+## Remote Machine — ALL Work Happens Here
 
-- **Remote host:** `ssh hotaisle@23.183.40.79` (passwordless)
+**All compilation, editing, and testing MUST happen on the remote GPU machine.**
+The local machine has no GPU and cannot compile HIP code.
+
+See `CLAUDE.md` in the repository root for full remote access instructions. Quick reference:
+
+- **SSH:** `ssh hotaisle@23.183.40.79` (passwordless, no password prompt)
+- **tmux session:** `tmux attach -t test_remote` (persistent session, always running)
+- **Send commands to tmux:** `tmux send-keys -t test_remote 'command here' Enter`
+- **Capture tmux output:** `tmux capture-pane -t test_remote -p | tail -20`
+- **Remote repo path:** `/home/hotaisle/dmrg-implementations/`
+- **GPU code path:** `/home/hotaisle/dmrg-implementations/dmrg-gpu/`
+
+### Remote Machine Details
+
 - **GPU:** AMD Instinct MI300X (gfx942)
 - **ROCm:** 7.2 at `/opt/rocm`
-- **Project path:** `/home/hotaisle/dmrg-implementations/dmrg-gpu/`
 - **hipTensor header:** `/opt/rocm/include/hiptensor/hiptensor.h` (confirmed present)
 - **hipTensor library:** `/opt/rocm/lib/libhiptensor.so` (confirmed present)
+- **GitHub token:** Configured on remote for commits/pushes
+- **Git user:** Configured on remote
+
+### Workflow
+
+1. SSH into the remote machine (or use tmux session)
+2. Edit files on the remote machine
+3. Build on the remote machine: `cd /home/hotaisle/dmrg-implementations/dmrg-gpu/build && cmake .. -DGPU_TARGETS=gfx942 && make -j8`
+4. Test on the remote machine: `./dmrg_gpu 4 16 10`
+5. Commit and push from the remote machine (or pull locally and push)
 
 ## Current Architecture (what's broken)
 
