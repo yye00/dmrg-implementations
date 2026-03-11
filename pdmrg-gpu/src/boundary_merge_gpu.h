@@ -120,7 +120,8 @@ private:
         double& trunc_err,           // [out]
         int& k_out,                  // [out] - truncated bond dim
         int chi_L, int d, int chi_R,
-        hipStream_t stream
+        hipStream_t stream,
+        double* d_A_right_canonical  // [out] (k, d, chi_R) - Vh for R_env
     );
 
     // ============================================================================

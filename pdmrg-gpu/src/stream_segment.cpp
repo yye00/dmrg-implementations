@@ -1226,6 +1226,35 @@ void StreamSegment::build_environments_from_mps() {
                            size_R * sizeof(double), hipMemcpyHostToDevice));
     }
 
+    // FIX #1: QR-canonicalize temp for L_envs (INIT ONLY)
+    std::vector<double*> d_mps_lc(num_sites_);
+    for (int i = 0; i < num_sites_; i++) {
+        HIP_CHECK(hipMalloc(&d_mps_lc[i], mps_chi_left_[i]*d_*mps_chi_right_[i]*sizeof(double)));
+        HIP_CHECK(hipMemcpy(d_mps_lc[i], d_mps_tensors_[i], mps_chi_left_[i]*d_*mps_chi_right_[i]*sizeof(double), hipMemcpyDeviceToDevice));
+    }
+    for (int i = 0; i < num_sites_ - 1; i++) {
+        int m = mps_chi_left_[i]*d_, n = mps_chi_right_[i];
+        if (m >= n) {
+            double *d_tau;
+            HIP_CHECK(hipMalloc(&d_tau, n*sizeof(double)));
+            ROCSOLVER_CHECK(rocsolver_dgeqrf(rocblas_h_, m, n, d_mps_lc[i], m, d_tau));
+            std::vector<double> h_M(m*n), h_R(n*n, 0.0);
+            HIP_CHECK(hipMemcpy(h_M.data(), d_mps_lc[i], m*n*sizeof(double), hipMemcpyDeviceToHost));
+            for (int c = 0; c < n; c++) for (int r = 0; r <= c; r++) h_R[c*n+r] = h_M[c*m+r];
+            double* d_R;
+            HIP_CHECK(hipMalloc(&d_R, n*n*sizeof(double)));
+            HIP_CHECK(hipMemcpy(d_R, h_R.data(), n*n*sizeof(double), hipMemcpyHostToDevice));
+            ROCSOLVER_CHECK(rocsolver_dorgqr(rocblas_h_, m, n, std::min(m,n), d_mps_lc[i], m, d_tau));
+            double *d_res;
+            HIP_CHECK(hipMalloc(&d_res, n*d_*mps_chi_right_[i+1]*sizeof(double)));
+            double a=1, b=0;
+            ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_, rocblas_operation_none, rocblas_operation_none,
+                n, d_*mps_chi_right_[i+1], n, &a, d_R, n, d_mps_lc[i+1], n, &b, d_res, n));
+            HIP_CHECK(hipMemcpy(d_mps_lc[i+1], d_res, n*d_*mps_chi_right_[i+1]*sizeof(double), hipMemcpyDeviceToDevice));
+            HIP_CHECK(hipFree(d_tau)); HIP_CHECK(hipFree(d_R)); HIP_CHECK(hipFree(d_res));
+        }
+    }
+
     // 2. Build L_envs left-to-right
     // L_envs[i+1] = contract(L_envs[i], A[i], W[i], A*[i])
     for (int i = 0; i < num_sites_ - 1; i++) {
@@ -1234,7 +1263,7 @@ void StreamSegment::build_environments_from_mps() {
 
         double* d_L_in = d_L_envs_[i];
         double* d_L_out = d_L_envs_[i + 1];
-        double* d_A = d_mps_tensors_[i];
+        double* d_A = d_mps_lc[i];
         double* d_W = d_mpo_tensors_[i];
 
         // Allocate temp buffers
@@ -1297,6 +1326,37 @@ void StreamSegment::build_environments_from_mps() {
         HIP_CHECK(hipFree(d_temp2));
     }
 
+    for (int i = 0; i < num_sites_; i++) HIP_CHECK(hipFree(d_mps_lc[i]));
+
+    // FIX #1: LQ-canonicalize temp for R_envs (INIT ONLY)
+    std::vector<double*> d_mps_rc(num_sites_);
+    for (int i = 0; i < num_sites_; i++) {
+        HIP_CHECK(hipMalloc(&d_mps_rc[i], mps_chi_left_[i]*d_*mps_chi_right_[i]*sizeof(double)));
+        HIP_CHECK(hipMemcpy(d_mps_rc[i], d_mps_tensors_[i], mps_chi_left_[i]*d_*mps_chi_right_[i]*sizeof(double), hipMemcpyDeviceToDevice));
+    }
+    for (int i = num_sites_ - 1; i > 0; i--) {
+        int m = mps_chi_left_[i], n = d_*mps_chi_right_[i];
+        if (m <= n) {
+            double *d_tau;
+            HIP_CHECK(hipMalloc(&d_tau, m*sizeof(double)));
+            ROCSOLVER_CHECK(rocsolver_dgelqf(rocblas_h_, m, n, d_mps_rc[i], m, d_tau));
+            std::vector<double> h_M(m*n), h_L(m*m, 0.0);
+            HIP_CHECK(hipMemcpy(h_M.data(), d_mps_rc[i], m*n*sizeof(double), hipMemcpyDeviceToHost));
+            for (int c = 0; c < m; c++) for (int r = c; r < m; r++) h_L[c*m+r] = h_M[c*m+r];
+            double* d_L;
+            HIP_CHECK(hipMalloc(&d_L, m*m*sizeof(double)));
+            HIP_CHECK(hipMemcpy(d_L, h_L.data(), m*m*sizeof(double), hipMemcpyHostToDevice));
+            ROCSOLVER_CHECK(rocsolver_dorglq(rocblas_h_, m, n, std::min(m,n), d_mps_rc[i], m, d_tau));
+            double *d_res;
+            HIP_CHECK(hipMalloc(&d_res, mps_chi_left_[i-1]*d_*mps_chi_right_[i-1]*sizeof(double)));
+            double a=1, b=0;
+            ROCBLAS_CHECK(rocblas_dgemm(rocblas_h_, rocblas_operation_none, rocblas_operation_none,
+                mps_chi_left_[i-1]*d_, m, m, &a, d_mps_rc[i-1], mps_chi_left_[i-1]*d_, d_L, m, &b, d_res, mps_chi_left_[i-1]*d_));
+            HIP_CHECK(hipMemcpy(d_mps_rc[i-1], d_res, mps_chi_left_[i-1]*d_*mps_chi_right_[i-1]*sizeof(double), hipMemcpyDeviceToDevice));
+            HIP_CHECK(hipFree(d_tau)); HIP_CHECK(hipFree(d_L)); HIP_CHECK(hipFree(d_res));
+        }
+    }
+
     // 3. Build R_envs right-to-left
     // R_envs[i] = contract(A[i+1], W[i+1], A*[i+1], R_envs[i+1])
     for (int i = num_sites_ - 2; i >= 0; i--) {
@@ -1305,7 +1365,7 @@ void StreamSegment::build_environments_from_mps() {
 
         double* d_R_in = d_R_envs_[i + 1];
         double* d_R_out = d_R_envs_[i];
-        double* d_A = d_mps_tensors_[i + 1];
+        double* d_A = d_mps_rc[i + 1];
         double* d_W = d_mpo_tensors_[i + 1];
 
         // Allocate temp buffers
@@ -1367,6 +1427,8 @@ void StreamSegment::build_environments_from_mps() {
         HIP_CHECK(hipFree(d_temp1));
         HIP_CHECK(hipFree(d_temp2));
     }
+
+    for (int i = 0; i < num_sites_; i++) HIP_CHECK(hipFree(d_mps_rc[i]));
 
     hipStreamSynchronize(stream_);
     printf("[Stream %d] All environments built from MPS\\n", id_);

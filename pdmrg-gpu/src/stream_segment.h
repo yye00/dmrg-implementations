@@ -18,6 +18,7 @@ struct BoundaryData {
     // MPS tensors at boundary
     double* d_psi_left;   // (chi_L, d, chi_bond) - right edge of left segment
     double* d_psi_right;  // (chi_bond, d, chi_R) - left edge of right segment
+    double* d_psi_right_canonical;  // NEW: Vh for R_env (right-canonical)
 
     // V = Lambda^-1 bridge matrix (critical for exact boundary reconciliation)
     double* d_V;          // (chi_bond,) - current V = 1/S values

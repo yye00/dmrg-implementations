@@ -313,6 +313,10 @@ void BoundaryMergeGPU::merge(BoundaryData* left, BoundaryData* right,
     HIP_CHECK(hipMalloc(&d_A_left_temp, chi_L * d * max_bond_ * sizeof(double)));
     HIP_CHECK(hipMalloc(&d_A_right_temp, max_bond_ * d * chi_R * sizeof(double)));
 
+    // Allocate canonical buffer for Fix #2
+    double* d_A_right_canonical_temp;
+    HIP_CHECK(hipMalloc(&d_A_right_canonical_temp, max_bond_ * d * chi_R * sizeof(double)));
+
     split_with_svd(
         d_theta_,  // Now contains optimized theta
         d_A_left_temp,   // Temporary buffer for A_left_new
@@ -321,7 +325,8 @@ void BoundaryMergeGPU::merge(BoundaryData* left, BoundaryData* right,
         trunc_err,
         k_out,
         chi_L, d, chi_R,
-        stream
+        stream,
+        d_A_right_canonical_temp  // FIX #2: canonical tensor
     );
 
     // Step 4: Compute V_new = 1/S (into temporary buffer)
@@ -332,7 +337,7 @@ void BoundaryMergeGPU::merge(BoundaryData* left, BoundaryData* right,
         d_S_temp,
         d_V_temp,
         k_out,
-        1e-12,  // Regularization
+        1e-14,  // Regularization
         stream
     );
 
@@ -345,12 +350,15 @@ void BoundaryMergeGPU::merge(BoundaryData* left, BoundaryData* right,
     // Allocate new buffers with correct size
     HIP_CHECK(hipMalloc(&left->d_psi_left, chi_L * d * k_out * sizeof(double)));
     HIP_CHECK(hipMalloc(&right->d_psi_right, k_out * d * chi_R * sizeof(double)));
+    HIP_CHECK(hipMalloc(&right->d_psi_right_canonical, k_out * d * chi_R * sizeof(double)));
     HIP_CHECK(hipMalloc(&left->d_V, k_out * sizeof(double)));
 
     // Copy from temporary buffers
     HIP_CHECK(hipMemcpy(left->d_psi_left, d_A_left_temp,
                         chi_L * d * k_out * sizeof(double), hipMemcpyDeviceToDevice));
     HIP_CHECK(hipMemcpy(right->d_psi_right, d_A_right_temp,
+                        k_out * d * chi_R * sizeof(double), hipMemcpyDeviceToDevice));
+    HIP_CHECK(hipMemcpy(right->d_psi_right_canonical, d_A_right_canonical_temp,
                         k_out * d * chi_R * sizeof(double), hipMemcpyDeviceToDevice));
     HIP_CHECK(hipMemcpy(left->d_V, d_V_temp, k_out * sizeof(double), hipMemcpyDeviceToDevice));
 
@@ -363,6 +371,7 @@ void BoundaryMergeGPU::merge(BoundaryData* left, BoundaryData* right,
     HIP_CHECK(hipFree(d_A_left_temp));
     HIP_CHECK(hipFree(d_A_right_temp));
     HIP_CHECK(hipFree(d_V_temp));
+    HIP_CHECK(hipFree(d_A_right_canonical_temp));
 }
 
 //==============================================================================
@@ -793,7 +802,8 @@ void BoundaryMergeGPU::split_with_svd(
     double& trunc_err,
     int& k_out,
     int chi_L, int d, int chi_R,
-    hipStream_t stream
+    hipStream_t stream,
+    double* d_A_right_canonical
 ) {
     // Reshape theta: (chi_L, d, d, chi_R) → M: (chi_L*d, d*chi_R)
     // For column-major, this is just a reinterpretation
@@ -835,7 +845,11 @@ void BoundaryMergeGPU::split_with_svd(
     // Vh is (result.rank, n), we want (k, n)
     // Multiply S into Vh: Vh[i, :] *= S[i]
 
-    // Copy Vh first
+    // CRITICAL FIX: Copy Vh to canonical buffer FIRST (for R_env updates)
+    HIP_CHECK(hipMemcpy(d_A_right_canonical, result.d_Vh, k * n * sizeof(double),
+                       hipMemcpyDeviceToDevice));
+
+    // Copy Vh to d_A_right_new (will be scaled by S)
     HIP_CHECK(hipMemcpy(d_A_right_new, result.d_Vh, k * n * sizeof(double),
                         hipMemcpyDeviceToDevice));
 

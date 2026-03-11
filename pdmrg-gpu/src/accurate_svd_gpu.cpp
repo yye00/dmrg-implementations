@@ -79,8 +79,12 @@ AccurateSVD_GPU::AccurateSVD_GPU(double eps, int max_depth)
     : epsilon(eps), max_recursion_depth(0)  // TEMP: Disable recursion for debugging
 {
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h));
+    // Initialize workspace to zeros
+    workspace.d_work = nullptr;
+    workspace.size = 0;
+    workspace.d_info = nullptr;
+    workspace.d_rwork = nullptr;
     // ROCm 7.2.0: rocsolver functions use rocblas_handle directly
-    std::cerr << "DEBUG: AccurateSVD_GPU created with max_depth=0 (recursion disabled for debugging)" << std::endl;
 }
 
 AccurateSVD_GPU::~AccurateSVD_GPU() {
@@ -130,18 +134,8 @@ AccurateSVDResult AccurateSVD_GPU::standard_svd(double* d_M, int m, int n) {
         HIP_CHECK(hipMalloc(&workspace.d_info, sizeof(int)));
     }
 
-    // Debug: Check matrix before SVD
-    std::vector<double> debug_M(std::min(9, m*n));
-    HIP_CHECK(hipMemcpy(debug_M.data(), d_M, std::min(9, m*n) * sizeof(double), hipMemcpyDeviceToHost));
-    std::cerr << "DEBUG: Matrix before SVD (first 9 elements): ";
-    for (int i = 0; i < std::min(9, m*n); i++) {
-        std::cerr << debug_M[i] << " ";
-    }
-    std::cerr << std::endl;
-
     // Compute SVD (ROCm 7.2.0 API - no separate buffer size query)
     // Note: rocsolver_dgesvd modifies the input matrix d_M
-    std::cerr << "DEBUG: Calling rocsolver_dgesvd(m=" << m << ", n=" << n << ", lda=" << m << ", ldu=" << m << ", ldv=" << k << ")" << std::endl;
 
     ROCSOLVER_CHECK(rocsolver_dgesvd(
         rocblas_h,               // Note: use rocblas_handle, not rocsolver_handle

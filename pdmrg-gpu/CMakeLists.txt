@@ -32,7 +32,7 @@ find_library(HIPTENSOR_LIBRARY
     REQUIRED
 )
 
-message(STATUS "Found hipTensor: ${HIPTENSOR_LIBRARY}")
+message(STATUS "Found hipTensor: ")
 
 # GPU architecture
 set(GPU_TARGETS "gfx942" CACHE STRING "GPU targets to compile for")
@@ -56,6 +56,7 @@ target_link_libraries(heisenberg_gpu
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
 )
 
 # DMRG Benchmark (PDMRG vs PDMRG2 comparison)
@@ -73,6 +74,7 @@ target_link_libraries(dmrg_benchmark
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
 )
 
 # GPU-Native DMRG (minimal transfers: upload → compute → download)
@@ -90,6 +92,7 @@ target_link_libraries(dmrg_gpu_native
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
 )
 
 # Complete DMRG with Lanczos (working version)
@@ -105,6 +108,7 @@ target_link_libraries(heisenberg_complete
     hip::device
     roc::rocblas
     roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
 )
 
 # PDMRG - Stream parallelized DMRG (production)
@@ -120,6 +124,7 @@ target_link_libraries(pdmrg_complete
     hip::device
     roc::rocblas
     roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
 )
 
 # PDMRG2 - GPU-optimized DMRG with Block-Davidson (production)
@@ -135,6 +140,7 @@ target_link_libraries(pdmrg2_complete
     hip::device
     roc::rocblas
     roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
 )
 
 # Benchmark runner
@@ -150,6 +156,7 @@ target_link_libraries(benchmark_runner
     hip::device
     roc::rocblas
     roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
 )
 
 # Production DMRG (complete implementation for paper)
@@ -165,6 +172,7 @@ target_link_libraries(dmrg_production
     hip::device
     roc::rocblas
     roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
 )
 
 # Installation
@@ -180,7 +188,7 @@ message(STATUS "ROCm path: ${ROCM_PATH}")
 message(STATUS "GPU targets: ${GPU_TARGETS}")
 message(STATUS "HIP compiler: ${CMAKE_HIP_COMPILER}")
 message(STATUS "CXX compiler: ${CMAKE_CXX_COMPILER}")
-message(STATUS "hipTensor: ${HIPTENSOR_LIBRARY}")
+message(STATUS "hipTensor: ")
 message(STATUS "Priority: 1. Accuracy, 2. Performance")
 message(STATUS "Data type: complex128 (hipDoubleComplex)")
 message(STATUS "==============================================")
@@ -196,6 +204,7 @@ target_link_libraries(dmrg_working
     hip::device
     roc::rocblas
     roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
 )
 
 # DMRG with Full Environment Tensors (MPO-based)
@@ -212,6 +221,7 @@ target_link_libraries(dmrg_with_environments
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
 )
 
 # Minimal GPU-Only DMRG (Production - Zero CPU Transfers)
@@ -227,6 +237,7 @@ target_link_libraries(dmrg_minimal_gpu
     hip::device
     roc::rocblas
     roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
 )
 
 # PDMRG GPU - Production with hipTensor environments + BLAS-2 (stream-parallelized)
@@ -243,6 +254,7 @@ target_link_libraries(pdmrg_gpu
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
 )
 
 # PDMRG2 GPU - Production with hipTensor environments + BLAS-3 H_eff (GPU-optimized)
@@ -259,6 +271,7 @@ target_link_libraries(pdmrg2_gpu
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
 )
 
 # Phase 1 Tests - AccurateSVD_GPU and OptimizedHeff
@@ -279,6 +292,7 @@ target_link_libraries(test_phase1
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
 )
 
 # Phase 2: StreamSegment test
@@ -301,6 +315,7 @@ target_link_libraries(test_stream_segment
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
 )
 
 # Phase 2: BoundaryMergeGPU test
@@ -325,6 +340,7 @@ target_link_libraries(test_boundary_merge
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
     lapack
 )
 
@@ -352,6 +368,7 @@ target_link_libraries(test_stream_coordinator
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
     lapack
 )
 
@@ -381,6 +398,7 @@ target_link_libraries(test_heisenberg_multistream
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
     lapack
 )
 
@@ -407,6 +425,7 @@ target_link_libraries(pdmrg_benchmark_loaded
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
     lapack
 )
 
@@ -424,5 +443,28 @@ target_link_libraries(pdmrg_benchmark_loaded_v2
     roc::rocblas
     roc::rocsolver
     ${HIPTENSOR_LIBRARY}
+    
+    lapack
+)
+
+# Reference DMRG-GPU Test (baseline single-site DMRG implementation)
+add_executable(test_dmrg_gpu
+    src/test_dmrg_gpu.cpp
+    src/dmrg_gpu.cpp
+    src/accurate_svd_gpu.cpp
+)
+set_source_files_properties(src/test_dmrg_gpu.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/dmrg_gpu.cpp PROPERTIES LANGUAGE HIP)
+set_source_files_properties(src/accurate_svd_gpu.cpp PROPERTIES LANGUAGE HIP)
+target_compile_options(test_dmrg_gpu PRIVATE
+    $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
+    -O3
+)
+target_link_libraries(test_dmrg_gpu
+    hip::device
+    roc::rocblas
+    roc::rocsolver
+    ${HIPTENSOR_LIBRARY}
+    
     lapack
 )
