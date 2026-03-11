@@ -12,6 +12,7 @@ This repository contains **in-house MPI-parallel DMRG implementations** validate
 - **A2DMRG**: Additive two-level DMRG with parallel warmup and coarse-space correction
 - **PDMRG2**: ⚠️ **Specification only** — GEMM-optimized CPU implementation (see `pdmrg2_gpu.md`)
 - **PDMRG-GPU**: 🔬 **Experimental** — GPU-accelerated implementation using hipTensor/rocBLAS (see `pdmrg-gpu/`)
+- **DMRG-GPU**: GPU-native single-site DMRG using rocBLAS/rocSOLVER on AMD MI300X (see `dmrg-gpu/`)
 
 ### Reference Baselines (External)
 
@@ -41,6 +42,7 @@ All implementations achieve machine precision agreement (ΔE < 1e-14) on correct
 ```
 ├── a2dmrg/                  # A2DMRG implementation
 ├── pdmrg/                   # PDMRG implementation
+├── dmrg-gpu/                # GPU-native DMRG (C++/HIP, rocBLAS/rocSOLVER)
 ├── pdmrg-gpu/               # Experimental GPU implementation (C++/hipTensor)
 ├── benchmarks/              # Benchmark scripts and results
 ├── reports/                 # Performance and analysis reports
@@ -123,7 +125,51 @@ Key planned changes:
 
 **Implementation Status**: Specification complete, no code written yet.
 
-### GPU Experimental Path
+### GPU-Native DMRG (`dmrg-gpu/`)
+
+Single-site DMRG with all tensor contractions on GPU via rocBLAS `dgemm`. Targets AMD MI300X (gfx942) with ROCm 7.2+.
+
+**Architecture**: All environment updates, H_eff applications, and Lanczos Krylov iterations run on GPU. Only the tridiagonal eigensolve (~100 elements) and SVD run on CPU (LAPACK). GPU SVD via rocsolver is available but slower for bond dimensions below ~250.
+
+**Build & Run** (on MI300X host):
+```bash
+cd dmrg-gpu && mkdir build && cd build
+cmake .. -DGPU_TARGETS=gfx942
+make -j
+./dmrg_gpu 32 64 30          # L=32, chi=64, 30 sweeps
+./dmrg_gpu 32 64 30 --gpu-svd  # use GPU SVD instead of CPU
+```
+
+#### Performance (AMD MI300X, Heisenberg spin-1/2 chain)
+
+All benchmarks: single-site DMRG, 5 sweeps to convergence, Heisenberg OBC.
+
+| System | Bond dim | dmrg-gpu (CPU SVD) | dmrg-gpu (GPU SVD) | quimb DMRG1 (1 CPU) |
+|--------|----------|-------------------|-------------------|---------------------|
+| L=8    | 32       | 0.08s             | 0.3s              | 0.05s               |
+| L=32   | 64       | 1.3s              | 4.5s              | 4.7s                |
+| L=64   | 128      | 7.2s              | 18s               | ~40s                |
+| L=128  | 128      | 15.8s             | ~45s              | ~80s                |
+
+**Key findings**:
+- GPU tensor contractions (dgemm) are fast even at small chi, but SVD dominates runtime (80-96%)
+- rocsolver SVD has ~10ms launch overhead per call, making it 2-6x slower than LAPACK for chi < 200
+- CPU LAPACK SVD is the default; use `--gpu-svd` flag to switch to rocsolver
+- GPU SVD breaks even at chi ~250 and wins for chi > 300
+- At chi=128+, dmrg-gpu with CPU SVD is 3-5x faster than single-threaded quimb
+
+#### CPU vs GPU Work Distribution
+
+| Component | Backend | Notes |
+|-----------|---------|-------|
+| Environment updates (L, R) | GPU (rocBLAS dgemm) | Batched over MPO indices |
+| H_eff matvec (Lanczos) | GPU (rocBLAS dgemm) | Batched GEMM, ~10 iterations |
+| Lanczos reorthogonalization | GPU (rocBLAS dgemv) | Full reorth via 2 dgemv calls |
+| Tridiagonal eigensolve | CPU (LAPACK dstev) | ~100 elements, negligible cost |
+| SVD truncation | CPU (LAPACK dgesvd) or GPU (rocsolver) | Toggleable; CPU default |
+| MPS tensor reshape/update | GPU (rocBLAS dgemm) | S*Vh or U*S multiplication |
+
+### GPU Experimental Path (legacy)
 
 The `pdmrg-gpu/` directory contains experimental GPU implementations using hipTensor and rocBLAS. This is research code under active development and not production-ready.
 

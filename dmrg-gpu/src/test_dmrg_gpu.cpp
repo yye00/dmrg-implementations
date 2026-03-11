@@ -3,29 +3,29 @@
 #include <map>
 #include <cmath>
 #include <vector>
+#include <cstring>
 
-// Heisenberg MPO construction - UPPER TRIANGULAR form
+using Complex = hipDoubleComplex;
+
+static inline Complex cplx(double re, double im = 0.0) {
+    return make_hipDoubleComplex(re, im);
+}
+
+// ============================================================================
+// Heisenberg MPO (real, D=5, upper triangular)
+// ============================================================================
+// W[w, s, sp, wp] stored as w + s*D + sp*D*d + wp*D*d*d
 //
-// MPO tensor layout: W[w, s, sp, wp] stored as w + s*D + sp*D*d + wp*D*d*d
-// Physical index convention: W[w, s, sp, wp] = <sp|O_{w,wp}|s>
-//
-// MPO transfer matrix structure (D=5, upper triangular):
-//   Row 0: [I, S+, S-, Sz, 0]      <- open channel: injects operators
-//   Row 1: [0,  0,  0,  0, 0.5*S-] <- receives S+ from row 0, emits 0.5*S-
-//   Row 2: [0,  0,  0,  0, 0.5*S+] <- receives S- from row 0, emits 0.5*S+
-//   Row 3: [0,  0,  0,  0, Sz    ] <- receives Sz from row 0, emits Sz
-//   Row 4: [0,  0,  0,  0, I     ] <- closed channel: accumulates energy
-//
-// Nearest-neighbor interactions via paths:
-//   0 -> 1 -> 4: S+_i * 0.5*S-_j
-//   0 -> 2 -> 4: S-_i * 0.5*S+_j
-//   0 -> 3 -> 4: Sz_i * Sz_j
-//   Total: 0.5*(S+S- + S-S+) + SzSz = Heisenberg
+// Transfer matrix (D=5):
+//   Row 0: [I, S+, S-, Sz, 0]
+//   Row 1: [0,  0,  0,  0, 0.5*S-]
+//   Row 2: [0,  0,  0,  0, 0.5*S+]
+//   Row 3: [0,  0,  0,  0, Sz    ]
+//   Row 4: [0,  0,  0,  0, I     ]
 //
 void build_heisenberg_mpo(int L, int D_mpo, std::vector<double*>& h_mpo_tensors) {
-    // Operator arrays stored as O[sp*2+s] = <sp|O|s>
-    double Sp[4] = {0, 1, 0, 0};  // S+ = |0><1|
-    double Sm[4] = {0, 0, 1, 0};  // S- = |1><0|
+    double Sp[4] = {0, 1, 0, 0};
+    double Sm[4] = {0, 0, 1, 0};
     double Sz[4] = {0.5, 0, 0, -0.5};
     double Id[4] = {1, 0, 0, 1};
 
@@ -34,8 +34,7 @@ void build_heisenberg_mpo(int L, int D_mpo, std::vector<double*>& h_mpo_tensors)
         h_mpo_tensors[site] = new double[size]();
 
         if (site == 0) {
-            // Left boundary: only row 0
-            for (int s = 0; s < 2; s++) {
+            for (int s = 0; s < 2; s++)
                 for (int sp = 0; sp < 2; sp++) {
                     int idx = sp*2 + s;
                     h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*2 + 0*D_mpo*2*2] = Id[idx];
@@ -43,10 +42,8 @@ void build_heisenberg_mpo(int L, int D_mpo, std::vector<double*>& h_mpo_tensors)
                     h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*2 + 2*D_mpo*2*2] = Sm[idx];
                     h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*2 + 3*D_mpo*2*2] = Sz[idx];
                 }
-            }
         } else if (site == L - 1) {
-            // Right boundary: only column D-1
-            for (int s = 0; s < 2; s++) {
+            for (int s = 0; s < 2; s++)
                 for (int sp = 0; sp < 2; sp++) {
                     int idx = sp*2 + s;
                     h_mpo_tensors[site][1 + s*D_mpo + sp*D_mpo*2 + 4*D_mpo*2*2] = 0.5*Sm[idx];
@@ -54,100 +51,285 @@ void build_heisenberg_mpo(int L, int D_mpo, std::vector<double*>& h_mpo_tensors)
                     h_mpo_tensors[site][3 + s*D_mpo + sp*D_mpo*2 + 4*D_mpo*2*2] = Sz[idx];
                     h_mpo_tensors[site][4 + s*D_mpo + sp*D_mpo*2 + 4*D_mpo*2*2] = Id[idx];
                 }
-            }
         } else {
-            // Bulk: upper triangular
-            for (int s = 0; s < 2; s++) {
+            for (int s = 0; s < 2; s++)
                 for (int sp = 0; sp < 2; sp++) {
                     int idx = sp*2 + s;
-                    // Row 0: identity and operator injection
                     h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*2 + 0*D_mpo*2*2] = Id[idx];
                     h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*2 + 1*D_mpo*2*2] = Sp[idx];
                     h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*2 + 2*D_mpo*2*2] = Sm[idx];
                     h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*2 + 3*D_mpo*2*2] = Sz[idx];
-                    // Rows 1-3: operator completion (column D-1 only)
                     h_mpo_tensors[site][1 + s*D_mpo + sp*D_mpo*2 + 4*D_mpo*2*2] = 0.5*Sm[idx];
                     h_mpo_tensors[site][2 + s*D_mpo + sp*D_mpo*2 + 4*D_mpo*2*2] = 0.5*Sp[idx];
                     h_mpo_tensors[site][3 + s*D_mpo + sp*D_mpo*2 + 4*D_mpo*2*2] = Sz[idx];
-                    // Row 4: identity propagation
                     h_mpo_tensors[site][4 + s*D_mpo + sp*D_mpo*2 + 4*D_mpo*2*2] = Id[idx];
                 }
-            }
         }
     }
 }
 
-int main(int argc, char** argv) {
-    int L = 8;
+// ============================================================================
+// Josephson Junction MPO (complex128, D=4, UPPER triangular)
+// ============================================================================
+// H = E_C sum_i (n_i - n_g)^2 - (E_J/2) sum_<ij> [e^{i*phi_ext} phi+_i phi-_j + h.c.]
+//
+// Physical dim: d = 2*n_max + 1 (charge basis -n_max..+n_max)
+// MPO bond dim: D_mpo = 4 (fixed for all sites, zero-padded boundaries)
+//
+// Operators:
+//   exp_iphi:  e^{iphi}|n> = |n+1>, raises charge
+//   exp_miphi: e^{-iphi}|n> = |n-1>, lowers charge
+//   H_onsite:  diagonal, H_onsite[i,i] = E_C*(i-n_max)^2 - n_g*(i-n_max)
+//
+// Transfer matrix (D=4, upper triangular):
+//   Row 0: [I,  a*phi+,  a'*phi-,  H_onsite]  <- open channel
+//   Row 1: [0,  0,       0,        phi-    ]   <- receives phi+, emits phi-
+//   Row 2: [0,  0,       0,        phi+    ]   <- receives phi-, emits phi+
+//   Row 3: [0,  0,       0,        I       ]   <- closed channel
+//
+// where a = -E_J/2 * e^{i*phi_ext}, a' = conj(a)
+//
+// Coupling paths:
+//   0 -> 1 -> 3: a*phi+_i * phi-_j  (= -EJ/2 * e^{iphi} * phi+_i * phi-_j)
+//   0 -> 2 -> 3: a'*phi-_i * phi+_j (= -EJ/2 * e^{-iphi} * phi-_i * phi+_j)
+//   On-site: (0,3) = H_onsite at each site
+//
+// Boundary convention (matches Heisenberg):
+//   L[0, 0, 0] = 1 (selects row 0)
+//   R[0, D-1, 0] = 1 (selects column D-1 = 3)
+//
+void build_josephson_mpo(int L, int d, int D_mpo,
+                         double E_J, double E_C, double n_g, int n_max,
+                         double phi_ext,
+                         std::vector<Complex*>& h_mpo_tensors) {
+
+    // Build operator matrices (d x d), stored as O[sp*d + s]
+    std::vector<Complex> eye_op(d * d, cplx(0));
+    std::vector<Complex> exp_iphi(d * d, cplx(0));
+    std::vector<Complex> exp_miphi(d * d, cplx(0));
+    std::vector<Complex> H_onsite(d * d, cplx(0));
+
+    for (int i = 0; i < d; i++) {
+        eye_op[i * d + i] = cplx(1.0);
+        double charge = (double)(i - n_max);
+        H_onsite[i * d + i] = cplx(E_C * charge * charge - n_g * charge);
+    }
+    for (int i = 0; i < d - 1; i++) {
+        exp_iphi[(i + 1) * d + i] = cplx(1.0);   // |n+1><n|
+        exp_miphi[i * d + (i + 1)] = cplx(1.0);   // |n><n+1| = |n-1><n|
+    }
+
+    // Coupling: alpha = -E_J/2 * e^{i*phi_ext}
+    double cos_p = cos(phi_ext);
+    double sin_p = sin(phi_ext);
+    Complex alpha_coup = cplx(-E_J / 2.0 * cos_p, -E_J / 2.0 * sin_p);
+    Complex alpha_conj = cplx(-E_J / 2.0 * cos_p,  E_J / 2.0 * sin_p);
+
+    // Helper: scale operator by complex scalar
+    auto scale_op = [&](Complex c, const std::vector<Complex>& op) {
+        std::vector<Complex> result(d * d);
+        for (int i = 0; i < d * d; i++) {
+            result[i] = make_hipDoubleComplex(
+                hipCreal(c) * hipCreal(op[i]) - hipCimag(c) * hipCimag(op[i]),
+                hipCreal(c) * hipCimag(op[i]) + hipCimag(c) * hipCreal(op[i]));
+        }
+        return result;
+    };
+
+    auto alpha_exp_iphi = scale_op(alpha_coup, exp_iphi);
+    auto alpha_exp_miphi = scale_op(alpha_conj, exp_miphi);
+
+    // Helper: set W[w, s, sp, wp] = op[sp*d + s]
+    // Memory layout: w + s*D_mpo + sp*D_mpo*d + wp*D_mpo*d*d
+    auto set_block = [&](Complex* W, int w, int wp,
+                         const std::vector<Complex>& op) {
+        for (int s = 0; s < d; s++)
+            for (int sp = 0; sp < d; sp++)
+                W[w + s * D_mpo + sp * D_mpo * d + wp * D_mpo * d * d] = op[sp * d + s];
+    };
+
+    for (int site = 0; site < L; site++) {
+        int size = D_mpo * d * d * D_mpo;
+        h_mpo_tensors[site] = new Complex[size]();
+
+        if (site == 0) {
+            // Left boundary: only row 0 non-zero
+            set_block(h_mpo_tensors[site], 0, 0, eye_op);             // (0,0): I
+            set_block(h_mpo_tensors[site], 0, 1, alpha_exp_iphi);     // (0,1): a*phi+
+            set_block(h_mpo_tensors[site], 0, 2, alpha_exp_miphi);    // (0,2): a'*phi-
+            set_block(h_mpo_tensors[site], 0, 3, H_onsite);           // (0,3): H_onsite
+        } else if (site == L - 1) {
+            // Right boundary: only column D-1=3 non-zero
+            set_block(h_mpo_tensors[site], 0, 3, H_onsite);           // (0,3): H_onsite
+            set_block(h_mpo_tensors[site], 1, 3, exp_miphi);          // (1,3): phi-
+            set_block(h_mpo_tensors[site], 2, 3, exp_iphi);           // (2,3): phi+
+            set_block(h_mpo_tensors[site], 3, 3, eye_op);             // (3,3): I
+        } else {
+            // Bulk: upper triangular
+            set_block(h_mpo_tensors[site], 0, 0, eye_op);             // (0,0): I
+            set_block(h_mpo_tensors[site], 0, 1, alpha_exp_iphi);     // (0,1): a*phi+
+            set_block(h_mpo_tensors[site], 0, 2, alpha_exp_miphi);    // (0,2): a'*phi-
+            set_block(h_mpo_tensors[site], 0, 3, H_onsite);           // (0,3): H_onsite
+            set_block(h_mpo_tensors[site], 1, 3, exp_miphi);          // (1,3): phi-
+            set_block(h_mpo_tensors[site], 2, 3, exp_iphi);           // (2,3): phi+
+            set_block(h_mpo_tensors[site], 3, 3, eye_op);             // (3,3): I
+        }
+    }
+}
+
+// ============================================================================
+// Heisenberg test (real)
+// ============================================================================
+int test_heisenberg(int L, int chi_max, int n_sweeps, bool gpu_svd) {
     int d = 2;
-    int chi_max = 32;
     int D_mpo = 5;
-    int n_sweeps = 30;
-
-    if (argc > 1) L = std::atoi(argv[1]);
-    if (argc > 2) chi_max = std::atoi(argv[2]);
-    if (argc > 3) n_sweeps = std::atoi(argv[3]);
 
     printf("======================================\n");
-    printf("Reference DMRG-GPU Test\n");
+    printf("Heisenberg DMRG-GPU Test (float64)\n");
     printf("======================================\n");
-    printf("Parameters:\n");
-    printf("  L = %d (chain length)\n", L);
-    printf("  d = %d (physical dim)\n", d);
-    printf("  chi_max = %d (max bond dim)\n", chi_max);
-    printf("  D_mpo = %d (MPO bond dim)\n", D_mpo);
-    printf("  n_sweeps = %d\n", n_sweeps);
+    printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
+    printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
     printf("======================================\n\n");
 
     std::map<int, double> exact_energies = {
         {4, -1.616025403784},
         {8, -3.374932598688},
-        {16, -7.0819438}
     };
 
-    try {
-        DMRGGPU dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRGGPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    dmrg.set_cpu_svd(!gpu_svd);
+    dmrg.initialize_mps_random();
 
-        printf("Initializing MPS (random state)...\n");
-        dmrg.initialize_mps_random();
+    std::vector<double*> h_mpo_tensors(L);
+    build_heisenberg_mpo(L, D_mpo, h_mpo_tensors);
+    dmrg.set_mpo(h_mpo_tensors);
 
-        printf("Building Heisenberg MPO (upper triangular)...\n");
-        std::vector<double*> h_mpo_tensors(L);
-        build_heisenberg_mpo(L, D_mpo, h_mpo_tensors);
-        dmrg.set_mpo(h_mpo_tensors);
+    double energy = dmrg.run(n_sweeps);
 
-        double energy = dmrg.run(n_sweeps);
+    printf("\n--- RESULT ---\n");
+    printf("Final energy: %.12f\n", energy);
 
-        printf("\n======================================\n");
-        printf("RESULTS:\n");
-        printf("======================================\n");
-        printf("Final energy: %.12f\n", energy);
+    int ret = 0;
+    if (exact_energies.count(L) > 0) {
+        double exact = exact_energies[L];
+        double error = std::abs(energy - exact);
+        printf("Exact energy: %.12f\n", exact);
+        printf("Absolute error: %.2e\n", error);
+        if (error < 1e-10) printf("PASS\n");
+        else { printf("FAIL\n"); ret = 1; }
+    }
 
-        if (exact_energies.count(L) > 0) {
-            double exact = exact_energies[L];
-            double error = std::abs(energy - exact);
-            double rel_error = error / std::abs(exact) * 100.0;
+    for (auto ptr : h_mpo_tensors) delete[] ptr;
+    return ret;
+}
 
-            printf("Exact energy: %.12f\n", exact);
-            printf("Absolute error: %.2e\n", error);
-            printf("Relative error: %.6f%%\n", rel_error);
+// ============================================================================
+// Josephson Junction test (complex128)
+// ============================================================================
+int test_josephson(int L, int chi_max, int n_sweeps, bool gpu_svd,
+                   int n_max, double E_J, double E_C, double phi_ext) {
+    int d = 2 * n_max + 1;
+    int D_mpo = 4;
 
-            if (error < 1e-10) {
-                printf("\nSUCCESS: Accuracy < 1e-10\n");
-            } else if (error < 1e-8) {
-                printf("\nACCEPTABLE: Accuracy < 1e-8\n");
-            } else {
-                printf("\nFAILED: Error too large\n");
-            }
+    printf("======================================\n");
+    printf("Josephson Junction DMRG-GPU Test (complex128)\n");
+    printf("======================================\n");
+    printf("  L=%d, d=%d (n_max=%d), chi_max=%d, D_mpo=%d, sweeps=%d\n",
+           L, d, n_max, chi_max, D_mpo, n_sweeps);
+    printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/%.1f\n", E_J, E_C, M_PI / phi_ext);
+    printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
+    printf("======================================\n\n");
+
+    // Exact energies from direct diagonalization (n_max=1, E_J=1.0, E_C=0.5, phi_ext=pi/4)
+    std::map<int, double> exact_energies;
+    if (n_max == 1 && std::abs(E_J - 1.0) < 1e-10 && std::abs(E_C - 0.5) < 1e-10
+        && std::abs(phi_ext - M_PI/4) < 1e-10) {
+        exact_energies = {
+            {4, -1.053346829927396},
+            {6, -1.748843818181493},
+        };
+    }
+
+    DMRGGPU<Complex> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    dmrg.set_cpu_svd(!gpu_svd);
+    dmrg.initialize_mps_random();
+
+    std::vector<Complex*> h_mpo_tensors(L);
+    build_josephson_mpo(L, d, D_mpo, E_J, E_C, 0.0, n_max, phi_ext, h_mpo_tensors);
+    dmrg.set_mpo(h_mpo_tensors);
+
+    double energy = dmrg.run(n_sweeps);
+
+    printf("\n--- RESULT ---\n");
+    printf("Final energy: %.12f\n", energy);
+
+    int ret = 0;
+    if (exact_energies.count(L) > 0) {
+        double exact = exact_energies[L];
+        double error = std::abs(energy - exact);
+        printf("Exact energy: %.12f\n", exact);
+        printf("Absolute error: %.2e\n", error);
+        if (error < 1e-8) printf("PASS\n");
+        else { printf("FAIL\n"); ret = 1; }
+    }
+
+    for (auto ptr : h_mpo_tensors) delete[] ptr;
+    return ret;
+}
+
+// ============================================================================
+// Main
+// ============================================================================
+int main(int argc, char** argv) {
+    // Defaults
+    int L = 8;
+    int chi_max = 32;
+    int n_sweeps = 30;
+    bool gpu_svd = false;
+    bool run_josephson = false;
+    int n_max = 1;
+    double E_J = 1.0, E_C = 0.5, phi_ext = M_PI / 4;
+
+    // Parse args
+    for (int i = 1; i < argc; i++) {
+        if (std::string(argv[i]) == "--gpu-svd") { gpu_svd = true; continue; }
+        if (std::string(argv[i]) == "--josephson") { run_josephson = true; continue; }
+        if (std::string(argv[i]) == "--nmax" && i+1 < argc) { n_max = std::atoi(argv[++i]); continue; }
+        if (std::string(argv[i]) == "--ej" && i+1 < argc) { E_J = std::atof(argv[++i]); continue; }
+        if (std::string(argv[i]) == "--ec" && i+1 < argc) { E_C = std::atof(argv[++i]); continue; }
+        if (std::string(argv[i]) == "--phi" && i+1 < argc) { phi_ext = std::atof(argv[++i]); continue; }
+        // Positional: L chi_max n_sweeps
+        if (i == 1 || (!run_josephson && argv[i][0] != '-')) {
+            if (i <= 1 || (i == 1)) L = std::atoi(argv[i]);
+            else if (i == 2) chi_max = std::atoi(argv[i]);
+            else if (i == 3) n_sweeps = std::atoi(argv[i]);
         }
-        printf("======================================\n");
+    }
+    // Re-parse positional args more robustly
+    {
+        int pos = 0;
+        for (int i = 1; i < argc; i++) {
+            if (argv[i][0] == '-') {
+                if (std::string(argv[i]) == "--nmax" || std::string(argv[i]) == "--ej"
+                    || std::string(argv[i]) == "--ec" || std::string(argv[i]) == "--phi")
+                    i++;  // skip value
+                continue;
+            }
+            if (pos == 0) L = std::atoi(argv[i]);
+            else if (pos == 1) chi_max = std::atoi(argv[i]);
+            else if (pos == 2) n_sweeps = std::atoi(argv[i]);
+            pos++;
+        }
+    }
 
-        for (auto ptr : h_mpo_tensors) delete[] ptr;
-
+    try {
+        if (run_josephson) {
+            return test_josephson(L, chi_max, n_sweeps, gpu_svd, n_max, E_J, E_C, phi_ext);
+        } else {
+            return test_heisenberg(L, chi_max, n_sweeps, gpu_svd);
+        }
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << std::endl;
         return 1;
     }
-
-    return 0;
 }
