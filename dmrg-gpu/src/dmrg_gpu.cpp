@@ -32,7 +32,7 @@
         hiptensorStatus_t st = call; \
         if (st != HIPTENSOR_STATUS_SUCCESS) { \
             std::cerr << "hipTensor error in " << __FILE__ << ":" << __LINE__ \
-                      << " - status " << st << std::endl; \
+                      << " - " << hiptensorGetErrorString(st) << std::endl; \
             throw std::runtime_error("hipTensor error"); \
         } \
     } while(0)
@@ -81,7 +81,7 @@ static hiptensorPlan_t create_contraction_plan(
 
     hiptensorPlanPreference_t pref;
     HIPTENSOR_CHECK(hiptensorCreatePlanPreference(handle, &pref,
-        HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_NONE));
+        HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_DEFAULT));
 
     hiptensorPlan_t plan;
     HIPTENSOR_CHECK(hiptensorCreatePlan(handle, &plan, opDesc, pref, 0));
