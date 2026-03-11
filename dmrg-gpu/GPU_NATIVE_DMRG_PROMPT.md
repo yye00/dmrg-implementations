@@ -208,23 +208,25 @@ R_env: R[b, w', b']     stored as  b + w'*chi_R + b'*chi_R*D
 We spent days debugging these bugs. Every one of them silently produced wrong answers
 without crashing. **Read this section carefully before writing any code.**
 
-### Bug 1: MPO Must Be Upper-Triangular
+### Bug 1: Boundary Conditions Must Match the MPO
 
-The Heisenberg MPO transfer matrix MUST be **upper-triangular** for single-site DMRG.
+There is **no shape or structure requirement on the MPO** — it can be upper-triangular,
+lower-triangular, dense, or anything else. The only requirement is that the boundary
+environments are consistent with the MPO.
 
-```
-Upper triangular (CORRECT):
-  Row 0: [I,   S+,    S-,   Sz,  0]    ← open channel, injects operators
-  Row 1: [0,    0,     0,    0,  ½S-]   ← receives S+ from row 0
-  Row 2: [0,    0,     0,    0,  ½S+]   ← receives S- from row 0
-  Row 3: [0,    0,     0,    0,  Sz ]   ← receives Sz from row 0
-  Row 4: [0,    0,     0,    0,  I  ]   ← closed channel, accumulates energy
-```
+The boundary environments select which MPO bond indices "start" and "end" the Hamiltonian:
+- Left boundary:  `L[0, w_start, 0] = 1.0`
+- Right boundary: `R[0, w_end,   0] = 1.0`
 
-With lower-triangular form, the energy accumulation path (w=0 → w=D-1 across the chain)
-is broken for L > 2, causing R environments to be identically zero and the energy to
-come out as 0.0. **The left boundary selects w=0 and the right boundary selects w=D-1;
-the MPO must allow signal to flow from w=0 to w=D-1 via upper-triangular entries.**
+The MPO must have a non-zero path from `w_start` to `w_end` across the chain.
+
+**The bug we hit:** The MPO used one convention but the boundaries used another. There
+was no valid path through the MPO, causing R environments to be identically zero and
+energy = 0.0 for L > 2. The fix was making the boundaries match the MPO.
+
+**Current GPU code** uses `L[0,0,0]=1` and `R[0,D-1,0]=1`. The Heisenberg MPO is
+written as upper-triangular to match (signal flows w=0 → w=D-1). If you change one,
+change the other.
 
 ### Bug 2: Physical Index Convention — `<sp|O|s>` Not `<s|O|sp>`
 
