@@ -54,63 +54,55 @@ enum : int32_t {
 };
 
 // ============================================================================
-// Helper: create a single hipTensor contraction plan
+// Helper: create a single hipTensor contraction step (keeps all resources alive)
 // ============================================================================
-static hiptensorPlan_t create_contraction_plan(
+static void create_contraction_step(
     hiptensorHandle_t handle,
+    DMRGGPU::ContractionStep& step,
     int nA, const int64_t* extA, const int32_t* modesA,
     int nB, const int64_t* extB, const int32_t* modesB,
-    int nC, const int64_t* extC, const int32_t* modesC,
-    void** d_workspace, uint64_t* ws_size)
+    int nC, const int64_t* extC, const int32_t* modesC)
 {
-    hiptensorTensorDescriptor_t descA, descB, descC;
-    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &descA,
-        nA, extA, NULL, HIPTENSOR_R_64F, 0));
-    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &descB,
-        nB, extB, NULL, HIPTENSOR_R_64F, 0));
-    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &descC,
-        nC, extC, NULL, HIPTENSOR_R_64F, 0));
+    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &step.descA,
+        nA, extA, nullptr, HIPTENSOR_R_64F, HIPTENSOR_OP_IDENTITY));
+    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &step.descB,
+        nB, extB, nullptr, HIPTENSOR_R_64F, HIPTENSOR_OP_IDENTITY));
+    HIPTENSOR_CHECK(hiptensorCreateTensorDescriptor(handle, &step.descC,
+        nC, extC, nullptr, HIPTENSOR_R_64F, HIPTENSOR_OP_IDENTITY));
 
-    hiptensorOperationDescriptor_t opDesc;
-    HIPTENSOR_CHECK(hiptensorCreateContraction(handle, &opDesc,
-        descA, modesA, HIPTENSOR_OP_IDENTITY,
-        descB, modesB, HIPTENSOR_OP_IDENTITY,
-        descC, modesC, HIPTENSOR_OP_IDENTITY,
-        descC, modesC,
+    HIPTENSOR_CHECK(hiptensorCreateContraction(handle, &step.opDesc,
+        step.descA, modesA, HIPTENSOR_OP_IDENTITY,
+        step.descB, modesB, HIPTENSOR_OP_IDENTITY,
+        step.descC, modesC, HIPTENSOR_OP_IDENTITY,
+        step.descC, modesC,
         HIPTENSOR_COMPUTE_DESC_64F));
 
-    hiptensorPlanPreference_t pref;
-    HIPTENSOR_CHECK(hiptensorCreatePlanPreference(handle, &pref,
+    HIPTENSOR_CHECK(hiptensorCreatePlanPreference(handle, &step.pref,
         HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_DEFAULT));
 
-    hiptensorPlan_t plan;
-    HIPTENSOR_CHECK(hiptensorCreatePlan(handle, &plan, opDesc, pref, 0));
+    HIPTENSOR_CHECK(hiptensorCreatePlan(handle, &step.plan, step.opDesc,
+        step.pref, 0));
 
-    *ws_size = 0;
-    HIPTENSOR_CHECK(hiptensorPlanGetAttribute(handle, plan,
-        HIPTENSOR_PLAN_REQUIRED_WORKSPACE, ws_size, sizeof(*ws_size)));
-    *d_workspace = nullptr;
-    if (*ws_size > 0) HIP_CHECK(hipMalloc(d_workspace, *ws_size));
-
-    // Plans capture all info; descriptors can be destroyed
-    HIPTENSOR_CHECK(hiptensorDestroyPlanPreference(pref));
-    HIPTENSOR_CHECK(hiptensorDestroyOperationDescriptor(opDesc));
-    HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(descC));
-    HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(descB));
-    HIPTENSOR_CHECK(hiptensorDestroyTensorDescriptor(descA));
-
-    return plan;
+    step.ws_size = 0;
+    HIPTENSOR_CHECK(hiptensorPlanGetAttribute(handle, step.plan,
+        HIPTENSOR_PLAN_REQUIRED_WORKSPACE, &step.ws_size, sizeof(step.ws_size)));
+    step.workspace = nullptr;
+    if (step.ws_size > 0) HIP_CHECK(hipMalloc(&step.workspace, step.ws_size));
 }
 
-// Helper to destroy a CachedPlans and free its workspace
+// Helper to destroy a CachedPlans and free all resources
 static void destroy_cached_plans(DMRGGPU::CachedPlans* p) {
     if (!p) return;
-    hiptensorDestroyPlan(p->plan1);
-    hiptensorDestroyPlan(p->plan2);
-    hiptensorDestroyPlan(p->plan3);
-    if (p->ws1) hipFree(p->ws1);
-    if (p->ws2) hipFree(p->ws2);
-    if (p->ws3) hipFree(p->ws3);
+    for (int i = 0; i < 3; i++) {
+        auto& s = p->steps[i];
+        hiptensorDestroyPlan(s.plan);
+        hiptensorDestroyPlanPreference(s.pref);
+        hiptensorDestroyOperationDescriptor(s.opDesc);
+        hiptensorDestroyTensorDescriptor(s.descC);
+        hiptensorDestroyTensorDescriptor(s.descB);
+        hiptensorDestroyTensorDescriptor(s.descA);
+        if (s.workspace) hipFree(s.workspace);
+    }
     delete p;
 }
 
@@ -321,8 +313,8 @@ DMRGGPU::CachedPlans* DMRGGPU::get_heff_plans(int cL, int cR) {
         int32_t mB[] = {M_a, M_s, M_b};
         int64_t eC[] = {(int64_t)D, (int64_t)cL, (int64_t)d, (int64_t)cR};
         int32_t mC[] = {M_w, M_ap, M_s, M_b};
-        p->plan1 = create_contraction_plan(ht_handle_,
-            3, eA, mA, 3, eB, mB, 4, eC, mC, &p->ws1, &p->ws_sz1);
+        create_contraction_step(ht_handle_, p->steps[0],
+            3, eA, mA, 3, eB, mB, 4, eC, mC);
     }
 
     // Step 2: T2[a', s', w', b] = sum_{w,s} W[w, s, s', w'] * T1[w, a', s, b]
@@ -333,8 +325,8 @@ DMRGGPU::CachedPlans* DMRGGPU::get_heff_plans(int cL, int cR) {
         int32_t mB[] = {M_w, M_ap, M_s, M_b};
         int64_t eC[] = {(int64_t)cL, (int64_t)d, (int64_t)D, (int64_t)cR};
         int32_t mC[] = {M_ap, M_sp, M_wp, M_b};
-        p->plan2 = create_contraction_plan(ht_handle_,
-            4, eA, mA, 4, eB, mB, 4, eC, mC, &p->ws2, &p->ws_sz2);
+        create_contraction_step(ht_handle_, p->steps[1],
+            4, eA, mA, 4, eB, mB, 4, eC, mC);
     }
 
     // Step 3: result[a', s', b'] = sum_{w',b} R[b, w', b'] * T2[a', s', w', b]
@@ -345,8 +337,8 @@ DMRGGPU::CachedPlans* DMRGGPU::get_heff_plans(int cL, int cR) {
         int32_t mB[] = {M_ap, M_sp, M_wp, M_b};
         int64_t eC[] = {(int64_t)cL, (int64_t)d, (int64_t)cR};
         int32_t mC[] = {M_ap, M_sp, M_bp};
-        p->plan3 = create_contraction_plan(ht_handle_,
-            3, eA, mA, 4, eB, mB, 3, eC, mC, &p->ws3, &p->ws_sz3);
+        create_contraction_step(ht_handle_, p->steps[2],
+            3, eA, mA, 4, eB, mB, 3, eC, mC);
     }
 
     heff_plan_cache_[key] = p;
@@ -370,8 +362,8 @@ DMRGGPU::CachedPlans* DMRGGPU::get_lenv_plans(int chi_in, int chi_out) {
         int32_t mB[] = {M_a, M_s, M_b};
         int64_t eC[] = {(int64_t)D, (int64_t)chi_in, (int64_t)d, (int64_t)chi_out};
         int32_t mC[] = {M_w, M_ap, M_s, M_b};
-        p->plan1 = create_contraction_plan(ht_handle_,
-            3, eA, mA, 3, eB, mB, 4, eC, mC, &p->ws1, &p->ws_sz1);
+        create_contraction_step(ht_handle_, p->steps[0],
+            3, eA, mA, 3, eB, mB, 4, eC, mC);
     }
 
     // Step 2: T2[a', s', w', b] = sum_{w,s} W[w, s, s', w'] * T1[w, a', s, b]
@@ -382,8 +374,8 @@ DMRGGPU::CachedPlans* DMRGGPU::get_lenv_plans(int chi_in, int chi_out) {
         int32_t mB[] = {M_w, M_ap, M_s, M_b};
         int64_t eC[] = {(int64_t)chi_in, (int64_t)d, (int64_t)D, (int64_t)chi_out};
         int32_t mC[] = {M_ap, M_sp, M_wp, M_b};
-        p->plan2 = create_contraction_plan(ht_handle_,
-            4, eA, mA, 4, eB, mB, 4, eC, mC, &p->ws2, &p->ws_sz2);
+        create_contraction_step(ht_handle_, p->steps[1],
+            4, eA, mA, 4, eB, mB, 4, eC, mC);
     }
 
     // Step 3: L_new[b, w', b'] = sum_{a',s'} A*[a', s', b'] * T2[a', s', w', b]
@@ -394,8 +386,8 @@ DMRGGPU::CachedPlans* DMRGGPU::get_lenv_plans(int chi_in, int chi_out) {
         int32_t mB[] = {M_ap, M_sp, M_wp, M_b};
         int64_t eC[] = {(int64_t)chi_out, (int64_t)D, (int64_t)chi_out};
         int32_t mC[] = {M_b, M_wp, M_bp};
-        p->plan3 = create_contraction_plan(ht_handle_,
-            3, eA, mA, 4, eB, mB, 3, eC, mC, &p->ws3, &p->ws_sz3);
+        create_contraction_step(ht_handle_, p->steps[2],
+            3, eA, mA, 4, eB, mB, 3, eC, mC);
     }
 
     lenv_plan_cache_[key] = p;
@@ -419,8 +411,8 @@ DMRGGPU::CachedPlans* DMRGGPU::get_renv_plans(int chi_in, int chi_out) {
         int32_t mB[] = {M_b, M_wp, M_bp};
         int64_t eC[] = {(int64_t)chi_out, (int64_t)d, (int64_t)D, (int64_t)chi_in};
         int32_t mC[] = {M_a, M_s, M_wp, M_bp};
-        p->plan1 = create_contraction_plan(ht_handle_,
-            3, eA, mA, 3, eB, mB, 4, eC, mC, &p->ws1, &p->ws_sz1);
+        create_contraction_step(ht_handle_, p->steps[0],
+            3, eA, mA, 3, eB, mB, 4, eC, mC);
     }
 
     // Step 2: T2[a, s', w, b'] = sum_{s,w'} W[w, s, s', w'] * T1[a, s, w', b']
@@ -431,8 +423,8 @@ DMRGGPU::CachedPlans* DMRGGPU::get_renv_plans(int chi_in, int chi_out) {
         int32_t mB[] = {M_a, M_s, M_wp, M_bp};
         int64_t eC[] = {(int64_t)chi_out, (int64_t)d, (int64_t)D, (int64_t)chi_in};
         int32_t mC[] = {M_a, M_sp, M_w, M_bp};
-        p->plan2 = create_contraction_plan(ht_handle_,
-            4, eA, mA, 4, eB, mB, 4, eC, mC, &p->ws2, &p->ws_sz2);
+        create_contraction_step(ht_handle_, p->steps[1],
+            4, eA, mA, 4, eB, mB, 4, eC, mC);
     }
 
     // Step 3: R_new[a, w, a'] = sum_{s',b'} A*[a', s', b'] * T2[a, s', w, b']
@@ -443,8 +435,8 @@ DMRGGPU::CachedPlans* DMRGGPU::get_renv_plans(int chi_in, int chi_out) {
         int32_t mB[] = {M_a, M_sp, M_w, M_bp};
         int64_t eC[] = {(int64_t)chi_out, (int64_t)D, (int64_t)chi_out};
         int32_t mC[] = {M_a, M_w, M_ap};
-        p->plan3 = create_contraction_plan(ht_handle_,
-            3, eA, mA, 4, eB, mB, 3, eC, mC, &p->ws3, &p->ws_sz3);
+        create_contraction_step(ht_handle_, p->steps[2],
+            3, eA, mA, 4, eB, mB, 3, eC, mC);
     }
 
     renv_plan_cache_[key] = p;
@@ -489,22 +481,22 @@ void DMRGGPU::update_left_env(int site) {
     double alpha = 1.0, beta = 0.0;
 
     // Step 1: T1 = L * A
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan1,
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[0].plan,
         &alpha, d_L_envs_[site], d_mps_tensors_[site],
         &beta, d_T1_, d_T1_,
-        plans->ws1, plans->ws_sz1, stream_));
+        plans->steps[0].workspace, plans->steps[0].ws_size, stream_));
 
     // Step 2: T2 = W * T1
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan2,
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[1].plan,
         &alpha, d_mpo_tensors_[site], d_T1_,
         &beta, d_T2_, d_T2_,
-        plans->ws2, plans->ws_sz2, stream_));
+        plans->steps[1].workspace, plans->steps[1].ws_size, stream_));
 
     // Step 3: L_new = A* . T2 (A* = A for real tensors)
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan3,
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[2].plan,
         &alpha, d_mps_tensors_[site], d_T2_,
         &beta, d_L_envs_[site + 1], d_L_envs_[site + 1],
-        plans->ws3, plans->ws_sz3, stream_));
+        plans->steps[2].workspace, plans->steps[2].ws_size, stream_));
 }
 
 // GPU right environment update via hipTensor
@@ -518,22 +510,22 @@ void DMRGGPU::update_right_env(int site) {
     double alpha = 1.0, beta = 0.0;
 
     // Step 1: T1 = A * R
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan1,
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[0].plan,
         &alpha, d_mps_tensors_[site], d_R_envs_[site + 1],
         &beta, d_T1_, d_T1_,
-        plans->ws1, plans->ws_sz1, stream_));
+        plans->steps[0].workspace, plans->steps[0].ws_size, stream_));
 
     // Step 2: T2 = W * T1
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan2,
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[1].plan,
         &alpha, d_mpo_tensors_[site], d_T1_,
         &beta, d_T2_, d_T2_,
-        plans->ws2, plans->ws_sz2, stream_));
+        plans->steps[1].workspace, plans->steps[1].ws_size, stream_));
 
     // Step 3: R_new = A* . T2
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan3,
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[2].plan,
         &alpha, d_mps_tensors_[site], d_T2_,
         &beta, d_R_envs_[site], d_R_envs_[site],
-        plans->ws3, plans->ws_sz3, stream_));
+        plans->steps[2].workspace, plans->steps[2].ws_size, stream_));
 }
 
 // ============================================================================
@@ -554,22 +546,22 @@ void DMRGGPU::apply_heff(int site, const double* d_theta_in, double* d_result) {
     double alpha = 1.0, beta = 0.0;
 
     // Step 1: T1[w, a', s, b] = sum_a L[a, w, a'] * theta[a, s, b]
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan1,
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[0].plan,
         &alpha, d_L_envs_[site], d_theta_in,
         &beta, d_T1_, d_T1_,
-        plans->ws1, plans->ws_sz1, stream_));
+        plans->steps[0].workspace, plans->steps[0].ws_size, stream_));
 
     // Step 2: T2[a', s', w', b] = sum_{w,s} W[w, s, s', w'] * T1[w, a', s, b]
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan2,
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[1].plan,
         &alpha, d_mpo_tensors_[site], d_T1_,
         &beta, d_T2_, d_T2_,
-        plans->ws2, plans->ws_sz2, stream_));
+        plans->steps[1].workspace, plans->steps[1].ws_size, stream_));
 
     // Step 3: result[a', s', b'] = sum_{w',b} R[b, w', b'] * T2[a', s', w', b]
-    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->plan3,
+    HIPTENSOR_CHECK(hiptensorContract(ht_handle_, plans->steps[2].plan,
         &alpha, d_R_envs_[site + 1], d_T2_,
         &beta, d_result, d_result,
-        plans->ws3, plans->ws_sz3, stream_));
+        plans->steps[2].workspace, plans->steps[2].ws_size, stream_));
 }
 
 // ============================================================================

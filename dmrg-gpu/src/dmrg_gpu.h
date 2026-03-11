@@ -61,13 +61,19 @@ private:
     rocblas_handle rocblas_h_;
 
 public:
-    // Cached hipTensor plans keyed by (dim1, dim2) — public for helper access
+    // Single hipTensor contraction step with all resources kept alive
+    struct ContractionStep {
+        hiptensorTensorDescriptor_t descA, descB, descC;
+        hiptensorOperationDescriptor_t opDesc;
+        hiptensorPlanPreference_t pref;
+        hiptensorPlan_t plan;
+        void* workspace = nullptr;
+        uint64_t ws_size = 0;
+    };
+
+    // 3-step contraction plan with all resources
     struct CachedPlans {
-        hiptensorPlan_t plan1, plan2, plan3;
-        void* ws1 = nullptr;
-        void* ws2 = nullptr;
-        void* ws3 = nullptr;
-        uint64_t ws_sz1 = 0, ws_sz2 = 0, ws_sz3 = 0;
+        ContractionStep steps[3];
     };
 
 private:
