@@ -694,8 +694,13 @@ void PDMRGGPU<Scalar>::build_initial_environments() {
     // Build all L environments left-to-right on stream 0
     for (int i = 0; i < L_; i++) {
         update_left_env(i, 0);
+        hipError_t err = hipStreamSynchronize(streams_[0]);
+        if (err != hipSuccess) {
+            fprintf(stderr, "ERROR at update_left_env site %d (chi_in=%d, chi_out=%d): %s\n",
+                    i, bond_dims_[i], bond_dims_[i+1], hipGetErrorString(err));
+            exit(1);
+        }
     }
-    HIP_CHECK(hipStreamSynchronize(streams_[0]));
 
     // Build all R environments right-to-left on stream 0
     for (int i = L_ - 1; i >= 0; i--) {
