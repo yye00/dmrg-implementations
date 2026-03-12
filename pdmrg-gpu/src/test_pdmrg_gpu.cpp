@@ -153,8 +153,8 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
     std::map<int, double> exact_energies = {
         {4, -1.616025403784},
         {8, -3.374932598688},
-        {16, -6.911737},
-        {32, -13.997315},
+        {16, -6.911737145575},
+        {32, -13.997315618007},
     };
 
     PDMRGGPU<double> pdmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
