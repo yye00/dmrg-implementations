@@ -1164,6 +1164,7 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     // === Main PDMRG loop ===
     double energy_prev = warmup_energy;
     energy_ = warmup_energy;
+    bool outer_converged = false;
 
     for (int outer = 0; outer < n_outer_sweeps; outer++) {
         auto t_outer = std::chrono::high_resolution_clock::now();
@@ -1189,11 +1190,11 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
             }
         }
 
-        // === Phase 2: Boundary coupling (B1) ===
-        // Rebuild environments, then optimize only bonds near segment boundaries.
-        // Cost: O(P × 2W) instead of O(L) for full-chain sweep.
+        // === Phase 2: Full-chain coupling sweep ===
+        // Rebuild environments from current MPS, then do one full LR+RL sweep.
         build_initial_environments();
-        energy_ = boundary_coupling_sweep(4);
+        sweep_LR_full();
+        energy_ = sweep_RL_full();
 
         auto t_outer_end = std::chrono::high_resolution_clock::now();
         double outer_time = std::chrono::duration<double>(t_outer_end - t_outer).count();
@@ -1212,6 +1213,7 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
 
         if (dE < tol_ && outer > 0) {
             std::cout << "Converged after " << outer + 1 << " outer iterations!" << std::endl;
+            outer_converged = true;
             break;
         }
 
@@ -1220,8 +1222,6 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
 
     // === Polish phase: full-chain sweeps to converge to tight tolerance ===
     // B5: Skip polish if outer loop already converged (dE < tol)
-    bool outer_converged = (n_outer_sweeps > 1) &&
-                           (std::abs(energy_ - energy_prev) < tol_);
     if (n_segments_ > 1 && !outer_converged) {
         int n_polish = 10;
         std::cout << "Polish sweeps (full-chain dmrg2, max " << n_polish << ")..." << std::endl;
