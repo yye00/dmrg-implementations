@@ -1351,14 +1351,13 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
 
         // === Compute/recompute boundary V-matrices (Stoudenmire: V = Lambda^{-1}) ===
         // V must be computed from the CURRENT MPS state before each iteration.
-        // After segment sweeps modify boundary MPS tensors, V becomes stale.
+        // compute_boundary_V only needs MPS tensors (no environments).
+        // After it modifies boundary MPS via SVD, rebuild environments once.
         if (n_segments_ > 1) {
-            // Rebuild environments to ensure consistency with current MPS
-            build_initial_environments();
             for (int k = 0; k < n_segments_ - 1; k++) {
                 compute_boundary_V(k);
             }
-            // Rebuild again after compute_boundary_V modified boundary MPS tensors
+            // Rebuild environments to reflect V-modified boundary MPS
             build_initial_environments();
         }
 
