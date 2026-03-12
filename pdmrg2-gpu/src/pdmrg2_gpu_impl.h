@@ -2020,10 +2020,9 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
             }
         }
 
-        // Phase 2: Full-chain coupling sweep
+        // Phase 2: Boundary coupling sweep (only ±W sites around each boundary)
         build_initial_environments();
-        sweep_LR_full();
-        energy_ = sweep_RL_full();
+        energy_ = boundary_coupling_sweep(4);
 
         auto t_outer_end = std::chrono::high_resolution_clock::now();
         double outer_time = std::chrono::duration<double>(t_outer_end - t_outer).count();
@@ -2048,8 +2047,8 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
         energy_prev = energy_;
     }
 
-    // === Polish phase ===
-    if (n_segments_ > 1 && !outer_converged) {
+    // === Polish phase: always run full-chain sweeps to ensure global accuracy ===
+    if (n_segments_ > 1) {
         int n_polish = 10;
         std::cout << "Polish sweeps (full-chain, max " << n_polish << ")..." << std::endl;
         build_initial_environments();
@@ -2070,8 +2069,6 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
                 break;
             }
         }
-    } else if (outer_converged) {
-        std::cout << "Skipping polish (outer loop converged)" << std::endl;
     }
 
     auto t_end = std::chrono::high_resolution_clock::now();
