@@ -71,10 +71,6 @@ private:
     std::vector<int> L_env_alloc_chi_;
     std::vector<int> R_env_alloc_chi_;
 
-    // === Boundary V-matrices (diagonal: 1/singular_values) ===
-    std::vector<double*> d_V_boundary_;           // [n_segments-1] device
-    std::vector<std::vector<double>> h_V_boundary_; // [n_segments-1] host copy
-
     // === Per-stream workspace ===
     struct StreamWorkspace {
         Scalar* d_theta;
@@ -129,14 +125,8 @@ private:
     void segment_sweep_LR(int seg_idx);  // local L→R within segment
     void segment_sweep_RL(int seg_idx);  // local R→L within segment
 
-    // === Partitioning and boundary ===
+    // === Partitioning ===
     void partition_chain();
-    void compute_boundary_V(int boundary_idx);
-    void form_boundary_theta(int boundary_idx, Scalar* d_theta, int si);
-    double merge_boundary(int boundary_idx, int si);
-    void rebuild_boundary_envs(int boundary_idx, int si);
-    double optimize_boundary_bond(int boundary_idx, char direction, int si);
-    double boundary_coupling_sweep();
 
     // === Memory management ===
     void allocate_stream_workspaces();

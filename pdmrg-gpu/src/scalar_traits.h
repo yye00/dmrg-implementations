@@ -258,34 +258,4 @@ inline void conjugate_inplace(hipDoubleComplex* data, int n, hipStream_t stream)
     hipLaunchKernelGGL(conjugate_complex_kernel, dim3(grid), dim3(block), 0, stream, data, n);
 }
 
-// ============================================================================
-// Column-wise real scaling: out[i + j*m] = scale[j] * in[i + j*m]
-// Used for V-matrix boundary weighting in PDMRG
-// ============================================================================
-
-__device__ inline double scale_real_dev(double s, double v) { return s * v; }
-__device__ inline hipDoubleComplex scale_real_dev(double s, hipDoubleComplex v) {
-    return make_hipDoubleComplex(s * hipCreal(v), s * hipCimag(v));
-}
-
-template<typename Scalar>
-__global__ void column_scale_real_kernel(Scalar* out, const Scalar* in,
-                                          const double* scale, int m, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < m * n) {
-        int j = idx / m;
-        out[idx] = scale_real_dev(scale[j], in[idx]);
-    }
-}
-
-template<typename Scalar>
-inline void column_scale_real(Scalar* out, const Scalar* in, const double* scale,
-                               int m, int n, hipStream_t stream) {
-    int total = m * n;
-    int block = 256;
-    int grid = (total + block - 1) / block;
-    hipLaunchKernelGGL(column_scale_real_kernel<Scalar>, dim3(grid), dim3(block),
-                       0, stream, out, in, scale, m, n);
-}
-
 #endif // SCALAR_TRAITS_H
