@@ -4,10 +4,16 @@
 #include <rocsolver/rocsolver.h>
 #include "accurate_svd.h"
 #include <iostream>
+#include <iomanip>
+#include <sstream>
 #include <cmath>
 #include <algorithm>
 #include <cstring>
 #include <chrono>
+#include <thread>
+#include <mutex>
+#include <atomic>
+#include <stdexcept>
 
 #define HIP_CHECK(call) \
     do { \
@@ -688,7 +694,7 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
     double inv_norm = 1.0 / norm;
     ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, &inv_norm, d_theta, 1));
     HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta, n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
+    // No sync: D2D memcpy is ordered with subsequent rocBLAS ops on same stream.
 
     double prev_energy = 1e30;
     int iter;
@@ -940,12 +946,12 @@ double PDMRGGPU<Scalar>::optimize_bond(int site, char direction, int si) {
     auto& ws = workspaces_[si];
 
     form_theta_two_site(site, si);
-
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
+    // No sync needed: form_theta_two_site uses the same stream/handle,
+    // rocBLAS operations are ordered within a stream.
     double energy = lanczos_eigensolver(site, ws.d_theta, theta_size, si);
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
+    // Lanczos already syncs internally (nrm2/dot read host results).
     svd_split(site, ws.d_theta, direction, si);
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
+    // svd_split syncs internally (CPU SVD path copies D2H).
 
     return energy;
 }
@@ -1299,45 +1305,48 @@ double PDMRGGPU<Scalar>::boundary_coupling_sweep() {
 template<typename Scalar>
 double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup) {
     const char* type_name = Traits::is_complex ? "complex128" : "float64";
-    printf("=== Stream-Parallel DMRG (PDMRG-GPU, %s) ===\n", type_name);
-    printf("L = %d, d = %d, chi_max = %d, D_mpo = %d, segments = %d\n",
-           L_, d_, chi_max_, D_mpo_, n_segments_);
-    printf("Warmup sweeps: %d, local sweeps/iter: %d, outer sweeps: %d\n\n",
-           n_warmup, n_local_sweeps, n_outer_sweeps);
+    std::cout << "=== Stream-Parallel DMRG (PDMRG-GPU, " << type_name << ") ===" << std::endl;
+    std::cout << "L = " << L_ << ", d = " << d_ << ", chi_max = " << chi_max_
+              << ", D_mpo = " << D_mpo_ << ", segments = " << n_segments_ << std::endl;
+    std::cout << "Warmup sweeps: " << n_warmup << ", local sweeps/iter: " << n_local_sweeps
+              << ", outer sweeps: " << n_outer_sweeps << std::endl << std::endl;
 
-    // Print segment layout
     for (int k = 0; k < n_segments_; k++) {
-        printf("  Segment %d: sites [%d, %d]\n", k, seg_first_[k], seg_last_[k]);
+        std::cout << "  Segment " << k << ": sites [" << seg_first_[k]
+                  << ", " << seg_last_[k] << "]" << std::endl;
     }
     for (int k = 0; k < n_segments_ - 1; k++) {
-        printf("  Boundary %d: bond at site %d\n", k, boundary_bonds_[k]);
+        std::cout << "  Boundary " << k << ": bond at site " << boundary_bonds_[k] << std::endl;
     }
-    printf("\n");
+    std::cout << std::endl;
 
     auto t_start = std::chrono::high_resolution_clock::now();
 
     // === Phase 0: Build environments and warmup ===
-    printf("Building initial environments...\n");
+    std::cout << "Building initial environments..." << std::endl;
     build_initial_environments();
 
     auto t_envs = std::chrono::high_resolution_clock::now();
-    printf("  Environment build: %.3f s\n", std::chrono::duration<double>(t_envs - t_start).count());
+    std::cout << "  Environment build: " << std::fixed << std::setprecision(3)
+              << std::chrono::duration<double>(t_envs - t_start).count() << " s" << std::endl;
 
     // Warmup: full-chain dmrg2 sweeps on stream 0
-    printf("Running %d warmup sweeps (full-chain dmrg2)...\n", n_warmup);
+    std::cout << "Running " << n_warmup << " warmup sweeps (full-chain dmrg2)..." << std::endl;
     double warmup_energy = 0.0;
     for (int sw = 0; sw < n_warmup; sw++) {
         auto t_sw = std::chrono::high_resolution_clock::now();
-        double eLR = sweep_LR_full();
-        double eRL = sweep_RL_full();
-        warmup_energy = eRL;
+        sweep_LR_full();
+        warmup_energy = sweep_RL_full();
         auto t_sw_end = std::chrono::high_resolution_clock::now();
-        double sw_time = std::chrono::duration<double>(t_sw_end - t_sw).count();
-        printf("  Warmup %d: E = %.12f, time = %.3f s\n", sw, warmup_energy, sw_time);
+        std::cout << "  Warmup " << sw << ": E = " << std::setprecision(12) << warmup_energy
+                  << ", time = " << std::setprecision(3)
+                  << std::chrono::duration<double>(t_sw_end - t_sw).count() << " s" << std::endl;
     }
 
     auto t_warmup_end = std::chrono::high_resolution_clock::now();
-    printf("Warmup: %.3f s\n\n", std::chrono::duration<double>(t_warmup_end - t_start).count());
+    std::cout << "Warmup: " << std::setprecision(3)
+              << std::chrono::duration<double>(t_warmup_end - t_start).count()
+              << " s" << std::endl << std::endl;
 
     // === Main PDMRG loop ===
     double energy_prev = warmup_energy;
@@ -1346,62 +1355,50 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     for (int outer = 0; outer < n_outer_sweeps; outer++) {
         auto t_outer = std::chrono::high_resolution_clock::now();
 
-        // === Phase 1: Independent segment sweeps (parallel streams) ===
+        // === Phase 1: Parallel segment sweeps via CPU threads ===
+        // Each thread drives its own HIP stream + rocBLAS handle.
+        // Segments access non-overlapping MPS sites and environments.
+        auto parallel_sweep = [this](auto sweep_fn) {
+            std::vector<std::thread> threads(n_segments_);
+            for (int k = 0; k < n_segments_; k++) {
+                threads[k] = std::thread([this, k, &sweep_fn]{ sweep_fn(this, k); });
+            }
+            for (auto& t : threads) t.join();
+        };
+
         for (int local_sw = 0; local_sw < n_local_sweeps; local_sw++) {
             if (outer % 2 == 0) {
-                // Even iteration: L→R then R→L
-                for (int k = 0; k < n_segments_; k++) {
-                    segment_sweep_LR(k);
-                }
-                for (int k = 0; k < n_segments_; k++) {
-                    HIP_CHECK(hipStreamSynchronize(streams_[k]));
-                }
-                for (int k = 0; k < n_segments_; k++) {
-                    segment_sweep_RL(k);
-                }
-                for (int k = 0; k < n_segments_; k++) {
-                    HIP_CHECK(hipStreamSynchronize(streams_[k]));
-                }
+                parallel_sweep([](PDMRGGPU* self, int k){ self->segment_sweep_LR(k); });
+                parallel_sweep([](PDMRGGPU* self, int k){ self->segment_sweep_RL(k); });
             } else {
-                // Odd iteration: R→L then L→R
-                for (int k = 0; k < n_segments_; k++) {
-                    segment_sweep_RL(k);
-                }
-                for (int k = 0; k < n_segments_; k++) {
-                    HIP_CHECK(hipStreamSynchronize(streams_[k]));
-                }
-                for (int k = 0; k < n_segments_; k++) {
-                    segment_sweep_LR(k);
-                }
-                for (int k = 0; k < n_segments_; k++) {
-                    HIP_CHECK(hipStreamSynchronize(streams_[k]));
-                }
+                parallel_sweep([](PDMRGGPU* self, int k){ self->segment_sweep_RL(k); });
+                parallel_sweep([](PDMRGGPU* self, int k){ self->segment_sweep_LR(k); });
             }
         }
 
         // === Phase 2: Boundary coupling via full-chain sweep ===
-        // Rebuild environments and do one full L→R + R→L sweep to couple segments.
-        // This is O(L) but ensures proper boundary coupling without bond dim collapse.
+        // Rebuild environments from current MPS, then do one full sweep on stream 0.
         build_initial_environments();
-        double eLR = sweep_LR_full();
+        sweep_LR_full();
         energy_ = sweep_RL_full();
 
         auto t_outer_end = std::chrono::high_resolution_clock::now();
         double outer_time = std::chrono::duration<double>(t_outer_end - t_outer).count();
-
         double dE = std::abs(energy_ - energy_prev);
 
         // Print bond dimensions
-        printf("Outer %3d: E = %.12f, dE = %.2e, time = %.3f s  chi=[",
-               outer, energy_, dE, outer_time);
+        std::ostringstream chi_str;
         for (int i = 1; i < L_; i++) {
-            printf("%d", bond_dims_[i]);
-            if (i < L_ - 1) printf(",");
+            chi_str << bond_dims_[i];
+            if (i < L_ - 1) chi_str << ",";
         }
-        printf("]\n");
+        std::cout << "Outer " << std::setw(3) << outer << ": E = " << std::setprecision(12)
+                  << energy_ << ", dE = " << std::scientific << std::setprecision(2) << dE
+                  << ", time = " << std::fixed << std::setprecision(3) << outer_time
+                  << " s  chi=[" << chi_str.str() << "]" << std::endl;
 
         if (dE < tol_ && outer > 0) {
-            printf("Converged after %d outer iterations!\n", outer + 1);
+            std::cout << "Converged after " << outer + 1 << " outer iterations!" << std::endl;
             break;
         }
 
@@ -1410,28 +1407,31 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
 
     // === Polish phase: full-chain sweeps to converge to tight tolerance ===
     if (n_segments_ > 1) {
-        int n_polish = 10;  // convergence-based early exit below
-        printf("Polish sweeps (full-chain dmrg2, max %d)...\n", n_polish);
+        int n_polish = 10;
+        std::cout << "Polish sweeps (full-chain dmrg2, max " << n_polish << ")..." << std::endl;
         build_initial_environments();
         for (int sw = 0; sw < n_polish; sw++) {
             auto t_sw = std::chrono::high_resolution_clock::now();
-            double eLR = sweep_LR_full();
+            sweep_LR_full();
             double eRL = sweep_RL_full();
             auto t_sw_end = std::chrono::high_resolution_clock::now();
-            double sw_time = std::chrono::duration<double>(t_sw_end - t_sw).count();
             double dE = std::abs(eRL - energy_);
-            printf("  Polish %d: E = %.12f, dE = %.2e, time = %.3f s\n", sw, eRL, dE, sw_time);
+            std::cout << "  Polish " << sw << ": E = " << std::fixed << std::setprecision(12)
+                      << eRL << ", dE = " << std::scientific << std::setprecision(2) << dE
+                      << ", time = " << std::fixed << std::setprecision(3)
+                      << std::chrono::duration<double>(t_sw_end - t_sw).count()
+                      << " s" << std::endl;
             energy_ = eRL;
             if (dE < tol_) {
-                printf("  Polish converged after %d sweeps\n", sw + 1);
+                std::cout << "  Polish converged after " << sw + 1 << " sweeps" << std::endl;
                 break;
             }
         }
     }
 
     auto t_end = std::chrono::high_resolution_clock::now();
-    double total_time = std::chrono::duration<double>(t_end - t_start).count();
-    printf("\nTotal wall time: %.3f s\n", total_time);
+    std::cout << std::endl << "Total wall time: " << std::fixed << std::setprecision(3)
+              << std::chrono::duration<double>(t_end - t_start).count() << " s" << std::endl;
 
     return energy_;
 }
