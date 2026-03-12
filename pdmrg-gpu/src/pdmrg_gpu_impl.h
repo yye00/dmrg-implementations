@@ -1422,7 +1422,7 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
 
     // === Polish phase: full-chain sweeps to converge to tight tolerance ===
     if (n_segments_ > 1) {
-        int n_polish = std::min(5, n_outer_sweeps);
+        int n_polish = 10;  // convergence-based early exit below
         printf("Polish sweeps (full-chain dmrg2, max %d)...\n", n_polish);
         build_initial_environments();
         for (int sw = 0; sw < n_polish; sw++) {
