@@ -1379,9 +1379,12 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
             }
         }
 
-        // === Phase 2: Boundary coupling (Stoudenmire merge) ===
-        // Replaces full-chain sweep with O(P) boundary optimizations
-        energy_ = boundary_coupling_sweep();
+        // === Phase 2: Boundary coupling via full-chain sweep ===
+        // Rebuild environments and do one full L→R + R→L sweep to couple segments.
+        // This is O(L) but ensures proper boundary coupling without bond dim collapse.
+        build_initial_environments();
+        double eLR = sweep_LR_full();
+        energy_ = sweep_RL_full();
 
         auto t_outer_end = std::chrono::high_resolution_clock::now();
         double outer_time = std::chrono::duration<double>(t_outer_end - t_outer).count();
