@@ -1066,6 +1066,42 @@ void PDMRGGPU<Scalar>::segment_sweep_RL(int seg_idx) {
 
 
 // ============================================================================
+// Boundary-region coupling sweep (B1)
+// Only optimizes bonds within ±W sites of each segment boundary.
+// Cost: O(P × 2W) instead of O(L) for full-chain sweep.
+// ============================================================================
+
+template<typename Scalar>
+double PDMRGGPU<Scalar>::boundary_coupling_sweep(int W) {
+    double energy = 0.0;
+    int si = 0;  // use stream 0
+
+    // For each boundary, sweep LR then RL over the boundary region
+    for (int b = 0; b < (int)boundary_bonds_.size(); b++) {
+        int bsite = boundary_bonds_[b];
+        int lo = std::max(0, bsite - W);
+        int hi = std::min(L_ - 2, bsite + W);
+
+        // Rebuild L environments from lo (need L_env[lo] valid)
+        // If lo > 0, rebuild from the nearest valid left env
+        // The segment sweep left L_env[seg_last+1] valid for the left segment,
+        // so L_env[lo] should already be valid from the last LR segment sweep.
+        // But to be safe, rebuild from lo's left env:
+        for (int site = lo; site <= hi; site++) {
+            energy = optimize_bond(site, 'R', si);
+            update_left_env(site, si);
+            HIP_CHECK(hipStreamSynchronize(streams_[si]));
+        }
+        for (int site = hi; site >= lo; site--) {
+            energy = optimize_bond(site, 'L', si);
+            update_right_env(site + 1, si);
+            HIP_CHECK(hipStreamSynchronize(streams_[si]));
+        }
+    }
+    return energy;
+}
+
+// ============================================================================
 // Main algorithm
 // ============================================================================
 
@@ -1097,21 +1133,31 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     std::cout << "  Environment build: " << std::fixed << std::setprecision(3)
               << std::chrono::duration<double>(t_envs - t_start).count() << " s" << std::endl;
 
-    // Warmup: full-chain dmrg2 sweeps on stream 0
-    std::cout << "Running " << n_warmup << " warmup sweeps (full-chain dmrg2)..." << std::endl;
+    // B2: Adaptive warmup — converge with full-chain sweeps, early exit when dE < tol
+    std::cout << "Running up to " << n_warmup << " warmup sweeps (full-chain dmrg2)..." << std::endl;
     double warmup_energy = 0.0;
+    double prev_warmup_energy = 1e30;
+    int actual_warmup = 0;
     for (int sw = 0; sw < n_warmup; sw++) {
         auto t_sw = std::chrono::high_resolution_clock::now();
         sweep_LR_full();
         warmup_energy = sweep_RL_full();
         auto t_sw_end = std::chrono::high_resolution_clock::now();
+        double dE = std::abs(warmup_energy - prev_warmup_energy);
         std::cout << "  Warmup " << sw << ": E = " << std::setprecision(12) << warmup_energy
-                  << ", time = " << std::setprecision(3)
+                  << ", dE = " << std::scientific << std::setprecision(2) << dE
+                  << ", time = " << std::fixed << std::setprecision(3)
                   << std::chrono::duration<double>(t_sw_end - t_sw).count() << " s" << std::endl;
+        actual_warmup++;
+        prev_warmup_energy = warmup_energy;
+        if (dE < tol_ && sw > 0) {
+            std::cout << "  Warmup converged after " << sw + 1 << " sweeps" << std::endl;
+            break;
+        }
     }
 
     auto t_warmup_end = std::chrono::high_resolution_clock::now();
-    std::cout << "Warmup: " << std::setprecision(3)
+    std::cout << "Warmup: " << std::fixed << std::setprecision(3)
               << std::chrono::duration<double>(t_warmup_end - t_start).count()
               << " s" << std::endl << std::endl;
 
@@ -1143,11 +1189,11 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
             }
         }
 
-        // === Phase 2: Boundary coupling via full-chain sweep ===
-        // Rebuild environments from current MPS, then do one full sweep on stream 0.
+        // === Phase 2: Boundary coupling (B1) ===
+        // Rebuild environments, then optimize only bonds near segment boundaries.
+        // Cost: O(P × 2W) instead of O(L) for full-chain sweep.
         build_initial_environments();
-        sweep_LR_full();
-        energy_ = sweep_RL_full();
+        energy_ = boundary_coupling_sweep(4);
 
         auto t_outer_end = std::chrono::high_resolution_clock::now();
         double outer_time = std::chrono::duration<double>(t_outer_end - t_outer).count();
@@ -1173,7 +1219,10 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     }
 
     // === Polish phase: full-chain sweeps to converge to tight tolerance ===
-    if (n_segments_ > 1) {
+    // B5: Skip polish if outer loop already converged (dE < tol)
+    bool outer_converged = (n_outer_sweeps > 1) &&
+                           (std::abs(energy_ - energy_prev) < tol_);
+    if (n_segments_ > 1 && !outer_converged) {
         int n_polish = 10;
         std::cout << "Polish sweeps (full-chain dmrg2, max " << n_polish << ")..." << std::endl;
         build_initial_environments();
@@ -1194,6 +1243,8 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
                 break;
             }
         }
+    } else if (outer_converged) {
+        std::cout << "Skipping polish (outer loop converged)" << std::endl;
     }
 
     auto t_end = std::chrono::high_resolution_clock::now();
