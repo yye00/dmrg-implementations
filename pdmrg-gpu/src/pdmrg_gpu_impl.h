@@ -471,10 +471,15 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
                     }
             HIP_CHECK(hipMemcpyAsync(ws.d_heff_batch_A, ws.h_batch_A_pinned, batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
             HIP_CHECK(hipMemcpyAsync(ws.d_heff_batch_C, ws.h_batch_C_pinned, batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            HIP_CHECK(hipStreamSynchronize(streams_[si]));  // ensure DMA reads pinned buf
             ws.heff_cached_site = site;
         }
 
         // B pointers change per call (d_theta_in varies in Lanczos loop)
+        // Sync to ensure any previous async DMA from this pinned buffer has completed
+        // before we overwrite it. The DMA is only 160 bytes; the sync cost is minimal
+        // since the batched GEMM can't start until all prior stream ops complete anyway.
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
         for (int w = 0; w < D; w++)
             for (int s1 = 0; s1 < d; s1++)
                 for (int s2 = 0; s2 < d; s2++) {
