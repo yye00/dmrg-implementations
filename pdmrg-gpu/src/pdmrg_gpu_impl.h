@@ -139,10 +139,18 @@ void PDMRGGPU<Scalar>::allocate_stream_workspaces() {
         HIP_CHECK(hipMalloc(&ws.d_lanczos_v, (size_t)max_lanczos_iter_ * theta_size_max_ * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_ritz_coeffs, max_lanczos_iter_ * sizeof(Scalar)));
 
-        // Batched GEMM pointer arrays
+        // Batched GEMM pointer arrays (device)
         HIP_CHECK(hipMalloc(&ws.d_batch_A, batch_max * sizeof(Scalar*)));
         HIP_CHECK(hipMalloc(&ws.d_batch_B, batch_max * sizeof(Scalar*)));
         HIP_CHECK(hipMalloc(&ws.d_batch_C, batch_max * sizeof(Scalar*)));
+        // Pinned host pointer arrays (avoid heap alloc + enable truly async H2D)
+        HIP_CHECK(hipHostMalloc(&ws.h_batch_A_pinned, batch_max * sizeof(Scalar*)));
+        HIP_CHECK(hipHostMalloc(&ws.h_batch_B_pinned, batch_max * sizeof(Scalar*)));
+        HIP_CHECK(hipHostMalloc(&ws.h_batch_C_pinned, batch_max * sizeof(Scalar*)));
+        // Cached apply_heff A/C pointers (separate device arrays)
+        HIP_CHECK(hipMalloc(&ws.d_heff_batch_A, batch_max * sizeof(Scalar*)));
+        HIP_CHECK(hipMalloc(&ws.d_heff_batch_C, batch_max * sizeof(Scalar*)));
+        ws.heff_cached_site = -1;
 
         // Lanczos device-pointer-mode scalars
         HIP_CHECK(hipMalloc(&ws.d_dot_result, sizeof(Scalar)));
@@ -230,6 +238,11 @@ void PDMRGGPU<Scalar>::free_gpu_resources() {
         if (ws.d_batch_A) hipFree(ws.d_batch_A);
         if (ws.d_batch_B) hipFree(ws.d_batch_B);
         if (ws.d_batch_C) hipFree(ws.d_batch_C);
+        if (ws.h_batch_A_pinned) hipHostFree(ws.h_batch_A_pinned);
+        if (ws.h_batch_B_pinned) hipHostFree(ws.h_batch_B_pinned);
+        if (ws.h_batch_C_pinned) hipHostFree(ws.h_batch_C_pinned);
+        if (ws.d_heff_batch_A) hipFree(ws.d_heff_batch_A);
+        if (ws.d_heff_batch_C) hipFree(ws.d_heff_batch_C);
         if (ws.d_dot_result) hipFree(ws.d_dot_result);
         if (ws.d_nrm2_result) hipFree(ws.d_nrm2_result);
         if (ws.d_neg_alpha) hipFree(ws.d_neg_alpha);
@@ -446,26 +459,38 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
     // Step 1: Batched GEMM — L_env^T × theta
     {
         int batch_count = D * dd;
-        std::vector<Scalar*> h_A(batch_count), h_B(batch_count), h_C(batch_count);
+
+        // Cache A and C pointers (constant for a given site)
+        if (ws.heff_cached_site != site) {
+            for (int w = 0; w < D; w++)
+                for (int s1 = 0; s1 < d; s1++)
+                    for (int s2 = 0; s2 < d; s2++) {
+                        int ws_idx = w * dd + s1 * d + s2;
+                        ws.h_batch_A_pinned[ws_idx] = L_env + w * cL;
+                        ws.h_batch_C_pinned[ws_idx] = T1 + ws_idx * cL * cR;
+                    }
+            HIP_CHECK(hipMemcpyAsync(ws.d_heff_batch_A, ws.h_batch_A_pinned, batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(ws.d_heff_batch_C, ws.h_batch_C_pinned, batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            ws.heff_cached_site = site;
+        }
+
+        // B pointers change per call (d_theta_in varies in Lanczos loop)
         for (int w = 0; w < D; w++)
             for (int s1 = 0; s1 < d; s1++)
                 for (int s2 = 0; s2 < d; s2++) {
                     int ws_idx = w * dd + s1 * d + s2;
-                    h_A[ws_idx] = L_env + w * cL;
-                    h_B[ws_idx] = const_cast<Scalar*>(d_theta_in) + s1 * cL + s2 * cL * d;
-                    h_C[ws_idx] = T1 + ws_idx * cL * cR;
+                    ws.h_batch_B_pinned[ws_idx] = const_cast<Scalar*>(d_theta_in) + s1 * cL + s2 * cL * d;
                 }
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, h_A.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, h_B.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, h_C.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, ws.h_batch_B_pinned, batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+
         ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
             Traits::op_t, rocblas_operation_none,
             cL, cR, cL,
             &one,
-            (const Scalar**)ws.d_batch_A, cL * D,
+            (const Scalar**)ws.d_heff_batch_A, cL * D,
             (const Scalar**)ws.d_batch_B, cL * dd,
             &zero_val,
-            ws.d_batch_C, cL,
+            ws.d_heff_batch_C, cL,
             batch_count));
     }
 
@@ -521,17 +546,16 @@ void PDMRGGPU<Scalar>::update_left_env(int site, int si) {
 
     // Step 1: V_ws[a',b] = L_w^T[a',a] * A_s[a,b]  (batched GEMM)
     {
-        std::vector<Scalar*> h_A(D * d), h_B(D * d), h_C(D * d);
         for (int w = 0; w < D; w++)
             for (int s = 0; s < d; s++) {
                 int ws_idx = w * d + s;
-                h_A[ws_idx] = L_env + w * chi_in;
-                h_B[ws_idx] = A + s * chi_in;
-                h_C[ws_idx] = V + ws_idx * chi_in * chi_out;
+                ws.h_batch_A_pinned[ws_idx] = L_env + w * chi_in;
+                ws.h_batch_B_pinned[ws_idx] = A + s * chi_in;
+                ws.h_batch_C_pinned[ws_idx] = V + ws_idx * chi_in * chi_out;
             }
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, h_A.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, h_B.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, h_C.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, ws.h_batch_A_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, ws.h_batch_B_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, ws.h_batch_C_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
         ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
             Traits::op_t, rocblas_operation_none,
             chi_in, chi_out, chi_in,
@@ -597,17 +621,16 @@ void PDMRGGPU<Scalar>::update_right_env(int site, int si) {
 
     // Step 1: V_ws[a,b'] = A_s[a,b] * R_w'[b,b']  (batched GEMM)
     {
-        std::vector<Scalar*> h_A(D * d), h_B(D * d), h_C(D * d);
         for (int wp = 0; wp < D; wp++)
             for (int s = 0; s < d; s++) {
                 int ws_idx = wp * d + s;
-                h_A[ws_idx] = A + s * chi_out;
-                h_B[ws_idx] = R_env + wp * chi_in;
-                h_C[ws_idx] = V + ws_idx * chi_out * chi_in;
+                ws.h_batch_A_pinned[ws_idx] = A + s * chi_out;
+                ws.h_batch_B_pinned[ws_idx] = R_env + wp * chi_in;
+                ws.h_batch_C_pinned[ws_idx] = V + ws_idx * chi_out * chi_in;
             }
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, h_A.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, h_B.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, h_C.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, ws.h_batch_A_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, ws.h_batch_B_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, ws.h_batch_C_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
         ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
             rocblas_operation_none, rocblas_operation_none,
             chi_out, chi_in, chi_in,
@@ -984,6 +1007,9 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
     }
 
     bond_dims_[site + 1] = new_k;
+
+    // Invalidate heff pointer cache (bond dims changed)
+    ws.heff_cached_site = -1;
 }
 
 // ============================================================================

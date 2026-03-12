@@ -82,6 +82,14 @@ private:
         Scalar** d_batch_A;
         Scalar** d_batch_B;
         Scalar** d_batch_C;
+        // Pinned host pointer arrays (avoid heap alloc in hot path)
+        Scalar** h_batch_A_pinned;
+        Scalar** h_batch_B_pinned;
+        Scalar** h_batch_C_pinned;
+        // Cached apply_heff Step 1 A/C pointers (constant per site)
+        Scalar** d_heff_batch_A;
+        Scalar** d_heff_batch_C;
+        int heff_cached_site;
         // Lanczos device-pointer-mode scalars
         Scalar* d_dot_result;        // 1 element: raw dot product result
         RealType* d_nrm2_result;     // 1 element: raw nrm2 result
