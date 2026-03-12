@@ -880,6 +880,16 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
     dstev_(&jobz, &n_lapack, h_D.data(), h_E.data(), h_Z.data(), &ldz, h_work.data(), &lapack_info);
 
     if (lapack_info != 0) {
+        fprintf(stderr, "dstev FAILED: site=%d niter=%d info=%d theta_size=%d\n", site, niter, lapack_info, n);
+        fprintf(stderr, "  alpha[0..4]:");
+        for (int i = 0; i < std::min(5, niter); i++) fprintf(stderr, " %.6e", h_alpha[i]);
+        fprintf(stderr, "\n  beta[0..4]:");
+        for (int i = 0; i < std::min(5, niter); i++) fprintf(stderr, " %.6e", h_beta[i]);
+        fprintf(stderr, "\n  alpha[last5]:");
+        for (int i = std::max(0, niter-5); i < niter; i++) fprintf(stderr, " %.6e", h_alpha[i]);
+        fprintf(stderr, "\n  beta[last5]:");
+        for (int i = std::max(0, niter-5); i < niter; i++) fprintf(stderr, " %.6e", h_beta[i]);
+        fprintf(stderr, "\n");
         throw std::runtime_error("LAPACK dstev failed with info = " + std::to_string(lapack_info));
     }
 
