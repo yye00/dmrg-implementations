@@ -750,6 +750,7 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
 
         // w = H|v_i> (apply_heff uses host pointer mode internally)
+        HIP_CHECK(hipStreamSynchronize(streams_[si])); // DEBUG: sync before apply_heff
         apply_heff_two_site(site, d_vi, ws.d_heff_result, si);
 
         // Switch to device pointer mode for scalar operations
