@@ -545,6 +545,8 @@ void PDMRGGPU<Scalar>::update_left_env(int site, int si) {
     Scalar* U = ws.d_T2;
 
     // Step 1: V_ws[a',b] = L_w^T[a',a] * A_s[a,b]  (batched GEMM)
+    // NOTE: Use synchronous hipMemcpy for pointer arrays to avoid race with
+    // the calling loop overwriting pinned buffers before async DMA completes.
     {
         for (int w = 0; w < D; w++)
             for (int s = 0; s < d; s++) {
@@ -556,6 +558,7 @@ void PDMRGGPU<Scalar>::update_left_env(int site, int si) {
         HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, ws.h_batch_A_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
         HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, ws.h_batch_B_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
         HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, ws.h_batch_C_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));  // ensure DMA reads pinned buf before caller overwrites
         ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
             Traits::op_t, rocblas_operation_none,
             chi_in, chi_out, chi_in,
@@ -631,6 +634,7 @@ void PDMRGGPU<Scalar>::update_right_env(int site, int si) {
         HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, ws.h_batch_A_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
         HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, ws.h_batch_B_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
         HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, ws.h_batch_C_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));  // ensure DMA reads pinned buf before caller overwrites
         ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
             rocblas_operation_none, rocblas_operation_none,
             chi_out, chi_in, chi_in,
@@ -694,24 +698,14 @@ void PDMRGGPU<Scalar>::build_initial_environments() {
     // Build all L environments left-to-right on stream 0
     for (int i = 0; i < L_; i++) {
         update_left_env(i, 0);
-        hipError_t err = hipStreamSynchronize(streams_[0]);
-        if (err != hipSuccess) {
-            fprintf(stderr, "ERROR at update_left_env site %d (chi_in=%d, chi_out=%d): %s\n",
-                    i, bond_dims_[i], bond_dims_[i+1], hipGetErrorString(err));
-            exit(1);
-        }
     }
+    HIP_CHECK(hipStreamSynchronize(streams_[0]));
 
     // Build all R environments right-to-left on stream 0
     for (int i = L_ - 1; i >= 0; i--) {
         update_right_env(i, 0);
-        hipError_t err = hipStreamSynchronize(streams_[0]);
-        if (err != hipSuccess) {
-            fprintf(stderr, "ERROR at update_right_env site %d (chi_in=%d, chi_out=%d): %s\n",
-                    i, bond_dims_[i+1], bond_dims_[i], hipGetErrorString(err));
-            exit(1);
-        }
     }
+    HIP_CHECK(hipStreamSynchronize(streams_[0]));
 }
 
 // ============================================================================
@@ -755,7 +749,6 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
 
         // w = H|v_i> (apply_heff uses host pointer mode internally)
-        HIP_CHECK(hipStreamSynchronize(streams_[si])); // DEBUG: sync before apply_heff
         apply_heff_two_site(site, d_vi, ws.d_heff_result, si);
 
         // Switch to device pointer mode for scalar operations
@@ -886,16 +879,6 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
     dstev_(&jobz, &n_lapack, h_D.data(), h_E.data(), h_Z.data(), &ldz, h_work.data(), &lapack_info);
 
     if (lapack_info != 0) {
-        fprintf(stderr, "dstev FAILED: site=%d niter=%d info=%d theta_size=%d\n", site, niter, lapack_info, n);
-        fprintf(stderr, "  alpha[0..4]:");
-        for (int i = 0; i < std::min(5, niter); i++) fprintf(stderr, " %.6e", h_alpha[i]);
-        fprintf(stderr, "\n  beta[0..4]:");
-        for (int i = 0; i < std::min(5, niter); i++) fprintf(stderr, " %.6e", h_beta[i]);
-        fprintf(stderr, "\n  alpha[last5]:");
-        for (int i = std::max(0, niter-5); i < niter; i++) fprintf(stderr, " %.6e", h_alpha[i]);
-        fprintf(stderr, "\n  beta[last5]:");
-        for (int i = std::max(0, niter-5); i < niter; i++) fprintf(stderr, " %.6e", h_beta[i]);
-        fprintf(stderr, "\n");
         throw std::runtime_error("LAPACK dstev failed with info = " + std::to_string(lapack_info));
     }
 
