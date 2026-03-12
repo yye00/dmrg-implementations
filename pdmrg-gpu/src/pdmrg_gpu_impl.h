@@ -1342,21 +1342,25 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     auto t_warmup_end = std::chrono::high_resolution_clock::now();
     printf("Warmup: %.3f s\n\n", std::chrono::duration<double>(t_warmup_end - t_start).count());
 
-    // === Compute boundary V-matrices (Stoudenmire: V = Lambda^{-1}) ===
-    if (n_segments_ > 1) {
-        printf("Computing boundary V-matrices (accurate SVD)...\n");
-        for (int k = 0; k < n_segments_ - 1; k++) {
-            compute_boundary_V(k);
-        }
-        printf("  V-matrices computed for %d boundaries\n\n", n_segments_ - 1);
-    }
-
     // === Main PDMRG loop ===
     double energy_prev = warmup_energy;
     energy_ = warmup_energy;
 
     for (int outer = 0; outer < n_outer_sweeps; outer++) {
         auto t_outer = std::chrono::high_resolution_clock::now();
+
+        // === Compute/recompute boundary V-matrices (Stoudenmire: V = Lambda^{-1}) ===
+        // V must be computed from the CURRENT MPS state before each iteration.
+        // After segment sweeps modify boundary MPS tensors, V becomes stale.
+        if (n_segments_ > 1) {
+            // Rebuild environments to ensure consistency with current MPS
+            build_initial_environments();
+            for (int k = 0; k < n_segments_ - 1; k++) {
+                compute_boundary_V(k);
+            }
+            // Rebuild again after compute_boundary_V modified boundary MPS tensors
+            build_initial_environments();
+        }
 
         // === Phase 1: Independent segment sweeps (parallel streams) ===
         for (int local_sw = 0; local_sw < n_local_sweeps; local_sw++) {
@@ -1419,7 +1423,7 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
 
     // === Polish phase: full-chain sweeps to converge to tight tolerance ===
     if (n_segments_ > 1) {
-        int n_polish = std::min(2, n_outer_sweeps);
+        int n_polish = std::min(5, n_outer_sweeps);
         printf("Polish sweeps (full-chain dmrg2, max %d)...\n", n_polish);
         build_initial_environments();
         for (int sw = 0; sw < n_polish; sw++) {
