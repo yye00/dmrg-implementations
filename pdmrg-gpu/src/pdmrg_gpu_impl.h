@@ -2,6 +2,7 @@
 #define PDMRG_GPU_IMPL_H
 
 #include <rocsolver/rocsolver.h>
+#include "accurate_svd.h"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -1025,16 +1026,14 @@ void PDMRGGPU<Scalar>::compute_boundary_V(int boundary_idx) {
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_);
 
-    // Copy theta to host for SVD
+    // Copy theta to host for accurate SVD
     HIP_CHECK(hipMemcpy(ws.h_svd_A.data(), ws.d_theta, m * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
 
-    int lwork = (int)ws.h_svd_work.size();
-    int info;
-    const char jobu = 'S', jobvt = 'S';
-    Traits::lapack_gesvd(&jobu, &jobvt, &m, &n_svd, ws.h_svd_A.data(), &m,
-            ws.h_svd_S.data(), ws.h_svd_U.data(), &m, ws.h_svd_Vh.data(), &full_k,
-            ws.h_svd_work.data(), &lwork,
-            ws.h_svd_rwork.empty() ? nullptr : ws.h_svd_rwork.data(), &info);
+    // Accurate SVD (Stoudenmire Appendix): uniform relative accuracy for all
+    // singular values, critical because V = 1/sigma amplifies errors in small sigma
+    accurate_svd<Scalar>(m, n_svd, ws.h_svd_A.data(), m,
+            ws.h_svd_U.data(), m, ws.h_svd_S.data(),
+            ws.h_svd_Vh.data(), full_k, 1e-4);
 
     // Truncation
     int new_k = k;
@@ -1117,6 +1116,186 @@ void PDMRGGPU<Scalar>::rebuild_boundary_envs(int boundary_idx, int si) {
 }
 
 // ============================================================================
+// Boundary bond optimization with V-weighted initial guess (Stoudenmire Eq. 5)
+// Uses accurate SVD for V = 1/sigma computation
+// ============================================================================
+
+template<typename Scalar>
+double PDMRGGPU<Scalar>::optimize_boundary_bond(int boundary_idx, char direction, int si) {
+    int b = boundary_bonds_[boundary_idx];
+    int cL = chi_L(b);
+    int chi_mid = bond_dims_[b + 1];
+    int cR = chi_R(b + 1);
+    int theta_size = cL * d_ * d_ * cR;
+    auto& ws = workspaces_[si];
+    Scalar one = Traits::one(), zero_val = Traits::zero();
+
+    // Form V-weighted theta: theta = (MPS[b] · diag(V)) · MPS[b+1]
+    // This is the Stoudenmire merge: Psi' = psi'_L · V · psi'_R (Eq. 5)
+    // column_scale_real: T1[i,j] = V[j] * MPS[b][i,j]
+    column_scale_real(ws.d_T1, d_mps_tensors_[b], d_V_boundary_[boundary_idx],
+                       cL * d_, chi_mid, streams_[si]);
+
+    // theta = T1 · MPS[b+1]
+    ROCBLAS_CHECK(Traits::gemm(handles_[si],
+        rocblas_operation_none, rocblas_operation_none,
+        cL * d_, d_ * cR, chi_mid,
+        &one,
+        ws.d_T1, cL * d_,
+        d_mps_tensors_[b + 1], chi_mid,
+        &zero_val,
+        ws.d_theta, cL * d_));
+
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
+
+    // Lanczos optimization at boundary bond
+    double energy = lanczos_eigensolver(b, ws.d_theta, theta_size, si);
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
+
+    // Accurate SVD split (not standard svd_split — we need accurate singular
+    // values for V = 1/sigma)
+    int m = cL * d_;
+    int n_svd = d_ * cR;
+    int full_k = std::min(m, n_svd);
+    int k = std::min(full_k, chi_max_);
+
+    // Copy optimized theta to host
+    HIP_CHECK(hipMemcpyAsync(ws.h_svd_A.data(), ws.d_theta,
+                              m * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost, streams_[si]));
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
+
+    // Accurate SVD (Stoudenmire Appendix)
+    accurate_svd<Scalar>(m, n_svd, ws.h_svd_A.data(), m,
+                         ws.h_svd_U.data(), m, ws.h_svd_S.data(),
+                         ws.h_svd_Vh.data(), full_k, 1e-4);
+
+    // Truncation
+    int new_k = k;
+    for (int i = 0; i < new_k; i++) {
+        if (ws.h_svd_S[i] < 1e-14) { new_k = i; break; }
+    }
+    if (new_k == 0) new_k = 1;
+
+    // Split into MPS tensors
+    if (direction == 'R') {
+        // MPS[b] = U, MPS[b+1] = S*Vh
+        allocate_mps_tensor(b, cL, new_k);
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[b], ws.h_svd_U.data(),
+                    m * new_k * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+
+        for (int j = 0; j < n_svd; j++)
+            for (int i = 0; i < new_k; i++)
+                ws.h_svd_tmp[i + j * new_k] = Traits::scale_by_real(ws.h_svd_S[i], ws.h_svd_Vh[i + j * full_k]);
+
+        allocate_mps_tensor(b + 1, new_k, cR);
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[b + 1], ws.h_svd_tmp.data(),
+                    new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+    } else {
+        // MPS[b] = U*S, MPS[b+1] = Vh
+        for (int j = 0; j < new_k; j++)
+            for (int i = 0; i < m; i++)
+                ws.h_svd_tmp[i + j * m] = Traits::scale_by_real(ws.h_svd_S[j], ws.h_svd_U[i + j * m]);
+
+        allocate_mps_tensor(b, cL, new_k);
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[b], ws.h_svd_tmp.data(),
+                    m * new_k * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+
+        allocate_mps_tensor(b + 1, new_k, cR);
+        if (new_k == full_k) {
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[b + 1], ws.h_svd_Vh.data(),
+                        full_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+        } else {
+            for (int j = 0; j < n_svd; j++)
+                for (int i = 0; i < new_k; i++)
+                    ws.h_svd_tmp[i + j * new_k] = ws.h_svd_Vh[i + j * full_k];
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[b + 1], ws.h_svd_tmp.data(),
+                        new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+        }
+    }
+
+    bond_dims_[b + 1] = new_k;
+
+    // Update V = 1/S from accurate singular values
+    h_V_boundary_[boundary_idx].resize(new_k);
+    for (int i = 0; i < new_k; i++) {
+        h_V_boundary_[boundary_idx][i] = (ws.h_svd_S[i] > 1e-14) ? 1.0 / ws.h_svd_S[i] : 0.0;
+    }
+    HIP_CHECK(hipMemcpyAsync(d_V_boundary_[boundary_idx],
+                              h_V_boundary_[boundary_idx].data(),
+                              new_k * sizeof(double),
+                              hipMemcpyHostToDevice, streams_[si]));
+
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
+
+    return energy;
+}
+
+// ============================================================================
+// Boundary coupling sweep (replaces full-chain coupling sweep)
+//
+// Per Stoudenmire & White: rebuild environments, then optimize only at P-1
+// boundary bonds with V-weighted initial guess. O(P) Lanczos calls + O(L)
+// environment updates instead of O(L) Lanczos calls.
+// ============================================================================
+
+template<typename Scalar>
+double PDMRGGPU<Scalar>::boundary_coupling_sweep() {
+    int n_boundaries = n_segments_ - 1;
+
+    if (n_boundaries == 0) {
+        // Single segment — fall back to standard full-chain sweep
+        build_initial_environments();
+        sweep_LR_full();
+        return sweep_RL_full();
+    }
+
+    double energy = 0.0;
+
+    // Step 1: Rebuild all environments from current MPS state
+    // After parallel segment sweeps, environments at boundaries are stale.
+    // A full rebuild makes L_env[i] consistent with MPS[0..i-1] and
+    // R_env[i] consistent with MPS[i..L-1] for all i.
+    build_initial_environments();
+
+    // Step 2: L→R boundary pass
+    for (int k = 0; k < n_boundaries; k++) {
+        int b = boundary_bonds_[k];
+        energy = optimize_boundary_bond(k, 'R', 0);
+
+        // Propagate L_env forward to next boundary (or end of chain).
+        // After optimize_boundary_bond modified MPS[b] and MPS[b+1],
+        // L_env[b+1] and beyond are stale. Rebuild incrementally.
+        int end = (k + 1 < n_boundaries) ? boundary_bonds_[k + 1] - 1 : L_ - 2;
+        for (int site = b; site <= end; site++) {
+            update_left_env(site, 0);
+        }
+        HIP_CHECK(hipStreamSynchronize(streams_[0]));
+    }
+
+    // Step 3: Rebuild all R environments
+    // The L→R pass modified MPS at each boundary, making R_env stale.
+    for (int i = L_ - 1; i >= 0; i--) {
+        update_right_env(i, 0);
+    }
+    HIP_CHECK(hipStreamSynchronize(streams_[0]));
+
+    // Step 4: R→L boundary pass
+    for (int k = n_boundaries - 1; k >= 0; k--) {
+        int b = boundary_bonds_[k];
+        energy = optimize_boundary_bond(k, 'L', 0);
+
+        // Propagate R_env backward to previous boundary (or start of chain)
+        int prev_end = (k > 0) ? boundary_bonds_[k - 1] + 1 : 0;
+        for (int site = b + 1; site >= prev_end; site--) {
+            update_right_env(site, 0);
+        }
+        HIP_CHECK(hipStreamSynchronize(streams_[0]));
+    }
+
+    return energy;
+}
+
+// ============================================================================
 // Main algorithm
 // ============================================================================
 
@@ -1163,6 +1342,15 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     auto t_warmup_end = std::chrono::high_resolution_clock::now();
     printf("Warmup: %.3f s\n\n", std::chrono::duration<double>(t_warmup_end - t_start).count());
 
+    // === Compute boundary V-matrices (Stoudenmire: V = Lambda^{-1}) ===
+    if (n_segments_ > 1) {
+        printf("Computing boundary V-matrices (accurate SVD)...\n");
+        for (int k = 0; k < n_segments_ - 1; k++) {
+            compute_boundary_V(k);
+        }
+        printf("  V-matrices computed for %d boundaries\n\n", n_segments_ - 1);
+    }
+
     // === Main PDMRG loop ===
     double energy_prev = warmup_energy;
     energy_ = warmup_energy;
@@ -1203,14 +1391,9 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
             }
         }
 
-        // === Phase 2: Full-chain coupling sweep on stream 0 ===
-        // Rebuild all environments from current MPS state
-        build_initial_environments();
-
-        // One full-chain LR+RL sweep to couple segments and get energy
-        double eLR = sweep_LR_full();
-        double eRL = sweep_RL_full();
-        energy_ = eRL;
+        // === Phase 2: Boundary coupling (Stoudenmire merge) ===
+        // Replaces full-chain sweep with O(P) boundary optimizations
+        energy_ = boundary_coupling_sweep();
 
         auto t_outer_end = std::chrono::high_resolution_clock::now();
         double outer_time = std::chrono::duration<double>(t_outer_end - t_outer).count();
@@ -1236,9 +1419,10 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
 
     // === Polish phase: full-chain sweeps to converge to tight tolerance ===
     if (n_segments_ > 1) {
-        printf("Polish sweeps (full-chain dmrg2)...\n");
+        int n_polish = std::min(2, n_outer_sweeps);
+        printf("Polish sweeps (full-chain dmrg2, max %d)...\n", n_polish);
         build_initial_environments();
-        for (int sw = 0; sw < n_outer_sweeps; sw++) {
+        for (int sw = 0; sw < n_polish; sw++) {
             auto t_sw = std::chrono::high_resolution_clock::now();
             double eLR = sweep_LR_full();
             double eRL = sweep_RL_full();
@@ -1248,7 +1432,7 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
             printf("  Polish %d: E = %.12f, dE = %.2e, time = %.3f s\n", sw, eRL, dE, sw_time);
             energy_ = eRL;
             if (dE < tol_) {
-                printf("  Converged after %d polish sweeps!\n", sw + 1);
+                printf("  Polish converged after %d sweeps\n", sw + 1);
                 break;
             }
         }

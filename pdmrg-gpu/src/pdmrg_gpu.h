@@ -135,6 +135,8 @@ private:
     void form_boundary_theta(int boundary_idx, Scalar* d_theta, int si);
     double merge_boundary(int boundary_idx, int si);
     void rebuild_boundary_envs(int boundary_idx, int si);
+    double optimize_boundary_bond(int boundary_idx, char direction, int si);
+    double boundary_coupling_sweep();
 
     // === Memory management ===
     void allocate_stream_workspaces();
