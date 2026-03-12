@@ -642,10 +642,17 @@ void PDMRGGPU<Scalar>::build_initial_environments() {
                             D_mpo_ * sizeof(Scalar), hipMemcpyHostToDevice));
     }
 
+    // Build all L environments left-to-right on stream 0
+    for (int i = 0; i < L_; i++) {
+        update_left_env(i, 0);
+    }
+    HIP_CHECK(hipStreamSynchronize(streams_[0]));
+
     // Build all R environments right-to-left on stream 0
     for (int i = L_ - 1; i >= 0; i--) {
         update_right_env(i, 0);
     }
+    HIP_CHECK(hipStreamSynchronize(streams_[0]));
 }
 
 // ============================================================================
