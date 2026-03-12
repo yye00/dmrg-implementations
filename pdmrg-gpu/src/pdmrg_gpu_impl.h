@@ -504,29 +504,22 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
         &zero_val,
         T2, cL * cR));
 
-    // Step 3: Batched GEMMs — T2 × R_env (batch over (s1p,s2p) for each n)
-    for (int n = 0; n < D; n++) {
-        Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
-        for (int s1p = 0; s1p < d; s1p++)
-            for (int s2p = 0; s2p < d; s2p++) {
-                int idx = s1p * d + s2p;
+    // Step 3: Loop of GEMMs — T2 × R_env
+    for (int s1p = 0; s1p < d; s1p++) {
+        for (int s2p = 0; s2p < d; s2p++) {
+            for (int n = 0; n < D; n++) {
+                Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
                 int ws_out = n * dd + s1p * d + s2p;
-                ws.h_batch_A_pinned[idx] = T2 + ws_out * cL * cR;
-                ws.h_batch_B_pinned[idx] = R_env + n * cR;
-                ws.h_batch_C_pinned[idx] = d_result + s1p * cL + s2p * cL * d;
+                ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                    rocblas_operation_none, rocblas_operation_none,
+                    cL, cR, cR,
+                    &one,
+                    T2 + ws_out * cL * cR, cL,
+                    R_env + n * cR, cR * D,
+                    &beta,
+                    d_result + s1p * cL + s2p * cL * d, cL * dd));
             }
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, ws.h_batch_A_pinned, dd*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, ws.h_batch_B_pinned, dd*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, ws.h_batch_C_pinned, dd*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
-            rocblas_operation_none, rocblas_operation_none,
-            cL, cR, cR,
-            &one,
-            (const Scalar**)ws.d_batch_A, cL,
-            (const Scalar**)ws.d_batch_B, cR * D,
-            &beta,
-            ws.d_batch_C, cL * dd,
-            dd));
+        }
     }
 }
 
@@ -584,27 +577,20 @@ void PDMRGGPU<Scalar>::update_left_env(int site, int si) {
         &zero_val,
         U, chi_in * chi_out));
 
-    // Step 3: Batched — L_new_w'[b,b'] = sum_{s'} U[ws',b]^H * A[s',b'] (batch over wp for each sp)
-    for (int sp = 0; sp < d; sp++) {
-        Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-        for (int wp = 0; wp < D; wp++) {
+    // Step 3: L_new_w'[b,b'] = sum_{a',s'} conj(U[a',ws',b])^H * A[a',s',b']
+    for (int wp = 0; wp < D; wp++) {
+        for (int sp = 0; sp < d; sp++) {
+            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
             int ws_out = wp * d + sp;
-            ws.h_batch_A_pinned[wp] = U + ws_out * chi_in * chi_out;
-            ws.h_batch_B_pinned[wp] = A + sp * chi_in;
-            ws.h_batch_C_pinned[wp] = L_new + wp * chi_out;
+            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                Traits::op_h, rocblas_operation_none,
+                chi_out, chi_out, chi_in,
+                &one,
+                U + ws_out * chi_in * chi_out, chi_in,
+                A + sp * chi_in, chi_in * d,
+                &beta,
+                L_new + wp * chi_out, chi_out * D));
         }
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, ws.h_batch_A_pinned, D*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, ws.h_batch_B_pinned, D*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, ws.h_batch_C_pinned, D*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
-            Traits::op_h, rocblas_operation_none,
-            chi_out, chi_out, chi_in,
-            &one,
-            (const Scalar**)ws.d_batch_A, chi_in,
-            (const Scalar**)ws.d_batch_B, chi_in * d,
-            &beta,
-            ws.d_batch_C, chi_out * D,
-            D));
     }
 
     if constexpr (Traits::is_complex) {
@@ -666,27 +652,20 @@ void PDMRGGPU<Scalar>::update_right_env(int site, int si) {
         &zero_val,
         U, chi_out * chi_in));
 
-    // Step 3: Batched — R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a'] (batch over w for each sp)
-    for (int sp = 0; sp < d; sp++) {
-        Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-        for (int w = 0; w < D; w++) {
+    // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
+    for (int w = 0; w < D; w++) {
+        for (int sp = 0; sp < d; sp++) {
+            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
             int ws_out = w * d + sp;
-            ws.h_batch_A_pinned[w] = U + ws_out * chi_out * chi_in;
-            ws.h_batch_B_pinned[w] = A + sp * chi_out;
-            ws.h_batch_C_pinned[w] = R_new + w * chi_out;
+            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                rocblas_operation_none, Traits::op_h,
+                chi_out, chi_out, chi_in,
+                &one,
+                U + ws_out * chi_out * chi_in, chi_out,
+                A + sp * chi_out, chi_out * d,
+                &beta,
+                R_new + w * chi_out, chi_out * D));
         }
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, ws.h_batch_A_pinned, D*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, ws.h_batch_B_pinned, D*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, ws.h_batch_C_pinned, D*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
-            rocblas_operation_none, Traits::op_h,
-            chi_out, chi_out, chi_in,
-            &one,
-            (const Scalar**)ws.d_batch_A, chi_out,
-            (const Scalar**)ws.d_batch_B, chi_out * d,
-            &beta,
-            ws.d_batch_C, chi_out * D,
-            D));
     }
 }
 
