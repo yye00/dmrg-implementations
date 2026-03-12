@@ -1020,7 +1020,8 @@ double PDMRGGPU<Scalar>::sweep_LR_full() {
     for (int site = 0; site < L_ - 1; site++) {
         energy = optimize_bond(site, 'R', 0);
         update_left_env(site, 0);
-        HIP_CHECK(hipStreamSynchronize(streams_[0]));
+        // A7: No explicit sync needed — CPU SVD path forces sync via D2H copy,
+        // and pageable H2D uploads are staged (effectively synchronous).
     }
     return energy;
 }
@@ -1031,7 +1032,7 @@ double PDMRGGPU<Scalar>::sweep_RL_full() {
     for (int site = L_ - 2; site >= 0; site--) {
         energy = optimize_bond(site, 'L', 0);
         update_right_env(site + 1, 0);
-        HIP_CHECK(hipStreamSynchronize(streams_[0]));
+        // A7: No explicit sync needed — see above.
     }
     return energy;
 }
@@ -1090,12 +1091,10 @@ double PDMRGGPU<Scalar>::boundary_coupling_sweep(int W) {
         for (int site = lo; site <= hi; site++) {
             energy = optimize_bond(site, 'R', si);
             update_left_env(site, si);
-            HIP_CHECK(hipStreamSynchronize(streams_[si]));
         }
         for (int site = hi; site >= lo; site--) {
             energy = optimize_bond(site, 'L', si);
             update_right_env(site + 1, si);
-            HIP_CHECK(hipStreamSynchronize(streams_[si]));
         }
     }
     return energy;
