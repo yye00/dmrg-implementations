@@ -82,6 +82,18 @@ private:
         Scalar** d_batch_A;
         Scalar** d_batch_B;
         Scalar** d_batch_C;
+        // Lanczos device-pointer-mode scalars
+        Scalar* d_dot_result;        // 1 element: raw dot product result
+        RealType* d_nrm2_result;     // 1 element: raw nrm2 result
+        Scalar* d_neg_alpha;         // 1 element: -alpha for axpy
+        Scalar* d_neg_overlap;       // 1 element: -overlap for reorth
+        RealType* d_inv_nrm;         // 1 element: 1/nrm for scal
+        RealType* d_alpha_dev;       // [max_iter]: alpha values
+        RealType* d_beta_dev;        // [max_iter]: beta values
+        Scalar* d_neg_beta_scalars;  // [max_iter]: -beta as Scalar for axpy
+        Scalar* d_const_one;         // constant 1.0
+        Scalar* d_const_zero;        // constant 0.0
+        Scalar* d_const_neg_one;     // constant -1.0
         // GPU SVD
         Scalar* d_svd_A;
         Scalar* d_svd_U;
