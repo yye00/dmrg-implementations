@@ -1257,14 +1257,12 @@ double PDMRGGPU<Scalar>::boundary_coupling_sweep() {
     // R_env[i] consistent with MPS[i..L-1] for all i.
     build_initial_environments();
 
-    // Step 2: L→R boundary pass
+    // Step 2: L→R boundary pass — standard two-site optimization at each boundary
     for (int k = 0; k < n_boundaries; k++) {
         int b = boundary_bonds_[k];
-        energy = optimize_boundary_bond(k, 'R', 0);
+        energy = optimize_bond(b, 'R', 0);
 
-        // Propagate L_env forward to next boundary (or end of chain).
-        // After optimize_boundary_bond modified MPS[b] and MPS[b+1],
-        // L_env[b+1] and beyond are stale. Rebuild incrementally.
+        // Propagate L_env forward to next boundary (or end of chain)
         int end = (k + 1 < n_boundaries) ? boundary_bonds_[k + 1] - 1 : L_ - 2;
         for (int site = b; site <= end; site++) {
             update_left_env(site, 0);
@@ -1273,7 +1271,6 @@ double PDMRGGPU<Scalar>::boundary_coupling_sweep() {
     }
 
     // Step 3: Rebuild all R environments
-    // The L→R pass modified MPS at each boundary, making R_env stale.
     for (int i = L_ - 1; i >= 0; i--) {
         update_right_env(i, 0);
     }
@@ -1282,7 +1279,7 @@ double PDMRGGPU<Scalar>::boundary_coupling_sweep() {
     // Step 4: R→L boundary pass
     for (int k = n_boundaries - 1; k >= 0; k--) {
         int b = boundary_bonds_[k];
-        energy = optimize_boundary_bond(k, 'L', 0);
+        energy = optimize_bond(b, 'L', 0);
 
         // Propagate R_env backward to previous boundary (or start of chain)
         int prev_end = (k > 0) ? boundary_bonds_[k - 1] + 1 : 0;
@@ -1348,18 +1345,6 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
 
     for (int outer = 0; outer < n_outer_sweeps; outer++) {
         auto t_outer = std::chrono::high_resolution_clock::now();
-
-        // === Compute/recompute boundary V-matrices (Stoudenmire: V = Lambda^{-1}) ===
-        // V must be computed from the CURRENT MPS state before each iteration.
-        // compute_boundary_V only needs MPS tensors (no environments).
-        // After it modifies boundary MPS via SVD, rebuild environments once.
-        if (n_segments_ > 1) {
-            for (int k = 0; k < n_segments_ - 1; k++) {
-                compute_boundary_V(k);
-            }
-            // Rebuild environments to reflect V-modified boundary MPS
-            build_initial_environments();
-        }
 
         // === Phase 1: Independent segment sweeps (parallel streams) ===
         for (int local_sw = 0; local_sw < n_local_sweeps; local_sw++) {
