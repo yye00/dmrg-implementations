@@ -1998,10 +1998,14 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
     energy_ = warmup_energy;
     bool outer_converged = false;
 
+    double total_parallel_time = 0.0;
+    double total_coupling_time = 0.0;
+
     for (int outer = 0; outer < n_outer_sweeps; outer++) {
         auto t_outer = std::chrono::high_resolution_clock::now();
 
         // Phase 1: Parallel segment sweeps
+        auto t_par_start = std::chrono::high_resolution_clock::now();
         auto parallel_sweep = [this](auto sweep_fn) {
             std::vector<std::thread> threads(n_segments_);
             for (int k = 0; k < n_segments_; k++) {
@@ -2019,10 +2023,18 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
                 parallel_sweep([](PDMRG2GPU* self, int k){ self->segment_sweep_LR(k); });
             }
         }
+        auto t_par_end = std::chrono::high_resolution_clock::now();
+        double par_time = std::chrono::duration<double>(t_par_end - t_par_start).count();
+        total_parallel_time += par_time;
 
-        // Phase 2: Boundary coupling sweep (only ±W sites around each boundary)
+        // Phase 2: Full-chain coupling sweep
+        auto t_coup_start = std::chrono::high_resolution_clock::now();
         build_initial_environments();
-        energy_ = boundary_coupling_sweep(4);
+        sweep_LR_full();
+        energy_ = sweep_RL_full();
+        auto t_coup_end = std::chrono::high_resolution_clock::now();
+        double coup_time = std::chrono::duration<double>(t_coup_end - t_coup_start).count();
+        total_coupling_time += coup_time;
 
         auto t_outer_end = std::chrono::high_resolution_clock::now();
         double outer_time = std::chrono::duration<double>(t_outer_end - t_outer).count();
@@ -2036,7 +2048,8 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
         std::cout << "Outer " << std::setw(3) << outer << ": E = " << std::setprecision(12)
                   << energy_ << ", dE = " << std::scientific << std::setprecision(2) << dE
                   << ", time = " << std::fixed << std::setprecision(3) << outer_time
-                  << " s  chi=[" << chi_str.str() << "]" << std::endl;
+                  << " s (par=" << par_time << " coup=" << coup_time
+                  << ")  chi=[" << chi_str.str() << "]" << std::endl;
 
         if (dE < tol_ && outer > 0) {
             std::cout << "Converged after " << outer + 1 << " outer iterations!" << std::endl;
@@ -2046,6 +2059,8 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
 
         energy_prev = energy_;
     }
+    std::cout << "Total parallel time: " << std::fixed << std::setprecision(3)
+              << total_parallel_time << " s, coupling time: " << total_coupling_time << " s" << std::endl;
 
     // === Polish phase: always run full-chain sweeps to ensure global accuracy ===
     if (n_segments_ > 1) {
