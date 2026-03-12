@@ -143,10 +143,10 @@ void PDMRGGPU<Scalar>::allocate_stream_workspaces() {
         HIP_CHECK(hipMalloc(&ws.d_batch_A, batch_max * sizeof(Scalar*)));
         HIP_CHECK(hipMalloc(&ws.d_batch_B, batch_max * sizeof(Scalar*)));
         HIP_CHECK(hipMalloc(&ws.d_batch_C, batch_max * sizeof(Scalar*)));
-        // Pinned host pointer arrays (avoid heap alloc + enable truly async H2D)
-        HIP_CHECK(hipHostMalloc(&ws.h_batch_A_pinned, batch_max * sizeof(Scalar*)));
-        HIP_CHECK(hipHostMalloc(&ws.h_batch_B_pinned, batch_max * sizeof(Scalar*)));
-        HIP_CHECK(hipHostMalloc(&ws.h_batch_C_pinned, batch_max * sizeof(Scalar*)));
+        // Pinned host pointer arrays no longer needed — pointer setup done by GPU kernels
+        ws.h_batch_A_pinned = nullptr;
+        ws.h_batch_B_pinned = nullptr;
+        ws.h_batch_C_pinned = nullptr;
         // Cached apply_heff A/C pointers (separate device arrays)
         HIP_CHECK(hipMalloc(&ws.d_heff_batch_A, batch_max * sizeof(Scalar*)));
         HIP_CHECK(hipMalloc(&ws.d_heff_batch_C, batch_max * sizeof(Scalar*)));
@@ -238,9 +238,7 @@ void PDMRGGPU<Scalar>::free_gpu_resources() {
         if (ws.d_batch_A) hipFree(ws.d_batch_A);
         if (ws.d_batch_B) hipFree(ws.d_batch_B);
         if (ws.d_batch_C) hipFree(ws.d_batch_C);
-        if (ws.h_batch_A_pinned) hipHostFree(ws.h_batch_A_pinned);
-        if (ws.h_batch_B_pinned) hipHostFree(ws.h_batch_B_pinned);
-        if (ws.h_batch_C_pinned) hipHostFree(ws.h_batch_C_pinned);
+        // h_batch_*_pinned no longer allocated (GPU kernel pointer setup)
         if (ws.d_heff_batch_A) hipFree(ws.d_heff_batch_A);
         if (ws.d_heff_batch_C) hipFree(ws.d_heff_batch_C);
         if (ws.d_dot_result) hipFree(ws.d_dot_result);
@@ -460,33 +458,18 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
     {
         int batch_count = D * dd;
 
-        // Cache A and C pointers (constant for a given site)
+        // Cache A and C pointers (constant for a given site) — GPU kernel, no DMA
         if (ws.heff_cached_site != site) {
-            for (int w = 0; w < D; w++)
-                for (int s1 = 0; s1 < d; s1++)
-                    for (int s2 = 0; s2 < d; s2++) {
-                        int ws_idx = w * dd + s1 * d + s2;
-                        ws.h_batch_A_pinned[ws_idx] = L_env + w * cL;
-                        ws.h_batch_C_pinned[ws_idx] = T1 + ws_idx * cL * cR;
-                    }
-            HIP_CHECK(hipMemcpyAsync(ws.d_heff_batch_A, ws.h_batch_A_pinned, batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-            HIP_CHECK(hipMemcpyAsync(ws.d_heff_batch_C, ws.h_batch_C_pinned, batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-            HIP_CHECK(hipStreamSynchronize(streams_[si]));  // ensure DMA reads pinned buf
+            hipLaunchKernelGGL(setup_heff_A_ptrs<Scalar>, dim3(1), dim3(batch_count), 0, streams_[si],
+                               ws.d_heff_batch_A, L_env, cL, dd, batch_count);
+            hipLaunchKernelGGL(setup_heff_C_ptrs<Scalar>, dim3(1), dim3(batch_count), 0, streams_[si],
+                               ws.d_heff_batch_C, T1, cL * cR, batch_count);
             ws.heff_cached_site = site;
         }
 
-        // B pointers change per call (d_theta_in varies in Lanczos loop)
-        // Sync to ensure any previous async DMA from this pinned buffer has completed
-        // before we overwrite it. The DMA is only 160 bytes; the sync cost is minimal
-        // since the batched GEMM can't start until all prior stream ops complete anyway.
-        HIP_CHECK(hipStreamSynchronize(streams_[si]));
-        for (int w = 0; w < D; w++)
-            for (int s1 = 0; s1 < d; s1++)
-                for (int s2 = 0; s2 < d; s2++) {
-                    int ws_idx = w * dd + s1 * d + s2;
-                    ws.h_batch_B_pinned[ws_idx] = const_cast<Scalar*>(d_theta_in) + s1 * cL + s2 * cL * d;
-                }
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, ws.h_batch_B_pinned, batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+        // B pointers change per call (d_theta_in varies) — GPU kernel, no DMA race
+        hipLaunchKernelGGL(setup_heff_B_ptrs<Scalar>, dim3(1), dim3(batch_count), 0, streams_[si],
+                           ws.d_batch_B, const_cast<Scalar*>(d_theta_in), cL, d, dd, batch_count);
 
         ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
             Traits::op_t, rocblas_operation_none,
@@ -550,20 +533,11 @@ void PDMRGGPU<Scalar>::update_left_env(int site, int si) {
     Scalar* U = ws.d_T2;
 
     // Step 1: V_ws[a',b] = L_w^T[a',a] * A_s[a,b]  (batched GEMM)
-    // NOTE: Use synchronous hipMemcpy for pointer arrays to avoid race with
-    // the calling loop overwriting pinned buffers before async DMA completes.
     {
-        for (int w = 0; w < D; w++)
-            for (int s = 0; s < d; s++) {
-                int ws_idx = w * d + s;
-                ws.h_batch_A_pinned[ws_idx] = L_env + w * chi_in;
-                ws.h_batch_B_pinned[ws_idx] = A + s * chi_in;
-                ws.h_batch_C_pinned[ws_idx] = V + ws_idx * chi_in * chi_out;
-            }
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, ws.h_batch_A_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, ws.h_batch_B_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, ws.h_batch_C_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipStreamSynchronize(streams_[si]));  // ensure DMA reads pinned buf before caller overwrites
+        int batch_count = D * d;
+        hipLaunchKernelGGL(setup_lenv_ptrs<Scalar>, dim3(1), dim3(batch_count), 0, streams_[si],
+                           ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
+                           L_env, A, V, chi_in, chi_out, d, batch_count);
         ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
             Traits::op_t, rocblas_operation_none,
             chi_in, chi_out, chi_in,
@@ -572,7 +546,7 @@ void PDMRGGPU<Scalar>::update_left_env(int site, int si) {
             (const Scalar**)ws.d_batch_B, chi_in * d,
             &zero_val,
             ws.d_batch_C, chi_in,
-            D * d));
+            batch_count));
     }
 
     // Step 2: U = V * W_matrix
@@ -629,17 +603,10 @@ void PDMRGGPU<Scalar>::update_right_env(int site, int si) {
 
     // Step 1: V_ws[a,b'] = A_s[a,b] * R_w'[b,b']  (batched GEMM)
     {
-        for (int wp = 0; wp < D; wp++)
-            for (int s = 0; s < d; s++) {
-                int ws_idx = wp * d + s;
-                ws.h_batch_A_pinned[ws_idx] = A + s * chi_out;
-                ws.h_batch_B_pinned[ws_idx] = R_env + wp * chi_in;
-                ws.h_batch_C_pinned[ws_idx] = V + ws_idx * chi_out * chi_in;
-            }
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, ws.h_batch_A_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, ws.h_batch_B_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, ws.h_batch_C_pinned, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipStreamSynchronize(streams_[si]));  // ensure DMA reads pinned buf before caller overwrites
+        int batch_count = D * d;
+        hipLaunchKernelGGL(setup_renv_ptrs<Scalar>, dim3(1), dim3(batch_count), 0, streams_[si],
+                           ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
+                           A, R_env, V, chi_in, chi_out, d, batch_count);
         ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
             rocblas_operation_none, rocblas_operation_none,
             chi_out, chi_in, chi_in,
@@ -648,7 +615,7 @@ void PDMRGGPU<Scalar>::update_right_env(int site, int si) {
             (const Scalar**)ws.d_batch_B, chi_in * D,
             &zero_val,
             ws.d_batch_C, chi_out,
-            D * d));
+            batch_count));
     }
 
     // Step 2: U = V * W_matrix

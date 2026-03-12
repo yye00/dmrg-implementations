@@ -290,6 +290,68 @@ __global__ inline void inv_real_kernel(const double* in, double* out) {
 }
 
 // ============================================================================
+// GPU-side batched GEMM pointer setup kernels
+// Compute pointer arrays directly on GPU — no host→device DMA, no race conditions.
+// ============================================================================
+
+// apply_heff Step 1: A[idx] = L_env + w*cL, where w = idx/dd
+template<typename Scalar>
+__global__ void setup_heff_A_ptrs(Scalar** ptrs, Scalar* L_env, int cL, int dd, int n) {
+    int i = threadIdx.x;
+    if (i < n) ptrs[i] = L_env + (i / dd) * cL;
+}
+
+// apply_heff Step 1: B[idx] = theta + s1*cL + s2*cL*d, where s1=(idx%dd)/d, s2=idx%d
+template<typename Scalar>
+__global__ void setup_heff_B_ptrs(Scalar** ptrs, Scalar* theta, int cL, int d, int dd, int n) {
+    int i = threadIdx.x;
+    if (i < n) {
+        int s1 = (i % dd) / d;
+        int s2 = i % d;
+        ptrs[i] = theta + s1 * cL + s2 * cL * d;
+    }
+}
+
+// apply_heff Step 1: C[idx] = T1 + idx*cL*cR
+template<typename Scalar>
+__global__ void setup_heff_C_ptrs(Scalar** ptrs, Scalar* T1, int cL_cR, int n) {
+    int i = threadIdx.x;
+    if (i < n) ptrs[i] = T1 + i * cL_cR;
+}
+
+// update_left_env Step 1: A[w*d+s] = L_env + w*chi_in
+// update_left_env Step 1: B[w*d+s] = A_mps + s*chi_in
+// update_left_env Step 1: C[w*d+s] = V + (w*d+s)*chi_in*chi_out
+template<typename Scalar>
+__global__ void setup_lenv_ptrs(Scalar** d_A, Scalar** d_B, Scalar** d_C,
+                                 Scalar* L_env, Scalar* A_mps, Scalar* V,
+                                 int chi_in, int chi_out, int d, int n) {
+    int i = threadIdx.x;
+    if (i < n) {
+        int w = i / d, s = i % d;
+        d_A[i] = L_env + w * chi_in;
+        d_B[i] = A_mps + s * chi_in;
+        d_C[i] = V + i * chi_in * chi_out;
+    }
+}
+
+// update_right_env Step 1: A[wp*d+s] = A_mps + s*chi_out
+// update_right_env Step 1: B[wp*d+s] = R_env + wp*chi_in
+// update_right_env Step 1: C[wp*d+s] = V + (wp*d+s)*chi_out*chi_in
+template<typename Scalar>
+__global__ void setup_renv_ptrs(Scalar** d_A, Scalar** d_B, Scalar** d_C,
+                                 Scalar* A_mps, Scalar* R_env, Scalar* V,
+                                 int chi_in, int chi_out, int d, int n) {
+    int i = threadIdx.x;
+    if (i < n) {
+        int wp = i / d, s = i % d;
+        d_A[i] = A_mps + s * chi_out;
+        d_B[i] = R_env + wp * chi_in;
+        d_C[i] = V + i * chi_out * chi_in;
+    }
+}
+
+// ============================================================================
 // In-place conjugation of GPU arrays (no-op for real)
 // ============================================================================
 
