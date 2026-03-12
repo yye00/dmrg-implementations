@@ -1234,6 +1234,26 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
         energy_prev = energy_;
     }
 
+    // === Polish phase: full-chain sweeps to converge to tight tolerance ===
+    if (n_segments_ > 1) {
+        printf("Polish sweeps (full-chain dmrg2)...\n");
+        build_initial_environments();
+        for (int sw = 0; sw < n_outer_sweeps; sw++) {
+            auto t_sw = std::chrono::high_resolution_clock::now();
+            double eLR = sweep_LR_full();
+            double eRL = sweep_RL_full();
+            auto t_sw_end = std::chrono::high_resolution_clock::now();
+            double sw_time = std::chrono::duration<double>(t_sw_end - t_sw).count();
+            double dE = std::abs(eRL - energy_);
+            printf("  Polish %d: E = %.12f, dE = %.2e, time = %.3f s\n", sw, eRL, dE, sw_time);
+            energy_ = eRL;
+            if (dE < tol_) {
+                printf("  Converged after %d polish sweeps!\n", sw + 1);
+                break;
+            }
+        }
+    }
+
     auto t_end = std::chrono::high_resolution_clock::now();
     double total_time = std::chrono::duration<double>(t_end - t_start).count();
     printf("\nTotal wall time: %.3f s\n", total_time);

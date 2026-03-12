@@ -176,7 +176,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
         double error = std::abs(energy - exact);
         printf("Exact energy: %.12f\n", exact);
         printf("Absolute error: %.2e\n", error);
-        if (error < 1e-6) printf("PASS\n");
+        if (error < 1e-10) printf("PASS\n");
         else { printf("FAIL\n"); ret = 1; }
     }
 
@@ -232,7 +232,7 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
         double error = std::abs(energy - exact);
         printf("Exact energy: %.12f\n", exact);
         printf("Absolute error: %.2e\n", error);
-        if (error < 1e-6) printf("PASS\n");
+        if (error < 1e-10) printf("PASS\n");
         else { printf("FAIL\n"); ret = 1; }
     }
 
