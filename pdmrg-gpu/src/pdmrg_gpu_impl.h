@@ -1062,106 +1062,30 @@ void PDMRGGPU<Scalar>::compute_boundary_V(int boundary_idx) {
 }
 
 // ============================================================================
-// Boundary theta formation with V-matrix weighting
+// Boundary theta formation (standard, no V-weighting)
 // ============================================================================
 
 template<typename Scalar>
 void PDMRGGPU<Scalar>::form_boundary_theta(int boundary_idx, Scalar* d_theta, int si) {
     int b = boundary_bonds_[boundary_idx];
-    int cL = chi_L(b);
-    int chi_mid = bond_dims_[b + 1];
-    int cR = chi_R(b + 1);
-    auto& ws = workspaces_[si];
-    Scalar one = Traits::one(), zero_val = Traits::zero();
-
-    // Step 1: Scale MPS[b]'s right index by V using GPU kernel
-    //   MPS[b]: (cL*d, chi_mid) column-major
-    //   V: (chi_mid,) diagonal
-    //   scaled: (cL*d, chi_mid) with each column j *= V[j]
-    // Use T1 as temp buffer for scaled matrix
-    column_scale_real(ws.d_T1, d_mps_tensors_[b], d_V_boundary_[boundary_idx],
-                       cL * d_, chi_mid, streams_[si]);
-
-    // Step 2: theta = scaled @ MPS[b+1]
-    //   (cL*d, chi_mid) @ (chi_mid, d*cR) → (cL*d, d*cR)
-    ROCBLAS_CHECK(Traits::gemm(handles_[si],
-        rocblas_operation_none, rocblas_operation_none,
-        cL * d_, d_ * cR, chi_mid,
-        &one,
-        ws.d_T1, cL * d_,
-        d_mps_tensors_[b + 1], chi_mid,
-        &zero_val,
-        d_theta, cL * d_));
+    // Use standard theta formation: theta = MPS[b] * MPS[b+1]
+    // V-weighting is not used because after local sweeps the boundary MPS
+    // tensors have been modified, making the V-matrix stale.
+    // Lanczos will find the ground state regardless of initial guess.
+    form_theta_two_site(b, si);
+    // form_theta_two_site writes to ws.d_theta which is the same as d_theta
 }
 
 // ============================================================================
-// Boundary merge: optimize boundary bond with V-weighted theta
+// Boundary merge: optimize boundary bond
 // ============================================================================
 
 template<typename Scalar>
 double PDMRGGPU<Scalar>::merge_boundary(int boundary_idx, int si) {
     int b = boundary_bonds_[boundary_idx];
-    int cL = chi_L(b);
-    int cR = chi_R(b + 1);
-    int theta_size = cL * d_ * d_ * cR;
-    auto& ws = workspaces_[si];
 
-    // Form V-weighted boundary theta
-    form_boundary_theta(boundary_idx, ws.d_theta, si);
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
-
-    // Lanczos optimization using L_env[b] and R_env[b+2]
-    double energy = lanczos_eigensolver(b, ws.d_theta, theta_size, si);
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
-
-    // SVD split — MPS[b] = U (left-canonical), MPS[b+1] = S*Vh
-    // Also update V_boundary
-    int m = cL * d_;
-    int n_svd = d_ * cR;
-    int full_k = std::min(m, n_svd);
-    int k = std::min(full_k, chi_max_);
-
-    // CPU SVD
-    HIP_CHECK(hipMemcpy(ws.h_svd_A.data(), ws.d_theta, m * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
-
-    int lwork = (int)ws.h_svd_work.size();
-    int info;
-    const char jobu = 'S', jobvt = 'S';
-    Traits::lapack_gesvd(&jobu, &jobvt, &m, &n_svd, ws.h_svd_A.data(), &m,
-            ws.h_svd_S.data(), ws.h_svd_U.data(), &m, ws.h_svd_Vh.data(), &full_k,
-            ws.h_svd_work.data(), &lwork,
-            ws.h_svd_rwork.empty() ? nullptr : ws.h_svd_rwork.data(), &info);
-
-    // Truncation
-    int new_k = k;
-    for (int i = 0; i < new_k; i++) {
-        if (ws.h_svd_S[i] < 1e-14) { new_k = i; break; }
-    }
-    if (new_k == 0) new_k = 1;
-
-    // Update V_boundary
-    h_V_boundary_[boundary_idx].resize(new_k);
-    for (int i = 0; i < new_k; i++) {
-        h_V_boundary_[boundary_idx][i] = (ws.h_svd_S[i] > 1e-14) ? 1.0 / ws.h_svd_S[i] : 0.0;
-    }
-    HIP_CHECK(hipMemcpy(d_V_boundary_[boundary_idx], h_V_boundary_[boundary_idx].data(),
-                        new_k * sizeof(double), hipMemcpyHostToDevice));
-
-    // MPS[b] = U
-    allocate_mps_tensor(b, cL, new_k);
-    HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[b], ws.h_svd_U.data(),
-                m * new_k * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
-
-    // MPS[b+1] = S * Vh
-    for (int j = 0; j < n_svd; j++)
-        for (int i = 0; i < new_k; i++)
-            ws.h_svd_tmp[i + j * new_k] = Traits::scale_by_real(ws.h_svd_S[i], ws.h_svd_Vh[i + j * full_k]);
-
-    allocate_mps_tensor(b + 1, new_k, cR);
-    HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[b + 1], ws.h_svd_tmp.data(),
-                new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
-
-    bond_dims_[b + 1] = new_k;
+    // Standard two-site optimization at the boundary bond
+    double energy = optimize_bond(b, 'R', si);
 
     return energy;
 }
@@ -1283,28 +1207,21 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
             }
         }
 
-        // === Phase 2: Boundary merges ===
+        // === Phase 2: Boundary merges (sequential, with env rebuilds) ===
         double merge_energy = 0.0;
 
-        // Even boundaries first (0, 2, 4, ...) — can run in parallel
-        for (int k = 0; k < n_segments_ - 1; k += 2) {
-            merge_energy = merge_boundary(k, k);
-        }
-        for (int k = 0; k < n_segments_ - 1; k += 2) {
-            HIP_CHECK(hipStreamSynchronize(streams_[k]));
-            rebuild_boundary_envs(k, k);
-        }
-
-        // Odd boundaries (1, 3, 5, ...) — can run in parallel
-        for (int k = 1; k < n_segments_ - 1; k += 2) {
-            merge_energy = merge_boundary(k, k);
-        }
-        for (int k = 1; k < n_segments_ - 1; k += 2) {
-            HIP_CHECK(hipStreamSynchronize(streams_[k]));
-            rebuild_boundary_envs(k, k);
+        for (int k = 0; k < n_segments_ - 1; k++) {
+            double e = merge_boundary(k, 0);  // all merges on stream 0
+            if (k == 0 || e < merge_energy) merge_energy = e;
+            // Rebuild environments at this boundary for subsequent merges
+            update_left_env(boundary_bonds_[k], 0);
+            HIP_CHECK(hipStreamSynchronize(streams_[0]));
         }
 
-        // Use the last merge energy as the global estimate
+        // After all merges, rebuild all environments from scratch
+        // to ensure consistency for the next outer iteration
+        build_initial_environments();
+
         energy_ = merge_energy;
 
         auto t_outer_end = std::chrono::high_resolution_clock::now();
