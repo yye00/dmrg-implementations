@@ -1160,18 +1160,8 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
         printf("  Warmup %d: E = %.12f, time = %.3f s\n", sw, warmup_energy, sw_time);
     }
 
-    // Compute initial V-matrices at boundaries
-    printf("Computing boundary V-matrices...\n");
-    for (int k = 0; k < n_segments_ - 1; k++) {
-        compute_boundary_V(k);
-    }
-
-    // Rebuild all environments after V-matrix computation changed boundary MPS
-    printf("Rebuilding environments after partitioning...\n");
-    build_initial_environments();
-
     auto t_warmup_end = std::chrono::high_resolution_clock::now();
-    printf("Warmup + partitioning: %.3f s\n\n", std::chrono::duration<double>(t_warmup_end - t_start).count());
+    printf("Warmup: %.3f s\n\n", std::chrono::duration<double>(t_warmup_end - t_start).count());
 
     // === Main PDMRG loop ===
     double energy_prev = warmup_energy;
@@ -1187,7 +1177,6 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
                 for (int k = 0; k < n_segments_; k++) {
                     segment_sweep_LR(k);
                 }
-                // Synchronize all streams
                 for (int k = 0; k < n_segments_; k++) {
                     HIP_CHECK(hipStreamSynchronize(streams_[k]));
                 }
@@ -1214,22 +1203,14 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
             }
         }
 
-        // === Phase 2: Boundary merges (sequential, with env rebuilds) ===
-        double merge_energy = 0.0;
-
-        for (int k = 0; k < n_segments_ - 1; k++) {
-            double e = merge_boundary(k, 0);  // all merges on stream 0
-            if (k == 0 || e < merge_energy) merge_energy = e;
-            // Rebuild environments at this boundary for subsequent merges
-            update_left_env(boundary_bonds_[k], 0);
-            HIP_CHECK(hipStreamSynchronize(streams_[0]));
-        }
-
-        // After all merges, rebuild all environments from scratch
-        // to ensure consistency for the next outer iteration
+        // === Phase 2: Full-chain coupling sweep on stream 0 ===
+        // Rebuild all environments from current MPS state
         build_initial_environments();
 
-        energy_ = merge_energy;
+        // One full-chain LR+RL sweep to couple segments and get energy
+        double eLR = sweep_LR_full();
+        double eRL = sweep_RL_full();
+        energy_ = eRL;
 
         auto t_outer_end = std::chrono::high_resolution_clock::now();
         double outer_time = std::chrono::duration<double>(t_outer_end - t_outer).count();
