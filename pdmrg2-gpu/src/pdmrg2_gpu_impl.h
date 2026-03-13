@@ -100,11 +100,12 @@ PDMRG2GPU<Scalar>::PDMRG2GPU(int L, int d, int chi_max, int D_mpo, int n_segment
 
     // Workspace parameters
     theta_size_max_ = chi_max_ * dd * chi_max_;
-    max_lanczos_iter_ = std::min(50, theta_size_max_);  // reduced for fallback
+    max_lanczos_iter_ = std::min(100, theta_size_max_);
     davidson_b_ = 4;
     davidson_max_sub_ = std::min(davidson_b_ * 8, theta_size_max_);
     use_cpu_svd_ = true;
     use_ns_split_ = true;  // default: use Newton-Schulz for bond split
+    use_davidson_ = false;  // default: use Lanczos (device-pointer-mode, 2-3 syncs/bond)
 
     allocate_stream_workspaces();
 }
@@ -1746,8 +1747,13 @@ double PDMRG2GPU<Scalar>::optimize_bond(int site, char direction, int si) {
 
     form_theta_two_site(site, si);
 
-    // Block-Davidson eigensolver (with Lanczos fallback)
-    double energy = block_davidson_eigensolver(site, ws.d_theta, theta_size, si);
+    // Eigensolver: Lanczos (default, device-pointer-mode) or Block-Davidson
+    double energy;
+    if (use_davidson_) {
+        energy = block_davidson_eigensolver(site, ws.d_theta, theta_size, si);
+    } else {
+        energy = lanczos_eigensolver(site, ws.d_theta, theta_size, si);
+    }
 
     // Bond split
     if (use_ns_split_) {

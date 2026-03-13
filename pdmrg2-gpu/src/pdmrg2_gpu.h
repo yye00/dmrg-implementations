@@ -38,6 +38,7 @@ public:
     void get_mps(std::vector<std::vector<Scalar>>& h_mps) const;
     void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
     void set_use_ns_split(bool use_ns) { use_ns_split_ = use_ns; }
+    void set_use_davidson(bool use_dav) { use_davidson_ = use_dav; }
 
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }
@@ -143,6 +144,7 @@ private:
 
     bool use_cpu_svd_;
     bool use_ns_split_;
+    bool use_davidson_;
     int theta_size_max_;
     int max_lanczos_iter_;
     int davidson_b_;
