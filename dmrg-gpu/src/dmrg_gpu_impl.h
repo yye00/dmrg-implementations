@@ -124,23 +124,36 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     h_svd_tmp_.resize(svd_max_dim * chi_max_);
     h_svd_rwork_.resize(Traits::svd_rwork_size(svd_max_dim, svd_max_dim));
 
-    // Query optimal LAPACK workspace
+    // Query optimal LAPACK workspace for ALL possible (m, n) combinations.
+    // Rectangular matrices can require MORE workspace than square — querying only
+    // for the square case (as done previously) caused silent SVD corruption on
+    // OpenBLAS 0.3.20 for tall-skinny matrices (m = chi*d, n = chi).
     {
-        int m = svd_max_dim, n = svd_max_dim;
-        int lwork_query = -1;
-        Scalar work_opt;
-        int info;
+        int max_lwork = 0;
         const char jobu = 'S', jobvt = 'S';
-        Traits::lapack_gesvd(&jobu, &jobvt, &m, &n, nullptr, &m, nullptr,
-                nullptr, &m, nullptr, &m, &work_opt, &lwork_query,
-                h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
-        int opt_size;
-        if constexpr (Traits::is_complex) {
-            opt_size = (int)Traits::real_part(work_opt) + 1;
-        } else {
-            opt_size = (int)work_opt + 1;
+        int dims[][2] = {
+            {svd_max_dim, svd_max_dim},  // square
+            {svd_max_dim, chi_max_},      // tall: m = chi*d, n = chi (direction R)
+            {chi_max_, svd_max_dim},      // wide: m = chi, n = chi*d (direction L)
+        };
+        for (auto& dim : dims) {
+            int qm = dim[0], qn = dim[1];
+            int qk = std::min(qm, qn);
+            int lwork_query = -1;
+            Scalar work_opt;
+            int info;
+            Traits::lapack_gesvd(&jobu, &jobvt, &qm, &qn, nullptr, &qm, nullptr,
+                    nullptr, &qm, nullptr, &qk, &work_opt, &lwork_query,
+                    h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
+            int opt_size;
+            if constexpr (Traits::is_complex) {
+                opt_size = (int)Traits::real_part(work_opt) + 1;
+            } else {
+                opt_size = (int)work_opt + 1;
+            }
+            if (opt_size > max_lwork) max_lwork = opt_size;
         }
-        h_svd_work_.resize(opt_size);
+        h_svd_work_.resize(max_lwork);
     }
 }
 

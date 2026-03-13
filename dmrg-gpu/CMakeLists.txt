@@ -30,8 +30,17 @@ find_package(hip REQUIRED)
 find_package(rocblas REQUIRED)
 find_package(rocsolver REQUIRED)
 
-# Find LAPACK (for Lanczos tridiagonal eigensolve)
-find_package(LAPACK REQUIRED)
+# Find LAPACK/BLAS
+# Prefer local OpenBLAS 0.3.28+ (system OpenBLAS 0.3.20 has broken dgesvd for tall-skinny matrices)
+set(OPENBLAS_PATH "$ENV{HOME}/openblas-0.3.28" CACHE PATH "Path to local OpenBLAS installation")
+if(EXISTS "${OPENBLAS_PATH}/lib/libopenblas.a")
+    message(STATUS "Using local OpenBLAS: ${OPENBLAS_PATH}")
+    set(LAPACK_LIBRARIES "${OPENBLAS_PATH}/lib/libopenblas.a" pthread)
+    include_directories(${OPENBLAS_PATH}/include)
+else()
+    message(WARNING "Local OpenBLAS not found at ${OPENBLAS_PATH}, falling back to system LAPACK (may have SVD bugs)")
+    find_package(LAPACK REQUIRED)
+endif()
 
 # Include directories
 include_directories(
