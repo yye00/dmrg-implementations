@@ -1900,19 +1900,9 @@ void PDMRG2GPU<Scalar>::segment_sweep_LR(int seg_idx) {
     int last = seg_last_[seg_idx];
     int si = seg_idx;
 
-    // Pre-sweep: right-canonize segment via Newton-Schulz
-    canonize_segment_right(seg_idx);
-
-    // After right-canonicalization, L_env[first] is stale (built from pre-canon MPS).
-    // Rebuild it from the orthogonality center at site first.
-    // Also rebuild R environments for the segment.
-    update_left_env(first, si);
-    for (int j = last; j > first; j--) {
-        update_right_env(j, si);
-    }
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
-
-    // LR sweep through segment
+    // No pre-sweep canonicalization needed: the two-site optimize_bond → NS/SVD
+    // split already produces left-canonical tensors during the LR sweep, and
+    // update_left_env incrementally builds correct environments as we go.
     for (int site = first; site < last; site++) {
         optimize_bond(site, 'R', si);
         update_left_env(site, si);
@@ -1925,19 +1915,9 @@ void PDMRG2GPU<Scalar>::segment_sweep_RL(int seg_idx) {
     int last = seg_last_[seg_idx];
     int si = seg_idx;
 
-    // Pre-sweep: left-canonize segment via Newton-Schulz
-    canonize_segment_left(seg_idx);
-
-    // After left-canonicalization, R_env[last] is stale (built from pre-canon MPS).
-    // Rebuild it from the orthogonality center at site last.
-    // Also rebuild L environments for the segment.
-    update_right_env(last, si);
-    for (int j = first; j < last; j++) {
-        update_left_env(j, si);
-    }
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
-
-    // RL sweep through segment
+    // No pre-sweep canonicalization needed: the two-site optimize_bond → NS/SVD
+    // split already produces right-canonical tensors during the RL sweep, and
+    // update_right_env incrementally builds correct environments as we go.
     for (int site = last - 1; site >= first; site--) {
         optimize_bond(site, 'L', si);
         update_right_env(site + 1, si);
