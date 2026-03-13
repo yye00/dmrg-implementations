@@ -537,21 +537,26 @@ void PDMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
         &zero_val,
         T2, cL * cR));
 
-    // Step 3: Loop of GEMMs — T2 × R_env
-    for (int s1p = 0; s1p < d; s1p++) {
-        for (int s2p = 0; s2p < d; s2p++) {
-            for (int n = 0; n < D; n++) {
-                Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
-                int ws_out = n * dd + s1p * d + s2p;
-                ROCBLAS_CHECK(Traits::gemm(handles_[si],
-                    rocblas_operation_none, rocblas_operation_none,
-                    cL, cR, cR,
-                    &one,
-                    T2 + ws_out * cL * cR, cL,
-                    R_env + n * cR, cR * D,
-                    &beta,
-                    d_result + s1p * cL + s2p * cL * d, cL * dd));
-            }
+    // Step 3: Batched GEMMs — T2 × R_env (d² batches per MPO index)
+    {
+        int cL_cR = cL * cR;
+        for (int n = 0; n < D; n++) {
+            Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
+
+            hipLaunchKernelGGL(setup_step3_ptrs<Scalar>, dim3(1), dim3(dd), 0, streams_[si],
+                               ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
+                               T2, R_env, d_result,
+                               cL, cR, d, dd, n, cL_cR, dd);
+
+            ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
+                rocblas_operation_none, rocblas_operation_none,
+                cL, cR, cR,
+                &one,
+                (const Scalar**)ws.d_batch_A, cL,
+                (const Scalar**)ws.d_batch_B, cR * D,
+                &beta,
+                ws.d_batch_C, cL * dd,
+                dd));
         }
     }
 }

@@ -361,6 +361,25 @@ __global__ void setup_renv_ptrs(Scalar** d_A, Scalar** d_B, Scalar** d_C,
     }
 }
 
+// Setup pointer arrays for apply_heff Step 3 batched GEMM
+// For a given MPO index n, sets up d² batched GEMMs:
+//   A[b] = T2 + (n*dd + b) * cL_cR    (each a cL×cR slice)
+//   B[b] = R_env + n * cR              (same R_env block for all)
+//   C[b] = result + (b/d)*cL + (b%d)*cL*d  (output theta slices)
+template<typename Scalar>
+__global__ void setup_step3_ptrs(Scalar** d_A, Scalar** d_B, Scalar** d_C,
+                                  Scalar* T2, Scalar* R_env, Scalar* result,
+                                  int cL, int cR, int d, int dd, int n_mpo,
+                                  int cL_cR, int batch_count) {
+    int b = threadIdx.x;
+    if (b < batch_count) {
+        d_A[b] = T2 + ((size_t)n_mpo * dd + b) * cL_cR;
+        d_B[b] = R_env + n_mpo * cR;
+        int s1p = b / d, s2p = b % d;
+        d_C[b] = result + s1p * cL + s2p * cL * d;
+    }
+}
+
 // ============================================================================
 // In-place conjugation of GPU arrays (no-op for real)
 // ============================================================================
