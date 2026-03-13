@@ -727,7 +727,6 @@ void PDMRG2GPU<Scalar>::newton_schulz_left(
 
     auto& ws = workspaces_[si];
     Scalar one = Traits::one(), zero_val = Traits::zero();
-    Scalar half = Traits::make_scalar(0.5);
 
     // Compute ||A||_F
     RealType fro;
@@ -741,7 +740,7 @@ void PDMRG2GPU<Scalar>::newton_schulz_left(
         return;
     }
 
-    // U = A / ||A||_F
+    // U = A / ||A||_F  (singular values now in [0, 1])
     HIP_CHECK(hipMemcpyAsync(d_U, d_A, m * n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
     RealType inv_fro = 1.0 / fro;
     ROCBLAS_CHECK(Traits::scal_real(handles_[si], m * n, &inv_fro, d_U, 1));
@@ -749,26 +748,52 @@ void PDMRG2GPU<Scalar>::newton_schulz_left(
     Scalar* d_gram = ws.d_ns_gram;    // (n, n)
     Scalar* d_U_new = ws.d_ns_U_new;  // (m, n)
 
+    // Polar Express adaptive interval tracking (Amsel et al. 2025)
+    // After normalization, singular values are in [ell, 1.0]
+    // Conservative lower bound; exact value not needed for correctness
+    double ell = 1e-3;
+    double uu = 1.0;
+
     int total_iters = 0;
     for (int iter = 0; iter < 30; iter++) {
+        // Polar Express degree-3: adaptive α, β per iteration
+        // α = √(3 / (u² + ℓu + ℓ²))
+        // β = 4 / (2 + ℓu(ℓ+u)α³)
+        // Iteration: X_new = (β·α/2) · X · (3I - α²·X^H·X)
+        double alpha = std::sqrt(3.0 / (uu*uu + ell*uu + ell*ell));
+        double alpha_sq = alpha * alpha;
+        double alpha_cu = alpha_sq * alpha;
+        double beta = 4.0 / (2.0 + ell * uu * (ell + uu) * alpha_cu);
+        double scale_coeff = beta * alpha * 0.5;
+        Scalar sc = Traits::make_scalar(scale_coeff);
+
         // 1. gram = U^H @ U  → (n, n)
         ROCBLAS_CHECK(Traits::gemm(handles_[si],
             Traits::op_h, rocblas_operation_none,
             n, n, m, &one, d_U, m, d_U, m, &zero_val, d_gram, n));
 
-        // 2. gram = 3I - gram  (in-place)
+        // 2. gram = 3I - α²·gram  (scale gram by α², then 3I - gram)
+        RealType alpha_sq_r = (RealType)alpha_sq;
+        ROCBLAS_CHECK(Traits::scal_real(handles_[si], n * n, &alpha_sq_r, d_gram, 1));
         launch_scaled_identity_minus(d_gram, n, 3.0, streams_[si]);
 
-        // 3. U_new = 0.5 * U @ gram  → (m, n)
+        // 3. U_new = scale_coeff * U @ gram  → (m, n)
         ROCBLAS_CHECK(Traits::gemm(handles_[si],
             rocblas_operation_none, rocblas_operation_none,
-            m, n, n, &half, d_U, m, d_gram, n, &zero_val, d_U_new, m));
+            m, n, n, &sc, d_U, m, d_gram, n, &zero_val, d_U_new, m));
 
         total_iters = iter + 1;
 
+        // Update interval: ℓ_new = p(ℓ), u_new = p(u)
+        // p(x) = β·α/2 · x · (3 - α²·x²)
+        ell = scale_coeff * ell * (3.0 - alpha_sq * ell * ell);
+        uu  = scale_coeff * uu  * (3.0 - alpha_sq * uu  * uu);
+        // Clamp for numerical safety
+        ell = std::max(ell, 0.0);
+        uu  = std::min(uu, 2.0);
+
         // Convergence check every 3 iterations
         if (iter >= 2 && iter % 3 == 0) {
-            // diff = U_new - U → compute in d_heff_result (scratch)
             HIP_CHECK(hipMemcpyAsync(ws.d_heff_result, d_U_new, m * n * sizeof(Scalar),
                                       hipMemcpyDeviceToDevice, streams_[si]));
             Scalar neg_one = Traits::neg(Traits::one());
@@ -778,17 +803,9 @@ void PDMRG2GPU<Scalar>::newton_schulz_left(
             HIP_CHECK(hipStreamSynchronize(streams_[si]));
             ROCBLAS_CHECK(Traits::nrm2(handles_[si], m * n, ws.d_heff_result, 1, &diff_norm));
 
-            // Swap U ← U_new
             std::swap(d_U, d_U_new);
-            // Fix workspace pointer if we swapped
-            if (d_U == ws.d_ns_U_new) {
-                // d_U is now d_ns_U_new, d_U_new is d_ns_U
-                // This is fine, just keep going with swapped pointers
-            }
-
             if (diff_norm < tol) break;
         } else {
-            // Swap without convergence check
             std::swap(d_U, d_U_new);
         }
     }
@@ -796,7 +813,6 @@ void PDMRG2GPU<Scalar>::newton_schulz_left(
     if (out_iters) *out_iters = total_iters;
 
     // Ensure d_U is in ws.d_ns_U (the expected output location)
-    // After swaps, d_U might be in d_ns_U_new
     if (d_U != ws.d_ns_U) {
         HIP_CHECK(hipMemcpyAsync(ws.d_ns_U, d_U, m * n * sizeof(Scalar),
                                   hipMemcpyDeviceToDevice, streams_[si]));
@@ -835,7 +851,7 @@ void PDMRG2GPU<Scalar>::newton_schulz_right(
         return;
     }
 
-    // Q = A / ||A||_F
+    // Q = A / ||A||_F  (singular values now in [0, 1])
     HIP_CHECK(hipMemcpyAsync(d_Q, d_A, m * n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
     RealType inv_fro = 1.0 / fro;
     ROCBLAS_CHECK(Traits::scal_real(handles_[si], m * n, &inv_fro, d_Q, 1));
@@ -843,22 +859,42 @@ void PDMRG2GPU<Scalar>::newton_schulz_right(
     Scalar* d_gram = ws.d_ns_gram;     // reuse for (m, m)
     Scalar* d_Q_new = ws.d_ns_U_new;   // reuse for (m, n)
 
+    // Polar Express adaptive interval tracking
+    double ell = 1e-3;
+    double uu = 1.0;
+
     int total_iters = 0;
     for (int iter = 0; iter < 30; iter++) {
+        // Polar Express degree-3: adaptive α, β
+        double alpha = std::sqrt(3.0 / (uu*uu + ell*uu + ell*ell));
+        double alpha_sq = alpha * alpha;
+        double alpha_cu = alpha_sq * alpha;
+        double beta = 4.0 / (2.0 + ell * uu * (ell + uu) * alpha_cu);
+        double scale_coeff = beta * alpha * 0.5;
+        Scalar sc = Traits::make_scalar(scale_coeff);
+
         // 1. gram = Q @ Q^H  → (m, m)
         ROCBLAS_CHECK(Traits::gemm(handles_[si],
             rocblas_operation_none, Traits::op_h,
             m, m, n, &one, d_Q, m, d_Q, m, &zero_val, d_gram, m));
 
-        // 2. gram = 3I - gram  (in-place)
+        // 2. gram = 3I - α²·gram  (scale then subtract from 3I)
+        RealType alpha_sq_r = (RealType)alpha_sq;
+        ROCBLAS_CHECK(Traits::scal_real(handles_[si], m * m, &alpha_sq_r, d_gram, 1));
         launch_scaled_identity_minus(d_gram, m, 3.0, streams_[si]);
 
-        // 3. Q_new = 0.5 * gram @ Q  → (m, n)
+        // 3. Q_new = scale_coeff * gram @ Q  → (m, n)
         ROCBLAS_CHECK(Traits::gemm(handles_[si],
             rocblas_operation_none, rocblas_operation_none,
-            m, n, m, &half, d_gram, m, d_Q, m, &zero_val, d_Q_new, m));
+            m, n, m, &sc, d_gram, m, d_Q, m, &zero_val, d_Q_new, m));
 
         total_iters = iter + 1;
+
+        // Update interval
+        ell = scale_coeff * ell * (3.0 - alpha_sq * ell * ell);
+        uu  = scale_coeff * uu  * (3.0 - alpha_sq * uu  * uu);
+        ell = std::max(ell, 0.0);
+        uu  = std::min(uu, 2.0);
 
         if (iter >= 2 && iter % 3 == 0) {
             HIP_CHECK(hipMemcpyAsync(ws.d_heff_result, d_Q_new, m * n * sizeof(Scalar),
