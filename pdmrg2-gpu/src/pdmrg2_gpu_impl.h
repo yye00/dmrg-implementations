@@ -2034,7 +2034,9 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
 
             // Merge+optimize at even boundaries
             auto t_bnd_start = std::chrono::high_resolution_clock::now();
-            energy_ = merge_and_optimize_boundaries(0);
+            if (boundary_bonds_.size() > 0) {
+                energy_ = merge_and_optimize_boundaries(0);
+            }
             auto t_bnd_end = std::chrono::high_resolution_clock::now();
             total_boundary_time += std::chrono::duration<double>(t_bnd_end - t_bnd_start).count();
 

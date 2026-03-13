@@ -1191,7 +1191,9 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
             });
 
             // Merge+optimize at even boundaries
-            energy_ = merge_and_optimize_boundaries(0);
+            if (boundary_bonds_.size() > 0) {
+                energy_ = merge_and_optimize_boundaries(0);
+            }
 
             // Half-sweep 2: even segments RL, odd segments LR
             // After this, odd-numbered boundaries have fresh environments
