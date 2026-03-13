@@ -380,6 +380,42 @@ __global__ void setup_step3_ptrs(Scalar** d_A, Scalar** d_B, Scalar** d_C,
     }
 }
 
+// Setup pointer arrays for update_left_env Step 3 batched GEMM
+// For a given physical index sp, sets up D batched GEMMs:
+//   A[wp] = U + (wp*d + sp) * chi_in * chi_out    (U^H slice)
+//   B[wp] = A_mps + sp * chi_in                     (same A slice for all wp)
+//   C[wp] = L_new + wp * chi_out                    (L_env output slice)
+template<typename Scalar>
+__global__ void setup_lenv_step3_ptrs(Scalar** d_A, Scalar** d_B, Scalar** d_C,
+                                       Scalar* U, Scalar* A_mps, Scalar* L_new,
+                                       int chi_in, int chi_out, int d, int sp,
+                                       int D) {
+    int wp = threadIdx.x;
+    if (wp < D) {
+        d_A[wp] = U + (wp * d + sp) * chi_in * chi_out;
+        d_B[wp] = A_mps + sp * chi_in;
+        d_C[wp] = L_new + wp * chi_out;
+    }
+}
+
+// Setup pointer arrays for update_right_env Step 3 batched GEMM
+// For a given physical index sp, sets up D batched GEMMs:
+//   A[w] = U + (w*d + sp) * chi_out * chi_in      (U slice)
+//   B[w] = A_mps + sp * chi_out                     (same A^H slice for all w)
+//   C[w] = R_new + w * chi_out                      (R_env output slice)
+template<typename Scalar>
+__global__ void setup_renv_step3_ptrs(Scalar** d_A, Scalar** d_B, Scalar** d_C,
+                                       Scalar* U, Scalar* A_mps, Scalar* R_new,
+                                       int chi_in, int chi_out, int d, int sp,
+                                       int D) {
+    int w = threadIdx.x;
+    if (w < D) {
+        d_A[w] = U + (w * d + sp) * chi_out * chi_in;
+        d_B[w] = A_mps + sp * chi_out;
+        d_C[w] = R_new + w * chi_out;
+    }
+}
+
 // ============================================================================
 // In-place conjugation of GPU arrays (no-op for real)
 // ============================================================================

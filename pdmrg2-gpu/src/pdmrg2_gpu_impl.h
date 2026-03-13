@@ -607,19 +607,23 @@ void PDMRG2GPU<Scalar>::update_left_env(int site, int si) {
         &zero_val,
         U, chi_in * chi_out));
 
-    for (int wp = 0; wp < D; wp++) {
-        for (int sp = 0; sp < d; sp++) {
-            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(handles_[si],
-                Traits::op_h, rocblas_operation_none,
-                chi_out, chi_out, chi_in,
-                &one,
-                U + ws_out * chi_in * chi_out, chi_in,
-                A + sp * chi_in, chi_in * d,
-                &beta,
-                L_new + wp * chi_out, chi_out * D));
-        }
+    // Batched Step 3: D batches per physical index sp, accumulating over sp
+    for (int sp = 0; sp < d; sp++) {
+        Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+
+        hipLaunchKernelGGL(setup_lenv_step3_ptrs<Scalar>, dim3(1), dim3(D), 0, streams_[si],
+                           ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
+                           U, A, L_new, chi_in, chi_out, d, sp, D);
+
+        ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
+            Traits::op_h, rocblas_operation_none,
+            chi_out, chi_out, chi_in,
+            &one,
+            (const Scalar**)ws.d_batch_A, chi_in,
+            (const Scalar**)ws.d_batch_B, chi_in * d,
+            &beta,
+            ws.d_batch_C, chi_out * D,
+            D));
     }
 
     if constexpr (Traits::is_complex) {
@@ -673,19 +677,23 @@ void PDMRG2GPU<Scalar>::update_right_env(int site, int si) {
         &zero_val,
         U, chi_out * chi_in));
 
-    for (int w = 0; w < D; w++) {
-        for (int sp = 0; sp < d; sp++) {
-            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            int ws_out = w * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(handles_[si],
-                rocblas_operation_none, Traits::op_h,
-                chi_out, chi_out, chi_in,
-                &one,
-                U + ws_out * chi_out * chi_in, chi_out,
-                A + sp * chi_out, chi_out * d,
-                &beta,
-                R_new + w * chi_out, chi_out * D));
-        }
+    // Batched Step 3: D batches per physical index sp, accumulating over sp
+    for (int sp = 0; sp < d; sp++) {
+        Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+
+        hipLaunchKernelGGL(setup_renv_step3_ptrs<Scalar>, dim3(1), dim3(D), 0, streams_[si],
+                           ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
+                           U, A, R_new, chi_in, chi_out, d, sp, D);
+
+        ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
+            rocblas_operation_none, Traits::op_h,
+            chi_out, chi_out, chi_in,
+            &one,
+            (const Scalar**)ws.d_batch_A, chi_out,
+            (const Scalar**)ws.d_batch_B, chi_out * d,
+            &beta,
+            ws.d_batch_C, chi_out * D,
+            D));
     }
 }
 
