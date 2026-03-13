@@ -29,6 +29,16 @@ extern "C" void zgesvd_(const char* jobu, const char* jobvt,
                         hipDoubleComplex* work, const int* lwork,
                         double* rwork, int* info);
 
+// LAPACK QR declarations
+extern "C" void dgeqrf_(const int* m, const int* n, double* a, const int* lda,
+                         double* tau, double* work, const int* lwork, int* info);
+extern "C" void dorgqr_(const int* m, const int* n, const int* k, double* a, const int* lda,
+                         const double* tau, double* work, const int* lwork, int* info);
+extern "C" void zgeqrf_(const int* m, const int* n, hipDoubleComplex* a, const int* lda,
+                         hipDoubleComplex* tau, hipDoubleComplex* work, const int* lwork, int* info);
+extern "C" void zungqr_(const int* m, const int* n, const int* k, hipDoubleComplex* a, const int* lda,
+                         const hipDoubleComplex* tau, hipDoubleComplex* work, const int* lwork, int* info);
+
 template<typename T> struct ScalarTraits;
 
 // ============================================================================
@@ -109,6 +119,16 @@ struct ScalarTraits<double> {
             RealType* s, Scalar* u, const int* ldu, Scalar* vt, const int* ldvt,
             Scalar* work, const int* lwork, RealType* /*rwork*/, int* info) {
         dgesvd_(jobu, jobvt, m, n, a, lda, s, u, ldu, vt, ldvt, work, lwork, info);
+    }
+
+    // --- LAPACK QR ---
+    static void lapack_geqrf(const int* m, const int* n, Scalar* a, const int* lda,
+            Scalar* tau, Scalar* work, const int* lwork, int* info) {
+        dgeqrf_(m, n, a, lda, tau, work, lwork, info);
+    }
+    static void lapack_orgqr(const int* m, const int* n, const int* k, Scalar* a, const int* lda,
+            const Scalar* tau, Scalar* work, const int* lwork, int* info) {
+        dorgqr_(m, n, k, a, lda, tau, work, lwork, info);
     }
 
     // --- rocSOLVER SVD ---
@@ -225,6 +245,16 @@ struct ScalarTraits<hipDoubleComplex> {
             RealType* s, Scalar* u, const int* ldu, Scalar* vt, const int* ldvt,
             Scalar* work, const int* lwork, RealType* rwork, int* info) {
         zgesvd_(jobu, jobvt, m, n, a, lda, s, u, ldu, vt, ldvt, work, lwork, rwork, info);
+    }
+
+    // --- LAPACK QR ---
+    static void lapack_geqrf(const int* m, const int* n, Scalar* a, const int* lda,
+            Scalar* tau, Scalar* work, const int* lwork, int* info) {
+        zgeqrf_(m, n, a, lda, tau, work, lwork, info);
+    }
+    static void lapack_orgqr(const int* m, const int* n, const int* k, Scalar* a, const int* lda,
+            const Scalar* tau, Scalar* work, const int* lwork, int* info) {
+        zungqr_(m, n, k, a, lda, tau, work, lwork, info);
     }
 
     // --- rocSOLVER SVD ---

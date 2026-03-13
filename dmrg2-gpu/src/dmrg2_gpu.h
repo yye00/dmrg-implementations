@@ -38,6 +38,7 @@ public:
     double get_energy() const { return energy_; }
     void get_mps(std::vector<std::vector<Scalar>>& h_mps) const;
     void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
+    void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
 
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }
@@ -104,6 +105,17 @@ private:
     std::vector<RealType> h_svd_rwork_;
     bool use_cpu_svd_;
 
+    // Randomized truncated SVD workspace
+    bool use_rsvd_;
+    int rsvd_oversampling_;
+    Scalar* d_rsvd_omega_;    // (n, k+p) random projection matrix on GPU
+    Scalar* d_rsvd_Y_;        // (m, k+p) projected result on GPU
+    Scalar* d_rsvd_Q_;        // (m, k+p) QR factor on GPU
+    Scalar* d_rsvd_B_;        // (k+p, n) projected matrix on GPU
+    std::vector<Scalar> h_rsvd_Y_, h_rsvd_Q_, h_rsvd_B_;
+    std::vector<Scalar> h_rsvd_tau_, h_rsvd_qr_work_;
+    std::vector<Scalar> h_rsvd_U_small_;  // (k+p, k+p) from SVD of B
+
     // Core algorithm
     void build_initial_environments();
     void update_left_env(int site);
@@ -116,6 +128,7 @@ private:
     void apply_heff_two_site(int site, const Scalar* d_theta_in, Scalar* d_result);
     double lanczos_eigensolver(int site, Scalar* d_theta, int theta_size);
     void svd_split(int site, Scalar* d_theta, char direction);
+    void rsvd_split(int site, Scalar* d_theta, char direction);
 
     double optimize_bond(int site, char direction);
     double sweep_left_to_right();

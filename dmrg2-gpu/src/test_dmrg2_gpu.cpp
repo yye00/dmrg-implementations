@@ -136,7 +136,7 @@ void build_josephson_mpo(int L, int d, int D_mpo,
 // ============================================================================
 // Heisenberg test (real)
 // ============================================================================
-int test_heisenberg(int L, int chi_max, int n_sweeps, bool gpu_svd) {
+int test_heisenberg(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd = false) {
     int d = 2;
     int D_mpo = 5;
 
@@ -144,7 +144,8 @@ int test_heisenberg(int L, int chi_max, int n_sweeps, bool gpu_svd) {
     printf("Two-Site Heisenberg DMRG-GPU Test (float64)\n");
     printf("======================================\n");
     printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
-    printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
+    printf("  SVD: %s%s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)",
+           rsvd ? " + randomized truncation" : "");
     printf("======================================\n\n");
 
     std::map<int, double> exact_energies = {
@@ -154,6 +155,7 @@ int test_heisenberg(int L, int chi_max, int n_sweeps, bool gpu_svd) {
 
     DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
     dmrg.set_cpu_svd(!gpu_svd);
+    dmrg.set_rsvd(rsvd);
     dmrg.initialize_mps_random();
 
     std::vector<double*> h_mpo_tensors(L);
@@ -240,6 +242,7 @@ int main(int argc, char** argv) {
     int chi_max = 32;
     int n_sweeps = 30;
     bool gpu_svd = false;
+    bool rsvd = false;
     bool run_josephson = false;
     int n_max = 1;
     double E_J = 1.0, E_C = 0.5, phi_ext = M_PI / 4;
@@ -249,6 +252,7 @@ int main(int argc, char** argv) {
         int pos = 0;
         for (int i = 1; i < argc; i++) {
             if (std::string(argv[i]) == "--gpu-svd") { gpu_svd = true; continue; }
+            if (std::string(argv[i]) == "--rsvd") { rsvd = true; continue; }
             if (std::string(argv[i]) == "--josephson") { run_josephson = true; continue; }
             if (std::string(argv[i]) == "--nmax" && i+1 < argc) { n_max = std::atoi(argv[++i]); continue; }
             if (std::string(argv[i]) == "--ej" && i+1 < argc) { E_J = std::atof(argv[++i]); continue; }
@@ -266,7 +270,7 @@ int main(int argc, char** argv) {
         if (run_josephson) {
             return test_josephson(L, chi_max, n_sweeps, gpu_svd, n_max, E_J, E_C, phi_ext);
         } else {
-            return test_heisenberg(L, chi_max, n_sweeps, gpu_svd);
+            return test_heisenberg(L, chi_max, n_sweeps, gpu_svd, rsvd);
         }
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << std::endl;
