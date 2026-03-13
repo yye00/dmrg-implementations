@@ -246,20 +246,23 @@ def boundary_merge(pmps, env_mgr, mpo_arrays, comm, boundaries,
         left_global = global_end
         right_global = global_end + 1
 
-        A_left_new, A_right_new, V_new, energy, _ = merge_boundary_tensors(
-            psi_left, psi_right, V,
-            L_env, R_env,
-            mpo_arrays[left_global], mpo_arrays[right_global],
-            max_bond=max_bond, max_iter=max_iter, tol=tol
-        )
+        A_left_new, A_right_new, V_new, energy, _, A_right_canonical = \
+            merge_boundary_tensors(
+                psi_left, psi_right, V,
+                L_env, R_env,
+                mpo_arrays[left_global], mpo_arrays[right_global],
+                max_bond=max_bond, max_iter=max_iter, tol=tol
+            )
 
         # Update local state
         pmps.arrays[-1] = A_left_new
         pmps.V_right = V_new
 
-        # Update our R_env to reflect the new A_right on the neighbor's side
+        # CRITICAL FIX: Use CANONICAL tensors for boundary environments.
+        # R_env from Vh (right-canonical) gives R_norm = I.
+        # Using A_right_new (S*Vh) would give R_norm = S² ≠ I.
         env_mgr.R_envs[global_end] = update_right_env(
-            R_env, A_right_new, mpo_arrays[right_global])
+            R_env, A_right_canonical, mpo_arrays[right_global])
 
         # Send the new right tensor and updated L_env to neighbor
         L_env_new = update_left_env(
@@ -307,11 +310,22 @@ def build_local_environments(pmps, mpo_arrays, dtype=np.float64,
         D_L = mpo_arrays[global_start].shape[0]
         env_mgr.L_envs[global_start] = init_left_env(chi_L, D_L, dtype)
     else:
-        chi_L_0 = global_mps_arrays[0].shape[0]
+        # Left-canonicalize global MPS before building L_envs.
+        # L_envs built from non-canonical tensors give norm N ≠ I,
+        # breaking the eigensolver's N_eff = I assumption.
+        lc_arrays = [a.copy() for a in global_mps_arrays[:global_start]]
+        for i in range(len(lc_arrays) - 1):
+            chi_L_i, d_i, chi_R_i = lc_arrays[i].shape
+            M = lc_arrays[i].reshape(chi_L_i * d_i, chi_R_i)
+            U, P = newton_schulz_polar(M)
+            lc_arrays[i] = U.reshape(chi_L_i, d_i, -1)
+            lc_arrays[i + 1] = np.tensordot(P, lc_arrays[i + 1], axes=(1, 0))
+
+        chi_L_0 = lc_arrays[0].shape[0]
         D_0 = mpo_arrays[0].shape[0]
         L_env = init_left_env(chi_L_0, D_0, dtype)
         for i in range(global_start):
-            L_env = update_left_env(L_env, global_mps_arrays[i], mpo_arrays[i])
+            L_env = update_left_env(L_env, lc_arrays[i], mpo_arrays[i])
         env_mgr.L_envs[global_start] = L_env
 
     # Build remaining left envs by sweeping right through local block
@@ -328,12 +342,24 @@ def build_local_environments(pmps, mpo_arrays, dtype=np.float64,
         D_R = mpo_arrays[global_end].shape[1]
         env_mgr.R_envs[global_end] = init_right_env(chi_R, D_R, dtype)
     else:
-        chi_R_last = global_mps_arrays[-1].shape[2]
+        # Right-canonicalize global MPS sites after this block before building
+        # R_envs. Without this, R_envs are built from non-canonical tensors,
+        # giving R_norm ≠ I and breaking the eigensolver's N_eff = I assumption.
+        rc_arrays = [a.copy() for a in global_mps_arrays[global_end + 1:]]
+        for i in range(len(rc_arrays) - 1, 0, -1):
+            chi_L_i, d_i, chi_R_i = rc_arrays[i].shape
+            M = rc_arrays[i].reshape(chi_L_i, d_i * chi_R_i)
+            U, P = newton_schulz_polar(M.conj().T)
+            rc_arrays[i] = U.conj().T.reshape(-1, d_i, chi_R_i)
+            rc_arrays[i - 1] = np.tensordot(rc_arrays[i - 1], P.conj().T,
+                                             axes=(2, 0))
+
+        chi_R_last = rc_arrays[-1].shape[2]
         D_last = mpo_arrays[-1].shape[1]
         R_env = init_right_env(chi_R_last, D_last, dtype)
-        for i in range(L - 2, global_end - 1, -1):
-            R_env = update_right_env(R_env, global_mps_arrays[i + 1],
-                                     mpo_arrays[i + 1])
+        for i in range(len(rc_arrays) - 1, -1, -1):
+            gi = global_end + 1 + i
+            R_env = update_right_env(R_env, rc_arrays[i], mpo_arrays[gi])
         env_mgr.R_envs[global_end] = R_env
 
     # Build remaining right envs by sweeping left through local block

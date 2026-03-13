@@ -934,6 +934,37 @@ void PDMRG2GPU<Scalar>::ns_split(int site, Scalar* d_theta, char direction, int 
 
         HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
+        // Verify ||U^H U - I||_F < tol to catch silent NS failures.
+        // Compute U^H U into d_ns_gram (n_svd × n_svd), then check diagonal/off-diagonal.
+        {
+            Scalar one_v = Traits::one(), zero_v = Traits::zero();
+            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                Traits::op_h, rocblas_operation_none,
+                n_svd, n_svd, m, &one_v, ws.d_ns_U, m, ws.d_ns_U, m,
+                &zero_v, ws.d_ns_gram, n_svd));
+
+            // Copy to host and check ||UtU - I||_F
+            std::vector<Scalar> h_UtU(n_svd * n_svd);
+            HIP_CHECK(hipMemcpy(h_UtU.data(), ws.d_ns_gram,
+                                n_svd * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
+            RealType frob2 = 0.0;
+            for (int j = 0; j < n_svd; j++) {
+                for (int i = 0; i < n_svd; i++) {
+                    RealType re = Traits::real_part(h_UtU[i + j * n_svd]);
+                    if (i == j) re -= 1.0;
+                    frob2 += re * re;
+                    if constexpr (Traits::is_complex) {
+                        RealType im = hipCimag(h_UtU[i + j * n_svd]);
+                        frob2 += im * im;
+                    }
+                }
+            }
+            if (std::sqrt(frob2) > 1e-10) {
+                svd_split(site, d_theta, direction, si);
+                return;
+            }
+        }
+
         // Eigendecompose P^H P → eigenvalues σ², eigenvectors V
         // P^H P on GPU: (n_svd, n_svd) × (n_svd, n_svd) → (n_svd, n_svd)
         Scalar one = Traits::one(), zero_val = Traits::zero();
@@ -1872,7 +1903,10 @@ void PDMRG2GPU<Scalar>::segment_sweep_LR(int seg_idx) {
     // Pre-sweep: right-canonize segment via Newton-Schulz
     canonize_segment_right(seg_idx);
 
-    // Rebuild R environments for the segment
+    // After right-canonicalization, L_env[first] is stale (built from pre-canon MPS).
+    // Rebuild it from the orthogonality center at site first.
+    // Also rebuild R environments for the segment.
+    update_left_env(first, si);
     for (int j = last; j > first; j--) {
         update_right_env(j, si);
     }
@@ -1894,7 +1928,10 @@ void PDMRG2GPU<Scalar>::segment_sweep_RL(int seg_idx) {
     // Pre-sweep: left-canonize segment via Newton-Schulz
     canonize_segment_left(seg_idx);
 
-    // Rebuild L environments for the segment
+    // After left-canonicalization, R_env[last] is stale (built from pre-canon MPS).
+    // Rebuild it from the orthogonality center at site last.
+    // Also rebuild L environments for the segment.
+    update_right_env(last, si);
     for (int j = first; j < last; j++) {
         update_left_env(j, si);
     }
@@ -1927,6 +1964,12 @@ double PDMRG2GPU<Scalar>::merge_and_optimize_boundaries(int parity) {
         // LR optimize: MPS[bsite] -> left-canonical U, MPS[bsite+1] -> S*Vh
         energy = optimize_bond(bsite, 'R', si);
         update_left_env(bsite, si);
+
+        // After LR optimize, MPS[bsite+1] = S*Vh (mixed canonical).
+        // Right-canonicalize it before the second optimize_bond so the
+        // RL optimization sees a proper right-canonical tensor.
+        right_canonize_site(bsite + 1, si);
+        update_right_env(bsite + 1, si);
 
         // RL optimize: MPS[bsite] -> U*S, MPS[bsite+1] -> right-canonical Vh
         energy = optimize_bond(bsite, 'L', si);

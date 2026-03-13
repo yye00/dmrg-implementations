@@ -87,4 +87,9 @@ def merge_boundary_tensors(psi_left, psi_right, V,
     A_left_new = U.reshape(chi_L, d_L, k)
     A_right_new = (np.diag(S) @ Vh).reshape(k, d_R, chi_R)
 
-    return A_left_new, A_right_new, V_new, energy, trunc_err
+    # Also return the right-canonical part (Vh) for correct environment building.
+    # R_env must be built from right-canonical tensors (norm = I).
+    # Using A_right_new (S*Vh) gives norm = S² ≠ I, breaking eigensolver assumptions.
+    A_right_canonical = Vh.reshape(k, d_R, chi_R)
+
+    return A_left_new, A_right_new, V_new, energy, trunc_err, A_right_canonical
