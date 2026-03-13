@@ -1,223 +1,299 @@
-# DMRG Benchmarks
+# DMRG Benchmark Suite
 
-This directory contains publication-quality benchmarks for comparing PDMRG and A2DMRG implementations against reference quimb DMRG.
+Unified benchmarking infrastructure for all DMRG implementations in this project.
+Supports quick development validation, full timing benchmarks, and scaling studies
+for publication.
 
-## Benchmarks Overview
+## Quick Start
 
-| Benchmark | Model | Physics | Parameters | Tests |
-|-----------|-------|---------|------------|-------|
-| `heisenberg_benchmark.py` | Heisenberg spin chain | Quantum magnetism | L=12, D=20 | PDMRG/A2DMRG (1,2,4,8 procs) |
-| `josephson_benchmark.py` | Josephson junction array | Superconducting circuits | L=20, D=50, complex128 | PDMRG/A2DMRG (1,2,4,8 procs) |
-
----
-
-## Heisenberg Model Benchmark
-
-### Model Description
-
-The spin-1/2 Heisenberg XXZ chain with open boundary conditions:
-
-$$H = J \sum_{i=1}^{L-1} \left( S_i^x S_{i+1}^x + S_i^y S_{i+1}^y + \Delta S_i^z S_{i+1}^z \right)$$
-
-This is a standard benchmark for DMRG algorithms with well-known exact solutions for small systems and excellent convergence properties.
-
-### Parameters
-- **L = 12**: System size (sites)
-- **J = 1.0**: Exchange coupling
-- **Δ = 1.0**: Anisotropy (isotropic Heisenberg)
-- **Bond dimension = 20**: Sufficient for exact ground state at this size
-- **Tolerance = 10⁻¹²**: Convergence criterion
-
-### Running
 ```bash
-cd dmrg-implementations
-mpirun -np 4 python benchmarks/heisenberg_benchmark.py
+# List all registered implementations
+./run.py list
+
+# Quick correctness check (all implementations, small systems)
+./run.py validate
+
+# Validate just one implementation
+./run.py validate --impl quimb-dmrg2
+
+# Full timing benchmark
+./run.py benchmark --model heisenberg --size medium
+
+# Scaling study
+./run.py scale --impl pdmrg --np 1,2,4,8 --threads 1
 ```
 
----
+## Implementations
 
-## Josephson Junction Array Benchmark
+All DMRG implementations are registered in `lib/registry.py`. The benchmark
+suite currently supports 10 implementations across CPU and GPU:
 
-### Physical Motivation
+| Name | Type | `--np` | `--threads` | Description |
+|------|------|--------|-------------|-------------|
+| `quimb-dmrg1` | CPU serial | - | BLAS threads | Quimb DMRG single-site (reference) |
+| `quimb-dmrg2` | CPU serial | - | BLAS threads | Quimb DMRG two-site (reference) |
+| `pdmrg` | CPU parallel | MPI ranks | BLAS threads/rank | Parallel DMRG (numpy tensordot) |
+| `pdmrg2` | CPU parallel | MPI ranks | BLAS threads/rank | Parallel DMRG two-site |
+| `pdmrg-cotengra` | CPU parallel | MPI ranks | BLAS threads/rank | Parallel DMRG (cotengra paths) |
+| `a2dmrg` | CPU parallel | MPI ranks | BLAS threads/rank | Additive two-level DMRG |
+| `dmrg-gpu` | GPU serial | - | - | GPU single-site (HIP/rocBLAS) |
+| `dmrg2-gpu` | GPU serial | - | - | GPU two-site (HIP/rocBLAS) |
+| `pdmrg-gpu` | GPU parallel | HIP streams | - | GPU parallel DMRG |
+| `pdmrg2-gpu` | GPU parallel | HIP streams | - | GPU parallel two-site DMRG |
 
-Josephson junction arrays are fundamental building blocks of superconducting quantum computing platforms. Understanding their ground state properties is essential for:
+### What `--np` means
 
-- **Transmon qubit design**: The transmon operates in the regime E_J >> E_C where charge noise is suppressed [1,2]
-- **Fluxonium qubits**: Arrays of junctions create the superinductance needed for fluxonium [3,4]
-- **Protected qubits**: Understanding many-body effects in junction arrays enables fault-tolerant qubit designs [5]
-- **Quantum phase transitions**: The array exhibits a superconductor-insulator transition controlled by E_J/E_C [6,7]
+- **CPU parallel implementations** (pdmrg, pdmrg2, pdmrg-cotengra, a2dmrg):
+  `--np` sets the number of MPI ranks via `mpirun -np N`.
 
-### Model Hamiltonian
+- **GPU parallel implementations** (pdmrg-gpu, pdmrg2-gpu):
+  `--np` sets the number of HIP streams for concurrent segment sweeping.
 
-The 1D Josephson junction array in the charge basis [8,9]:
+- **Serial implementations** ignore `--np`.
 
-$$H = E_C \sum_i (n_i - n_g)^2 - E_J \sum_{\langle i,j \rangle} \cos(\phi_i - \phi_j + \Phi_{ext})$$
+### What `--threads` means
 
-where:
-- **n_i**: Cooper pair number operator on island i (integer eigenvalues)
-- **φ_i**: Superconducting phase operator (conjugate to n_i: [φ_i, n_j] = iδ_ij)
-- **E_C = e²/2C**: Charging energy (capacitive cost of adding a Cooper pair)
-- **E_J**: Josephson coupling energy (tunneling amplitude)
-- **n_g**: Offset charge (gate voltage induced)
-- **Φ_ext**: External magnetic flux threading the array
+Sets `OPENBLAS_NUM_THREADS` (and equivalent vars) for CPU implementations.
+Controls the number of BLAS threads used per MPI rank. GPU implementations
+ignore this flag.
 
-In the charge basis, the phase operators become raising/lowering operators:
-$$e^{i\phi}|n\rangle = |n+1\rangle, \quad e^{-i\phi}|n\rangle = |n-1\rangle$$
+## Models
 
-This naturally requires **complex128** arithmetic when Φ_ext ≠ 0.
+### Heisenberg Chain (d=2, real)
 
-### Computational Challenge
+Antiferromagnetic spin-1/2 Heisenberg chain with open boundary conditions:
 
-The Josephson junction array presents several computational challenges that make it an ideal DMRG benchmark:
+    H = J * sum_i (S_x^i S_x^{i+1} + S_y^i S_y^{i+1} + S_z^i S_z^{i+1})
 
-1. **Complex amplitudes**: External flux breaks time-reversal symmetry, requiring complex128
-2. **Large local Hilbert space**: Each site has d = 2n_max + 1 states (we use n_max=2, so d=5)
-3. **Non-integrable**: No exact solution for general parameters
-4. **Strong correlations**: Near the phase transition, entanglement grows significantly
-5. **Physical relevance**: Direct application to superconducting qubit simulation
+Parameters: J=1.0, B_z=0.0, open boundaries.
 
-### Benchmark Parameters
+### Josephson Junction Array (d=5, complex)
 
-We use parameters representative of realistic superconducting circuits:
+Capacitively coupled Josephson junction chain with external flux:
 
-| Parameter | Value | Physical Interpretation |
-|-----------|-------|------------------------|
-| L | 20 | Number of junctions (scalable) |
-| E_C | 1.0 | Charging energy (energy unit) |
-| E_J | 2.0 | Josephson energy (E_J/E_C = 2, intermediate regime) |
-| n_max | 2 | Charge truncation (d=5 local states) |
-| Φ_ext | π/4 | External flux (ensures complex128) |
-| Bond dim | 50 | MPS bond dimension |
-| n_g | 0 | Gate charge offset |
+    H = -E_J/2 * sum_i (e^{i*phi_ext} e^{i*phi_i} e^{-i*phi_{i+1}} + h.c.)
+        + E_C * sum_i n_i^2
 
-The ratio **E_J/E_C = 2** places the system in the intermediate coupling regime where neither charge nor phase fluctuations dominate, maximizing entanglement and computational difficulty [6].
+Parameters: E_J=1.0, E_C=0.5, n_max=2 (d=2*n_max+1=5), phi_ext=pi/4.
 
-### Running
+The non-zero external flux breaks time-reversal symmetry, requiring complex128
+arithmetic. The larger local Hilbert space (d=5 vs d=2) makes this a more
+demanding benchmark than Heisenberg.
+
+## Problem Sizes
+
+| Size | Heisenberg | Josephson | Typical Runtime |
+|------|-----------|-----------|-----------------|
+| `small` | L=12, chi=20 | L=8, chi=20 | seconds |
+| `medium` | L=20, chi=50 | L=12, chi=50 | minutes |
+| `large` | L=40, chi=100 | L=16, chi=100 | tens of minutes |
+
+Use `--size small` for quick validation, `--size medium` for standard
+benchmarks, `--size large` for publication-quality scaling studies.
+
+## CLI Reference
+
+### `./run.py validate`
+
+Quick correctness check. Runs each implementation on small systems and
+compares energies against the gold standard (tolerance: 1e-10).
+
 ```bash
-# Single benchmark
-cd dmrg-implementations
-mpirun -np 4 python benchmarks/josephson_benchmark.py
+# All implementations, both models
+./run.py validate
 
-# Full scaling test (1, 2, 4, 8 cores)
-python benchmarks/josephson_benchmark.py --scaling
+# Just GPU implementations
+./run.py validate --impl dmrg-gpu,dmrg2-gpu,pdmrg-gpu,pdmrg2-gpu
+
+# CPU parallel with specific np values
+./run.py validate --impl pdmrg,a2dmrg --np 2,4 --threads 1
+
+# Save results
+./run.py validate --output results/validation.json
 ```
 
-### Expected Output
+Exit code is 0 if all pass, 1 if any fail.
 
+### `./run.py benchmark`
+
+Full timing suite. Runs implementations across problem sizes and reports
+wall-clock times.
+
+```bash
+# Everything (default: small + medium sizes)
+./run.py benchmark
+
+# Specific model and size
+./run.py benchmark --model heisenberg --size medium,large
+
+# GPU implementations only
+./run.py benchmark --impl dmrg-gpu,dmrg2-gpu --size small,medium,large
+
+# Parallel scaling
+./run.py benchmark --impl pdmrg --np 2,4,8 --threads 1,4
+
+# Save results for report generation
+./run.py benchmark --output results/benchmark.json
 ```
-Josephson Junction Array Benchmark
-===================================
-Parameters: L=20, E_J/E_C=2.0, n_max=2, d=5, bond_dim=50
-External flux: Φ_ext = π/4 (complex128)
 
-Reference (quimb DMRG2): E = -XX.XXXXXXXXXX
+### `./run.py scale`
 
-Scaling Results:
-  np=1: E = -XX.XXXXXXXXXX, ΔE = X.XXe-XX, time = XX.XXs
-  np=2: E = -XX.XXXXXXXXXX, ΔE = X.XXe-XX, time = XX.XXs
-  np=4: E = -XX.XXXXXXXXXX, ΔE = X.XXe-XX, time = XX.XXs
-  np=8: E = -XX.XXXXXXXXXX, ΔE = X.XXe-XX, time = XX.XXs
+Scaling study: systematically varies `--np` or `--threads` to measure
+parallel efficiency.
+
+```bash
+# np scaling for all parallel implementations
+./run.py scale --np 1,2,4,8
+
+# Thread scaling for CPU implementations
+./run.py scale --impl quimb-dmrg2,pdmrg --threads 1,2,4,8
+
+# GPU stream scaling
+./run.py scale --impl pdmrg-gpu --np 1,2,4,8 --size large
+
+# Save results
+./run.py scale --output results/scaling.json
 ```
 
----
+### `./run.py report`
 
-## Literature References
+Generate a markdown report from saved results.
 
-### Josephson Junction Physics
+```bash
+./run.py report --input results/benchmark.json
+./run.py report --input results/benchmark.json --output REPORT.md
+```
 
-[1] J. Koch et al., "Charge-insensitive qubit design derived from the Cooper pair box," 
-    Phys. Rev. A 76, 042319 (2007). 
-    https://doi.org/10.1103/PhysRevA.76.042319
-    *Foundational transmon paper establishing E_J >> E_C regime.*
+### `./run.py generate-data`
 
-[2] A. Blais et al., "Circuit quantum electrodynamics," 
-    Rev. Mod. Phys. 93, 025005 (2021).
-    https://doi.org/10.1103/RevModPhys.93.025005
-    *Comprehensive review of superconducting circuit QED.*
+Regenerate the binary MPS/MPO test data files used for reproducible
+benchmarks. Uses seed=42 for exact reproducibility.
 
-[3] V. E. Manucharyan et al., "Fluxonium: Single Cooper-Pair Circuit Free of Charge Offsets," 
-    Science 326, 113-116 (2009).
-    https://doi.org/10.1126/science.1175552
-    *Introduction of fluxonium qubit using junction arrays.*
+```bash
+./run.py generate-data
+./run.py generate-data --seed 42
+```
 
-[4] L. B. Nguyen et al., "High-Coherence Fluxonium Qubit," 
-    Phys. Rev. X 9, 041041 (2019).
-    https://doi.org/10.1103/PhysRevX.9.041041
-    *State-of-the-art fluxonium with junction array superinductance.*
+### `./run.py list`
 
-[5] A. Gyenis et al., "Experimental Realization of a Protected Superconducting Circuit Derived from the 0-π Qubit,"
-    PRX Quantum 2, 010339 (2021).
-    https://doi.org/10.1103/PRXQuantum.2.010339
-    *Protected qubits using junction arrays.*
-
-### Quantum Phase Transitions in Junction Arrays
-
-[6] R. Fazio and H. van der Zant, "Quantum phase transitions and vortex dynamics in superconducting networks,"
-    Phys. Rep. 355, 235-334 (2001).
-    https://doi.org/10.1016/S0370-1573(01)00022-9
-    *Comprehensive review of quantum phase transitions in junction arrays.*
-
-[7] M.-S. Choi, J. Yi, M. Y. Choi, J. Choi, and S.-I. Lee,
-    "Quantum phase transitions in Josephson-junction chains,"
-    Phys. Rev. B 57, R716 (1998).
-    https://doi.org/10.1103/PhysRevB.57.R716
-    *DMRG study of superconductor-insulator transition.*
-
-### DMRG for Superconducting Circuits
-
-[8] E. Jeckelmann, "Dynamical density-matrix renormalization-group method,"
-    Phys. Rev. B 66, 045114 (2002).
-    https://doi.org/10.1103/PhysRevB.66.045114
-    *DMRG methodology applicable to bosonic/charge systems.*
-
-[9] U. Schollwöck, "The density-matrix renormalization group in the age of matrix product states,"
-    Ann. Phys. 326, 96-192 (2011).
-    https://doi.org/10.1016/j.aop.2010.09.012
-    *Definitive MPS/DMRG review.*
-
-### Parallel DMRG
-
-[10] E. M. Stoudenmire and S. R. White, "Real-space parallel density matrix renormalization group,"
-     Phys. Rev. B 87, 155137 (2013).
-     https://doi.org/10.1103/PhysRevB.87.155137
-     *The PDMRG algorithm implemented here.*
-
----
-
-## Validation Criteria
-
-All benchmarks must satisfy:
-
-1. **Accuracy**: |ΔE| < 10⁻¹⁰ compared to quimb DMRG2 reference
-2. **Reproducibility**: Results consistent across multiple runs
-3. **Scaling**: Energy unchanged (within tolerance) regardless of processor count
-4. **Dtype preservation**: Complex128 maintained throughout for Josephson benchmark
-
----
+Print all registered implementations with their capabilities.
 
 ## Directory Structure
 
 ```
 benchmarks/
-├── README.md                    # This file
-├── heisenberg_benchmark.py      # Heisenberg spin chain benchmark
-├── josephson_benchmark.py       # Josephson junction array benchmark  
-└── results/                     # Benchmark output files
-    ├── heisenberg_results.json
-    └── josephson_results.json
+├── run.py                    # CLI entry point (start here)
+├── README.md                 # This file
+│
+├── lib/                      # Shared infrastructure
+│   ├── registry.py           # Implementation configs and size definitions
+│   ├── dispatch.py           # Routes impl names to runner functions
+│   ├── data_loader.py        # MPS/MPO binary file loading
+│   ├── hardware.py           # CPU/core detection, MPI env, venv paths
+│   ├── models.py             # Physics model builders (Josephson MPO)
+│   ├── report.py             # Table formatting and report generation
+│   └── runners/              # Per-implementation launch logic
+│       ├── quimb_runner.py   # In-process quimb DMRG1/2
+│       ├── pdmrg_runner.py   # MPI subprocess for pdmrg/pdmrg2/cotengra
+│       ├── a2dmrg_runner.py  # MPI subprocess for a2dmrg
+│       └── gpu_runner.py     # Subprocess for compiled GPU executables
+│
+├── data/                     # Binary MPS/MPO test data (seed=42)
+│   ├── generate.py           # Data generation script
+│   ├── verify.py             # Data integrity checker
+│   └── *.bin, *.json         # Binary tensor files + metadata
+│
+├── validation/               # Correctness checking
+│   ├── validate.py           # Validation runner
+│   └── gold_standard.json    # CPU reference energies
+│
+├── performance/              # Timing and scaling
+│   ├── benchmark.py          # Full timing suite
+│   └── scaling.py            # np/thread scaling studies
+│
+└── results/                  # Output directory for benchmark runs
+    └── .gitkeep
 ```
 
----
+## Adding a New Implementation
 
-## Citation
+1. **Add a registry entry** in `lib/registry.py`:
 
-If you use these benchmarks in your research, please cite:
-
-```bibtex
-@article{pdmrg_a2dmrg_2026,
-  title={Parallel Density Matrix Renormalization Group Algorithms for Superconducting Circuit Simulation},
-  author={...},
-  journal={...},
-  year={2026}
+```python
+IMPLEMENTATIONS["my-new-impl"] = {
+    "type": "cpu-parallel",          # or cpu-serial, gpu-serial, gpu-parallel
+    "description": "My new DMRG variant",
+    "supports_threads": True,        # can use OPENBLAS_NUM_THREADS?
+    "supports_np": True,             # can use mpirun -np / HIP streams?
+    "runner": "pdmrg",              # which runner module to use
+    "package": "my-new-impl",       # directory name in repo root
+    "entry": "my_impl.dmrg",        # Python import path
+    "function": "my_main",          # function to call
 }
 ```
+
+2. **Choose a runner** from `lib/runners/`:
+   - `quimb` — in-process Python (direct import)
+   - `pdmrg` — MPI-launched Python (mpirun subprocess)
+   - `a2dmrg` — wrapper around pdmrg runner
+   - `gpu` — compiled C++/HIP executable (subprocess)
+
+   If none fit, create a new runner in `lib/runners/` with a `run()` function
+   that returns `{"energy": float, "time": float, "success": bool}`.
+
+3. **Test it**:
+```bash
+./run.py validate --impl my-new-impl
+./run.py benchmark --impl my-new-impl --size small
+```
+
+## Data Format
+
+Binary files store MPS and MPO tensors in complex128 with int64 headers.
+The format is designed for cross-language compatibility (Python and C++).
+
+### MPS Binary Format
+
+```
+Header:
+  num_sites: int64
+  bond_dims: int64[num_sites + 1]
+  phys_dims: int64[num_sites]
+
+Per site:
+  shape: int64[3]                          # (D_left, d, D_right)
+  data: complex128[D_left * d * D_right]   # C-contiguous, little-endian
+```
+
+### MPO Binary Format
+
+```
+Header:
+  num_sites: int64
+  mpo_bond_dims: int64[num_sites + 1]
+  phys_dims: int64[num_sites]
+
+Per site:
+  shape: int64[4]                                # (D_left, d, d, D_right)
+  data: complex128[D_left * d * d * D_right]     # C-contiguous, little-endian
+```
+
+## Gold Standard Reference Energies
+
+CPU reference energies (quimb DMRG2) used for validation.
+All implementations should match within 1e-10:
+
+| Model | L | chi | Energy |
+|-------|---|-----|--------|
+| Heisenberg | 12 | 100 | -5.1420906328 |
+| Heisenberg | 20 | 100 | -8.6824733344 |
+| Josephson | 8 | 50 | -2.8438010431 |
+| Josephson | 12 | 50 | -4.5070608947 |
+
+Full results in `validation/gold_standard.json`.
+
+## Literature References
+
+- U. Schollwock, "The density-matrix renormalization group in the age of matrix product states," Ann. Phys. 326, 96-192 (2011).
+- E. M. Stoudenmire and S. R. White, "Real-space parallel density matrix renormalization group," Phys. Rev. B 87, 155137 (2013).
+- R. Fazio and H. van der Zant, "Quantum phase transitions and vortex dynamics in superconducting networks," Phys. Rep. 355, 235-334 (2001).
