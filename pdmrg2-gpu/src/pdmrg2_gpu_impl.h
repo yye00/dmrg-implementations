@@ -1908,27 +1908,29 @@ void PDMRG2GPU<Scalar>::segment_sweep_RL(int seg_idx) {
 }
 
 // ============================================================================
-// Boundary coupling sweep
+// Stoudenmire boundary merge+optimize
+// Optimizes the two-site bond at each segment boundary only.
+// parity: 0 = even-indexed boundaries, 1 = odd, -1 = all
+// Cost: O(P) bond optimizations instead of O(L) full-chain sweep.
 // ============================================================================
 
 template<typename Scalar>
-double PDMRG2GPU<Scalar>::boundary_coupling_sweep(int W) {
+double PDMRG2GPU<Scalar>::merge_and_optimize_boundaries(int parity) {
     double energy = 0.0;
     int si = 0;
 
     for (int b = 0; b < (int)boundary_bonds_.size(); b++) {
-        int bsite = boundary_bonds_[b];
-        int lo = std::max(0, bsite - W);
-        int hi = std::min(L_ - 2, bsite + W);
+        if (parity >= 0 && (b % 2) != parity) continue;
 
-        for (int site = lo; site <= hi; site++) {
-            energy = optimize_bond(site, 'R', si);
-            update_left_env(site, si);
-        }
-        for (int site = hi; site >= lo; site--) {
-            energy = optimize_bond(site, 'L', si);
-            update_right_env(site + 1, si);
-        }
+        int bsite = boundary_bonds_[b];
+
+        // LR optimize: MPS[bsite] -> left-canonical U, MPS[bsite+1] -> S*Vh
+        energy = optimize_bond(bsite, 'R', si);
+        update_left_env(bsite, si);
+
+        // RL optimize: MPS[bsite] -> U*S, MPS[bsite+1] -> right-canonical Vh
+        energy = optimize_bond(bsite, 'L', si);
+        update_right_env(bsite + 1, si);
     }
     return energy;
 }
@@ -1993,48 +1995,66 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
               << std::chrono::duration<double>(t_warmup_end - t_start).count()
               << " s" << std::endl << std::endl;
 
-    // === Main PDMRG loop ===
+    // === Main PDMRG loop (Stoudenmire staggered sweeps) ===
+    // Replaces O(L) full-chain coupling with O(P) boundary-only merge+optimize.
     double energy_prev = warmup_energy;
     energy_ = warmup_energy;
     bool outer_converged = false;
 
     double total_parallel_time = 0.0;
-    double total_coupling_time = 0.0;
+    double total_boundary_time = 0.0;
+
+    // Parallel sweep launcher with GPU sync
+    // pdmrg2-gpu segment sweeps already sync their streams internally
+    // (hipStreamSynchronize at end of canonize_segment), but we add
+    // hipDeviceSynchronize for safety before boundary coupling on stream 0
+    auto parallel_sweep = [this](auto sweep_fn) {
+        std::vector<std::thread> threads(n_segments_);
+        for (int k = 0; k < n_segments_; k++) {
+            threads[k] = std::thread([this, k, &sweep_fn]{ sweep_fn(this, k); });
+        }
+        for (auto& t : threads) t.join();
+        HIP_CHECK(hipDeviceSynchronize());
+    };
+
+    bool has_odd_boundaries = ((int)boundary_bonds_.size() > 1);
 
     for (int outer = 0; outer < n_outer_sweeps; outer++) {
         auto t_outer = std::chrono::high_resolution_clock::now();
 
-        // Phase 1: Parallel segment sweeps
-        auto t_par_start = std::chrono::high_resolution_clock::now();
-        auto parallel_sweep = [this](auto sweep_fn) {
-            std::vector<std::thread> threads(n_segments_);
-            for (int k = 0; k < n_segments_; k++) {
-                threads[k] = std::thread([this, k, &sweep_fn]{ sweep_fn(this, k); });
-            }
-            for (auto& t : threads) t.join();
-        };
-
         for (int local_sw = 0; local_sw < n_local_sweeps; local_sw++) {
-            if (outer % 2 == 0) {
-                parallel_sweep([](PDMRG2GPU* self, int k){ self->segment_sweep_LR(k); });
-                parallel_sweep([](PDMRG2GPU* self, int k){ self->segment_sweep_RL(k); });
-            } else {
-                parallel_sweep([](PDMRG2GPU* self, int k){ self->segment_sweep_RL(k); });
-                parallel_sweep([](PDMRG2GPU* self, int k){ self->segment_sweep_LR(k); });
+            // Half-sweep 1: even segments LR, odd segments RL
+            auto t_par_start = std::chrono::high_resolution_clock::now();
+            parallel_sweep([](PDMRG2GPU* self, int k) {
+                if (k % 2 == 0) self->segment_sweep_LR(k);
+                else             self->segment_sweep_RL(k);
+            });
+            auto t_par_end = std::chrono::high_resolution_clock::now();
+            total_parallel_time += std::chrono::duration<double>(t_par_end - t_par_start).count();
+
+            // Merge+optimize at even boundaries
+            auto t_bnd_start = std::chrono::high_resolution_clock::now();
+            energy_ = merge_and_optimize_boundaries(0);
+            auto t_bnd_end = std::chrono::high_resolution_clock::now();
+            total_boundary_time += std::chrono::duration<double>(t_bnd_end - t_bnd_start).count();
+
+            // Half-sweep 2: even segments RL, odd segments LR
+            t_par_start = std::chrono::high_resolution_clock::now();
+            parallel_sweep([](PDMRG2GPU* self, int k) {
+                if (k % 2 == 0) self->segment_sweep_RL(k);
+                else             self->segment_sweep_LR(k);
+            });
+            t_par_end = std::chrono::high_resolution_clock::now();
+            total_parallel_time += std::chrono::duration<double>(t_par_end - t_par_start).count();
+
+            // Merge+optimize at odd boundaries (if any)
+            if (has_odd_boundaries) {
+                t_bnd_start = std::chrono::high_resolution_clock::now();
+                energy_ = merge_and_optimize_boundaries(1);
+                t_bnd_end = std::chrono::high_resolution_clock::now();
+                total_boundary_time += std::chrono::duration<double>(t_bnd_end - t_bnd_start).count();
             }
         }
-        auto t_par_end = std::chrono::high_resolution_clock::now();
-        double par_time = std::chrono::duration<double>(t_par_end - t_par_start).count();
-        total_parallel_time += par_time;
-
-        // Phase 2: Full-chain coupling sweep
-        auto t_coup_start = std::chrono::high_resolution_clock::now();
-        build_initial_environments();
-        sweep_LR_full();
-        energy_ = sweep_RL_full();
-        auto t_coup_end = std::chrono::high_resolution_clock::now();
-        double coup_time = std::chrono::duration<double>(t_coup_end - t_coup_start).count();
-        total_coupling_time += coup_time;
 
         auto t_outer_end = std::chrono::high_resolution_clock::now();
         double outer_time = std::chrono::duration<double>(t_outer_end - t_outer).count();
@@ -2048,8 +2068,7 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
         std::cout << "Outer " << std::setw(3) << outer << ": E = " << std::setprecision(12)
                   << energy_ << ", dE = " << std::scientific << std::setprecision(2) << dE
                   << ", time = " << std::fixed << std::setprecision(3) << outer_time
-                  << " s (par=" << par_time << " coup=" << coup_time
-                  << ")  chi=[" << chi_str.str() << "]" << std::endl;
+                  << " s  chi=[" << chi_str.str() << "]" << std::endl;
 
         if (dE < tol_ && outer > 0) {
             std::cout << "Converged after " << outer + 1 << " outer iterations!" << std::endl;
@@ -2060,10 +2079,10 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
         energy_prev = energy_;
     }
     std::cout << "Total parallel time: " << std::fixed << std::setprecision(3)
-              << total_parallel_time << " s, coupling time: " << total_coupling_time << " s" << std::endl;
+              << total_parallel_time << " s, boundary time: " << total_boundary_time << " s" << std::endl;
 
-    // === Polish phase: always run full-chain sweeps to ensure global accuracy ===
-    if (n_segments_ > 1) {
+    // === Polish phase: full-chain sweeps to converge to tight tolerance ===
+    if (n_segments_ > 1 && !outer_converged) {
         int n_polish = 10;
         std::cout << "Polish sweeps (full-chain, max " << n_polish << ")..." << std::endl;
         build_initial_environments();
@@ -2084,6 +2103,8 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
                 break;
             }
         }
+    } else if (outer_converged) {
+        std::cout << "Skipping polish (outer loop converged)" << std::endl;
     }
 
     auto t_end = std::chrono::high_resolution_clock::now();

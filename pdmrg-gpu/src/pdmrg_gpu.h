@@ -144,7 +144,7 @@ private:
     double sweep_RL_full();        // full-chain R→L (warmup), stream 0
     void segment_sweep_LR(int seg_idx);  // local L→R within segment
     void segment_sweep_RL(int seg_idx);  // local R→L within segment
-    double boundary_coupling_sweep(int W = 4);  // B1: boundary-region only coupling
+    double merge_and_optimize_boundaries(int parity = -1);  // Stoudenmire boundary coupling
 
     // === Partitioning ===
     void partition_chain();

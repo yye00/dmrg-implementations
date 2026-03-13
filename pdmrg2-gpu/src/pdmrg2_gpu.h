@@ -187,7 +187,7 @@ private:
     double sweep_RL_full();
     void segment_sweep_LR(int seg_idx);
     void segment_sweep_RL(int seg_idx);
-    double boundary_coupling_sweep(int W = 4);
+    double merge_and_optimize_boundaries(int parity = -1);  // Stoudenmire boundary coupling
 
     // === Partitioning ===
     void partition_chain();

@@ -1067,35 +1067,30 @@ void PDMRGGPU<Scalar>::segment_sweep_RL(int seg_idx) {
 
 
 // ============================================================================
-// Boundary-region coupling sweep (B1)
-// Only optimizes bonds within ±W sites of each segment boundary.
-// Cost: O(P × 2W) instead of O(L) for full-chain sweep.
+// Stoudenmire boundary merge+optimize
+// Optimizes the two-site bond at each segment boundary only.
+// parity: 0 = even-indexed boundaries, 1 = odd, -1 = all
+// Cost: O(P) bond optimizations instead of O(L) full-chain sweep.
+// Requires staggered sweep pattern to ensure fresh environments.
 // ============================================================================
 
 template<typename Scalar>
-double PDMRGGPU<Scalar>::boundary_coupling_sweep(int W) {
+double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
     double energy = 0.0;
-    int si = 0;  // use stream 0
+    int si = 0;  // boundary optimization uses stream 0
 
-    // For each boundary, sweep LR then RL over the boundary region
     for (int b = 0; b < (int)boundary_bonds_.size(); b++) {
-        int bsite = boundary_bonds_[b];
-        int lo = std::max(0, bsite - W);
-        int hi = std::min(L_ - 2, bsite + W);
+        if (parity >= 0 && (b % 2) != parity) continue;
 
-        // Rebuild L environments from lo (need L_env[lo] valid)
-        // If lo > 0, rebuild from the nearest valid left env
-        // The segment sweep left L_env[seg_last+1] valid for the left segment,
-        // so L_env[lo] should already be valid from the last LR segment sweep.
-        // But to be safe, rebuild from lo's left env:
-        for (int site = lo; site <= hi; site++) {
-            energy = optimize_bond(site, 'R', si);
-            update_left_env(site, si);
-        }
-        for (int site = hi; site >= lo; site--) {
-            energy = optimize_bond(site, 'L', si);
-            update_right_env(site + 1, si);
-        }
+        int bsite = boundary_bonds_[b];
+
+        // LR optimize: MPS[bsite] -> left-canonical U, MPS[bsite+1] -> S*Vh
+        energy = optimize_bond(bsite, 'R', si);
+        update_left_env(bsite, si);  // L_env[bsite+1] fresh
+
+        // RL optimize: MPS[bsite] -> U*S, MPS[bsite+1] -> right-canonical Vh
+        energy = optimize_bond(bsite, 'L', si);
+        update_right_env(bsite + 1, si);  // R_env[bsite+1] fresh
     }
     return energy;
 }
@@ -1160,40 +1155,56 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
               << std::chrono::duration<double>(t_warmup_end - t_start).count()
               << " s" << std::endl << std::endl;
 
-    // === Main PDMRG loop ===
+    // === Main PDMRG loop (Stoudenmire staggered sweeps) ===
+    // Replaces O(L) full-chain coupling with O(P) boundary-only merge+optimize.
+    // Staggered pattern: even segments LR / odd RL, then reverse.
+    // This ensures fresh L_env + R_env at each boundary when it's optimized.
     double energy_prev = warmup_energy;
     energy_ = warmup_energy;
     bool outer_converged = false;
 
+    // Parallel sweep launcher: one CPU thread per segment, each with its own HIP stream
+    auto parallel_sweep = [this](auto sweep_fn) {
+        std::vector<std::thread> threads(n_segments_);
+        for (int k = 0; k < n_segments_; k++) {
+            threads[k] = std::thread([this, k, &sweep_fn]{ sweep_fn(this, k); });
+        }
+        for (auto& t : threads) t.join();
+        // Sync all GPU streams — segment sweeps launch async GPU work that
+        // must complete before boundary coupling reads their outputs on stream 0
+        HIP_CHECK(hipDeviceSynchronize());
+    };
+
+    bool has_odd_boundaries = ((int)boundary_bonds_.size() > 1);
+
     for (int outer = 0; outer < n_outer_sweeps; outer++) {
         auto t_outer = std::chrono::high_resolution_clock::now();
 
-        // === Phase 1: Parallel segment sweeps via CPU threads ===
-        // Each thread drives its own HIP stream + rocBLAS handle.
-        // Segments access non-overlapping MPS sites and environments.
-        auto parallel_sweep = [this](auto sweep_fn) {
-            std::vector<std::thread> threads(n_segments_);
-            for (int k = 0; k < n_segments_; k++) {
-                threads[k] = std::thread([this, k, &sweep_fn]{ sweep_fn(this, k); });
-            }
-            for (auto& t : threads) t.join();
-        };
-
         for (int local_sw = 0; local_sw < n_local_sweeps; local_sw++) {
-            if (outer % 2 == 0) {
-                parallel_sweep([](PDMRGGPU* self, int k){ self->segment_sweep_LR(k); });
-                parallel_sweep([](PDMRGGPU* self, int k){ self->segment_sweep_RL(k); });
-            } else {
-                parallel_sweep([](PDMRGGPU* self, int k){ self->segment_sweep_RL(k); });
-                parallel_sweep([](PDMRGGPU* self, int k){ self->segment_sweep_LR(k); });
+            // Half-sweep 1: even segments LR, odd segments RL
+            // After this, even-numbered boundaries have fresh L_env + R_env:
+            //   even seg k swept LR → L_env[seg_last_[k]] fresh
+            //   odd seg k+1 swept RL → R_env[seg_first_[k+1]+1] fresh
+            parallel_sweep([](PDMRGGPU* self, int k) {
+                if (k % 2 == 0) self->segment_sweep_LR(k);
+                else             self->segment_sweep_RL(k);
+            });
+
+            // Merge+optimize at even boundaries
+            energy_ = merge_and_optimize_boundaries(0);
+
+            // Half-sweep 2: even segments RL, odd segments LR
+            // After this, odd-numbered boundaries have fresh environments
+            parallel_sweep([](PDMRGGPU* self, int k) {
+                if (k % 2 == 0) self->segment_sweep_RL(k);
+                else             self->segment_sweep_LR(k);
+            });
+
+            // Merge+optimize at odd boundaries (if any exist)
+            if (has_odd_boundaries) {
+                energy_ = merge_and_optimize_boundaries(1);
             }
         }
-
-        // === Phase 2: Full-chain coupling sweep ===
-        // Rebuild environments from current MPS, then do one full LR+RL sweep.
-        build_initial_environments();
-        sweep_LR_full();
-        energy_ = sweep_RL_full();
 
         auto t_outer_end = std::chrono::high_resolution_clock::now();
         double outer_time = std::chrono::duration<double>(t_outer_end - t_outer).count();
@@ -1220,7 +1231,7 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     }
 
     // === Polish phase: full-chain sweeps to converge to tight tolerance ===
-    // B5: Skip polish if outer loop already converged (dE < tol)
+    // Skip polish if outer loop already converged (dE < tol)
     if (n_segments_ > 1 && !outer_converged) {
         int n_polish = 10;
         std::cout << "Polish sweeps (full-chain dmrg2, max " << n_polish << ")..." << std::endl;
