@@ -1,4 +1,6 @@
 numpy>=1.20
 scipy>=1.7
 quimb>=1.4
+cotengra>=0.5
+optuna>=3.0
 mpi4py>=3.0

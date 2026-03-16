@@ -28,20 +28,35 @@ SERIAL_CPU = ["quimb-dmrg1", "quimb-dmrg2"]
 PARALLEL_CPU = ["pdmrg", "pdmrg2"]
 SERIAL_GPU = ["dmrg-gpu", "dmrg2-gpu"]
 PARALLEL_GPU = ["pdmrg-gpu", "pdmrg2-gpu"]
-NP_VALUES = [2, 4, 8]
+NP_VALUES = [2, 4]
+BLAS_THREADS = [1, 2, 4, 8]
+TOTAL_CORES = 13
 
 # ============================================================================
 # SSH helper
 # ============================================================================
 
-def ssh_run(cmd, timeout=600):
+def _blas_env_prefix(blas_threads=None):
+    """Return shell env var prefix for BLAS/OMP thread control, or empty string."""
+    if blas_threads is None:
+        return ""
+    return f"OPENBLAS_NUM_THREADS={blas_threads} OMP_NUM_THREADS={blas_threads} "
+
+def _mpi_env_flags(blas_threads=None):
+    """Return mpirun -x flags for BLAS/OMP thread control, or empty string."""
+    if blas_threads is None:
+        return ""
+    return f"-x OPENBLAS_NUM_THREADS={blas_threads} -x OMP_NUM_THREADS={blas_threads} "
+
+def ssh_run(cmd, timeout=600, blas_threads=None):
     """Run command on remote host, return CompletedProcess."""
+    full_cmd = _blas_env_prefix(blas_threads) + cmd
     return subprocess.run(
-        ["ssh", REMOTE, cmd],
+        ["ssh", REMOTE, full_cmd],
         capture_output=True, text=True, timeout=timeout
     )
 
-def ssh_run_script(script, timeout=600):
+def ssh_run_script(script, timeout=600, blas_threads=None):
     """Write script to remote /tmp and run it."""
     import hashlib
     h = hashlib.md5(script.encode()).hexdigest()[:8]
@@ -51,9 +66,9 @@ def ssh_run_script(script, timeout=600):
         ["ssh", REMOTE, f"cat > {tmpfile} << 'HEREDOC_END'\n{script}\nHEREDOC_END"],
         capture_output=True, timeout=10
     )
-    return ssh_run(f"cd {REMOTE_REPO} && python3 {tmpfile}", timeout=timeout)
+    return ssh_run(f"cd {REMOTE_REPO} && python3 {tmpfile}", timeout=timeout, blas_threads=blas_threads)
 
-def ssh_run_mpi_script(script, np_val, timeout=600):
+def ssh_run_mpi_script(script, np_val, timeout=600, blas_threads=None):
     """Write script to remote /tmp and run with mpirun."""
     import hashlib
     h = hashlib.md5(script.encode()).hexdigest()[:8]
@@ -62,8 +77,9 @@ def ssh_run_mpi_script(script, np_val, timeout=600):
         ["ssh", REMOTE, f"cat > {tmpfile} << 'HEREDOC_END'\n{script}\nHEREDOC_END"],
         capture_output=True, timeout=10
     )
+    env_flags = _mpi_env_flags(blas_threads)
     return ssh_run(
-        f"cd {REMOTE_REPO} && mpirun --allow-run-as-root --oversubscribe -np {np_val} python3 {tmpfile} 2>/dev/null",
+        f"cd {REMOTE_REPO} && mpirun --allow-run-as-root --oversubscribe {env_flags}-np {np_val} python3 {tmpfile} 2>/dev/null",
         timeout=timeout
     )
 
@@ -71,7 +87,7 @@ def ssh_run_mpi_script(script, np_val, timeout=600):
 # Runners
 # ============================================================================
 
-def run_quimb(model, size, algo):
+def run_quimb(model, size, algo, blas_threads=None):
     p = MODELS[model][size]
     L, chi, sweeps = p["L"], p["chi"], p["sweeps"]
 
@@ -97,15 +113,19 @@ dmrg = qtn.DMRG{'1' if algo == 'dmrg1' else '2'}(mpo, bond_dims=[{chi}], cutoffs
 t0 = time.time()
 dmrg.solve(max_sweeps={sweeps}, tol=1e-10, verbosity=0)
 t1 = time.time()
-e = dmrg.energy.real if hasattr(dmrg.energy, 'real') else dmrg.energy
-print(f"ENERGY={{e:.15f}}")
-print(f"TIME={{t1-t0:.3f}}")
+e = dmrg.energy
+if hasattr(e, 'imag') and abs(e.imag) > 1e-10:
+    print(f"ERROR: complex energy with Im(E)={{e.imag:.2e}} — non-Hermitian MPO?")
+else:
+    e = e.real if hasattr(e, 'real') else e
+    print(f"ENERGY={{e:.15f}}")
+    print(f"TIME={{t1-t0:.3f}}")
 """
-    result = ssh_run_script(script)
+    result = ssh_run_script(script, blas_threads=blas_threads)
     return parse_python_output(result)
 
 
-def run_pdmrg(impl, model, size, np_val):
+def run_pdmrg(impl, model, size, np_val, blas_threads=None):
     p = MODELS[model][size]
     L, chi, sweeps = p["L"], p["chi"], p["sweeps"]
     package_dir = f"{REMOTE_REPO}/{impl}"
@@ -138,7 +158,13 @@ if MPI.COMM_WORLD.Get_rank() == 0:
     print(f"ENERGY={{energy:.15f}}")
     print(f"TIME={{t1-t0:.3f}}")
 """
-    result = ssh_run_mpi_script(script, np_val)
+    # For MPI, cap BLAS threads to floor(TOTAL_CORES / np) to avoid oversubscription
+    effective_threads = blas_threads
+    if effective_threads is not None:
+        max_threads_per_rank = TOTAL_CORES // np_val
+        effective_threads = min(effective_threads, max(1, max_threads_per_rank))
+    timeout = 900 if np_val > 2 else 600
+    result = ssh_run_mpi_script(script, np_val, timeout=timeout, blas_threads=effective_threads)
     return parse_python_output(result)
 
 
@@ -223,28 +249,14 @@ def main():
             print(f"{'='*70}")
             results[key] = {}
 
-            # --- Serial CPU ---
-            for impl in SERIAL_CPU:
-                algo = "dmrg1" if "dmrg1" in impl else "dmrg2"
-                print(f"  {impl:25s} ... ", end="", flush=True)
-                try:
-                    r = run_quimb(model, size, algo)
-                    results[key][impl] = r
-                    if "error" in r:
-                        print(f"ERROR: {r['error'][:80]}")
-                    else:
-                        print(f"E={r['energy']:.10f}  t={r['time']:.1f}s")
-                except Exception as e:
-                    print(f"EXCEPTION: {e}")
-                    results[key][impl] = {"error": str(e)}
-
-            # --- Parallel CPU ---
-            for impl in PARALLEL_CPU:
-                for np_val in NP_VALUES:
-                    label = f"{impl} np={np_val}"
+            # --- Serial CPU (sweep over BLAS thread counts) ---
+            for t in BLAS_THREADS:
+                for impl in SERIAL_CPU:
+                    algo = "dmrg1" if "dmrg1" in impl else "dmrg2"
+                    label = f"{impl} t={t}"
                     print(f"  {label:25s} ... ", end="", flush=True)
                     try:
-                        r = run_pdmrg(impl, model, size, np_val)
+                        r = run_quimb(model, size, algo, blas_threads=t)
                         results[key][label] = r
                         if "error" in r:
                             print(f"ERROR: {r['error'][:80]}")
@@ -253,6 +265,23 @@ def main():
                     except Exception as e:
                         print(f"EXCEPTION: {e}")
                         results[key][label] = {"error": str(e)}
+
+            # --- Parallel CPU (sweep over BLAS thread counts) ---
+            for t in BLAS_THREADS:
+                for impl in PARALLEL_CPU:
+                    for np_val in NP_VALUES:
+                        label = f"{impl} np={np_val} t={t}"
+                        print(f"  {label:25s} ... ", end="", flush=True)
+                        try:
+                            r = run_pdmrg(impl, model, size, np_val, blas_threads=t)
+                            results[key][label] = r
+                            if "error" in r:
+                                print(f"ERROR: {r['error'][:80]}")
+                            else:
+                                print(f"E={r['energy']:.10f}  t={r['time']:.1f}s")
+                        except Exception as e:
+                            print(f"EXCEPTION: {e}")
+                            results[key][label] = {"error": str(e)}
 
             # --- Serial GPU ---
             for impl in SERIAL_GPU:
@@ -304,12 +333,18 @@ def print_summary(results):
 
     for key, impls in results.items():
         print(f"\n  {key}")
-        ref = impls.get("quimb-dmrg2", {}).get("energy")
-        print(f"  {'Implementation':<25s} {'Energy':>18s} {'ΔE vs ref':>12s} {'Time':>8s}")
-        print(f"  {'-'*25} {'-'*18} {'-'*12} {'-'*8}")
+        # Find a reference energy: prefer quimb-dmrg2 t=1, fall back to any quimb-dmrg2
+        ref = None
+        for rlabel in sorted(impls.keys()):
+            if rlabel.startswith("quimb-dmrg2"):
+                ref = impls[rlabel].get("energy")
+                if ref is not None:
+                    break
+        print(f"  {'Implementation':<30s} {'Energy':>18s} {'ΔE vs ref':>12s} {'Time':>8s}")
+        print(f"  {'-'*30} {'-'*18} {'-'*12} {'-'*8}")
         for label, r in impls.items():
             if "error" in r:
-                print(f"  {label:<25s} {'ERROR':>18s}")
+                print(f"  {label:<30s} {'ERROR':>18s}")
                 continue
             e = r["energy"]
             t = r.get("time", 0) or 0
@@ -318,7 +353,7 @@ def print_summary(results):
                 de_str = f"{de:.2e}"
             else:
                 de_str = "N/A"
-            print(f"  {label:<25s} {e:>18.10f} {de_str:>12s} {t:>7.1f}s")
+            print(f"  {label:<30s} {e:>18.10f} {de_str:>12s} {t:>7.1f}s")
 
 
 if __name__ == "__main__":
