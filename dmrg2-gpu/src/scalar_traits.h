@@ -29,15 +29,6 @@ extern "C" void zgesvd_(const char* jobu, const char* jobvt,
                         hipDoubleComplex* work, const int* lwork,
                         double* rwork, int* info);
 
-// LAPACK QR declarations
-extern "C" void dgeqrf_(const int* m, const int* n, double* a, const int* lda,
-                         double* tau, double* work, const int* lwork, int* info);
-extern "C" void dorgqr_(const int* m, const int* n, const int* k, double* a, const int* lda,
-                         const double* tau, double* work, const int* lwork, int* info);
-extern "C" void zgeqrf_(const int* m, const int* n, hipDoubleComplex* a, const int* lda,
-                         hipDoubleComplex* tau, hipDoubleComplex* work, const int* lwork, int* info);
-extern "C" void zungqr_(const int* m, const int* n, const int* k, hipDoubleComplex* a, const int* lda,
-                         const hipDoubleComplex* tau, hipDoubleComplex* work, const int* lwork, int* info);
 
 template<typename T> struct ScalarTraits;
 
@@ -121,16 +112,6 @@ struct ScalarTraits<double> {
         dgesvd_(jobu, jobvt, m, n, a, lda, s, u, ldu, vt, ldvt, work, lwork, info);
     }
 
-    // --- LAPACK QR ---
-    static void lapack_geqrf(const int* m, const int* n, Scalar* a, const int* lda,
-            Scalar* tau, Scalar* work, const int* lwork, int* info) {
-        dgeqrf_(m, n, a, lda, tau, work, lwork, info);
-    }
-    static void lapack_orgqr(const int* m, const int* n, const int* k, Scalar* a, const int* lda,
-            const Scalar* tau, Scalar* work, const int* lwork, int* info) {
-        dorgqr_(m, n, k, a, lda, tau, work, lwork, info);
-    }
-
     // --- rocSOLVER SVD ---
     static rocblas_status rocsolver_gesvd(rocblas_handle h,
             rocblas_svect lu, rocblas_svect rv,
@@ -138,6 +119,16 @@ struct ScalarTraits<double> {
             Scalar* U, int ldu, Scalar* Vh, int ldvh,
             RealType* E, rocblas_workmode wm, int* info) {
         return rocsolver_dgesvd(h, lu, rv, m, n, A, lda, S, U, ldu, Vh, ldvh, E, wm, info);
+    }
+
+    // --- rocSOLVER QR ---
+    static rocblas_status rocsolver_geqrf(rocblas_handle h,
+            int m, int n, Scalar* A, int lda, Scalar* ipiv) {
+        return rocsolver_dgeqrf(h, m, n, A, lda, ipiv);
+    }
+    static rocblas_status rocsolver_orgqr(rocblas_handle h,
+            int m, int n, int k, Scalar* A, int lda, Scalar* ipiv) {
+        return rocsolver_dorgqr(h, m, n, k, A, lda, ipiv);
     }
 };
 
@@ -247,16 +238,6 @@ struct ScalarTraits<hipDoubleComplex> {
         zgesvd_(jobu, jobvt, m, n, a, lda, s, u, ldu, vt, ldvt, work, lwork, rwork, info);
     }
 
-    // --- LAPACK QR ---
-    static void lapack_geqrf(const int* m, const int* n, Scalar* a, const int* lda,
-            Scalar* tau, Scalar* work, const int* lwork, int* info) {
-        zgeqrf_(m, n, a, lda, tau, work, lwork, info);
-    }
-    static void lapack_orgqr(const int* m, const int* n, const int* k, Scalar* a, const int* lda,
-            const Scalar* tau, Scalar* work, const int* lwork, int* info) {
-        zungqr_(m, n, k, a, lda, tau, work, lwork, info);
-    }
-
     // --- rocSOLVER SVD ---
     static rocblas_status rocsolver_gesvd(rocblas_handle h,
             rocblas_svect lu, rocblas_svect rv,
@@ -268,6 +249,20 @@ struct ScalarTraits<hipDoubleComplex> {
             reinterpret_cast<rocblas_double_complex*>(U), ldu,
             reinterpret_cast<rocblas_double_complex*>(Vh), ldvh,
             E, wm, info);
+    }
+
+    // --- rocSOLVER QR ---
+    static rocblas_status rocsolver_geqrf(rocblas_handle h,
+            int m, int n, Scalar* A, int lda, Scalar* ipiv) {
+        return rocsolver_zgeqrf(h, m, n,
+            reinterpret_cast<rocblas_double_complex*>(A), lda,
+            reinterpret_cast<rocblas_double_complex*>(ipiv));
+    }
+    static rocblas_status rocsolver_orgqr(rocblas_handle h,
+            int m, int n, int k, Scalar* A, int lda, Scalar* ipiv) {
+        return rocsolver_zungqr(h, m, n, k,
+            reinterpret_cast<rocblas_double_complex*>(A), lda,
+            reinterpret_cast<rocblas_double_complex*>(ipiv));
     }
 };
 

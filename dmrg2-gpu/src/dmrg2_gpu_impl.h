@@ -8,14 +8,6 @@
 #include <cstring>
 #include <chrono>
 
-// BLAS GEMM for CPU-side randomized SVD
-extern "C" void dgemm_(const char*, const char*, const int*, const int*, const int*,
-                        const double*, const double*, const int*, const double*, const int*,
-                        const double*, double*, const int*);
-extern "C" void zgemm_(const char*, const char*, const int*, const int*, const int*,
-                        const hipDoubleComplex*, const hipDoubleComplex*, const int*,
-                        const hipDoubleComplex*, const int*,
-                        const hipDoubleComplex*, hipDoubleComplex*, const int*);
 
 #define HIP_CHECK(call) \
     do { \
@@ -166,6 +158,8 @@ DMRG2GPU<Scalar>::DMRG2GPU(int L, int d, int chi_max, int D_mpo, double tol)
     d_rsvd_Y_ = nullptr;
     d_rsvd_Q_ = nullptr;
     d_rsvd_B_ = nullptr;
+    d_rsvd_ipiv_ = nullptr;
+    d_rsvd_U_full_ = nullptr;
     {
         int rsvd_r = chi_max_ + rsvd_oversampling_;  // target rank + oversampling
         int rsvd_m = svd_max_m;  // chi*d
@@ -174,42 +168,12 @@ DMRG2GPU<Scalar>::DMRG2GPU(int L, int d, int chi_max, int D_mpo, double tol)
         HIP_CHECK(hipMalloc(&d_rsvd_Y_,    (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&d_rsvd_Q_,    (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&d_rsvd_B_,    (size_t)rsvd_r * rsvd_n * sizeof(Scalar)));
-        h_rsvd_Y_.resize((size_t)rsvd_m * rsvd_r);
-        h_rsvd_Q_.resize((size_t)rsvd_m * rsvd_r);
+        HIP_CHECK(hipMalloc(&d_rsvd_ipiv_, (size_t)rsvd_r * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_U_full_, (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
         h_rsvd_B_.resize((size_t)rsvd_r * rsvd_n);
-        h_rsvd_tau_.resize(rsvd_r);
         h_rsvd_U_small_.resize((size_t)rsvd_r * rsvd_r);
 
-        // Query QR workspace
-        {
-            int qr_m = rsvd_m, qr_n = rsvd_r;
-            int qr_lwork_query = -1;
-            Scalar qr_work_opt;
-            int qr_info;
-            Traits::lapack_geqrf(&qr_m, &qr_n, nullptr, &qr_m, nullptr,
-                                 &qr_work_opt, &qr_lwork_query, &qr_info);
-            int qr_opt;
-            if constexpr (Traits::is_complex) {
-                qr_opt = (int)Traits::real_part(qr_work_opt) + 1;
-            } else {
-                qr_opt = (int)qr_work_opt + 1;
-            }
-            // Also query orgqr/ungqr workspace
-            Scalar orgqr_work_opt;
-            int orgqr_lwork_query = -1;
-            int orgqr_info;
-            Traits::lapack_orgqr(&qr_m, &qr_n, &qr_n, nullptr, &qr_m, nullptr,
-                                 &orgqr_work_opt, &orgqr_lwork_query, &orgqr_info);
-            int orgqr_opt;
-            if constexpr (Traits::is_complex) {
-                orgqr_opt = (int)Traits::real_part(orgqr_work_opt) + 1;
-            } else {
-                orgqr_opt = (int)orgqr_work_opt + 1;
-            }
-            h_rsvd_qr_work_.resize(std::max(qr_opt, orgqr_opt));
-        }
-
-        // Also query SVD workspace for the smaller matrix (rsvd_r × rsvd_n)
+        // Query SVD workspace for the smaller matrix (rsvd_r × rsvd_n)
         {
             int sm = rsvd_r, sn = rsvd_n;
             int sk = std::min(sm, sn);
@@ -273,6 +237,8 @@ void DMRG2GPU<Scalar>::free_gpu_resources() {
     if (d_rsvd_Y_) hipFree(d_rsvd_Y_);
     if (d_rsvd_Q_) hipFree(d_rsvd_Q_);
     if (d_rsvd_B_) hipFree(d_rsvd_B_);
+    if (d_rsvd_ipiv_) hipFree(d_rsvd_ipiv_);
+    if (d_rsvd_U_full_) hipFree(d_rsvd_U_full_);
 
     rocblas_destroy_handle(rocblas_h_);
     hipStreamDestroy(stream_);
@@ -1057,31 +1023,14 @@ void DMRG2GPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction) {
         HIP_CHECK(hipStreamSynchronize(stream_));
     }
 
-    // Step 3: Copy Y to host, QR factorization → Q (m × r)
-    HIP_CHECK(hipMemcpy(h_rsvd_Y_.data(), d_rsvd_Y_, m * r * sizeof(Scalar), hipMemcpyDeviceToHost));
-    {
-        int qr_lwork = (int)h_rsvd_qr_work_.size();
-        int info;
-        // Copy Y to Q buffer (geqrf overwrites input)
-        std::copy(h_rsvd_Y_.begin(), h_rsvd_Y_.begin() + m * r, h_rsvd_Q_.begin());
-        Traits::lapack_geqrf(&m, &r, h_rsvd_Q_.data(), &m, h_rsvd_tau_.data(),
-                             h_rsvd_qr_work_.data(), &qr_lwork, &info);
-        if (info != 0) {
-            // Fall back to full SVD on error
-            svd_split(site, d_theta, direction);
-            return;
-        }
-        // Form explicit Q
-        Traits::lapack_orgqr(&m, &r, &r, h_rsvd_Q_.data(), &m, h_rsvd_tau_.data(),
-                             h_rsvd_qr_work_.data(), &qr_lwork, &info);
-        if (info != 0) {
-            svd_split(site, d_theta, direction);
-            return;
-        }
-    }
+    // Step 3: QR factorization of Y on GPU → Q (m × r) stays on device
+    //   Copy Y → Q buffer (geqrf overwrites input), then QR in-place
+    HIP_CHECK(hipMemcpy(d_rsvd_Q_, d_rsvd_Y_, (size_t)m * r * sizeof(Scalar), hipMemcpyDeviceToDevice));
+    ROCBLAS_CHECK(Traits::rocsolver_geqrf(rocblas_h_, m, r, d_rsvd_Q_, m, d_rsvd_ipiv_));
+    ROCBLAS_CHECK(Traits::rocsolver_orgqr(rocblas_h_, m, r, r, d_rsvd_Q_, m, d_rsvd_ipiv_));
+    HIP_CHECK(hipStreamSynchronize(stream_));
 
-    // Step 4: Upload Q to GPU, compute B = Q^H @ theta on GPU  (r × m) @ (m × n_svd) → (r × n_svd)
-    HIP_CHECK(hipMemcpy(d_rsvd_Q_, h_rsvd_Q_.data(), m * r * sizeof(Scalar), hipMemcpyHostToDevice));
+    // Step 4: B = Q^H @ theta on GPU  (r × m) @ (m × n_svd) → (r × n_svd)
     {
         Scalar one = Traits::one(), zero_val = Traits::zero();
         ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
@@ -1113,23 +1062,25 @@ void DMRG2GPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction) {
         }
     }
 
-    // Step 6: Compute full U = Q @ U_small on CPU  (m × r) @ (r × small_k) → (m × small_k)
+    // Step 6: Upload U_small to GPU, compute U_full = Q @ U_small on GPU
+    //   Q is (m × r) on device, U_small is (r × small_k) on host → U_full (m × small_k) on device
     {
+        // Upload U_small to device (reuse d_rsvd_B_ as temp — it's no longer needed)
+        HIP_CHECK(hipMemcpy(d_rsvd_B_, h_rsvd_U_small_.data(),
+                            (size_t)r * small_k * sizeof(Scalar), hipMemcpyHostToDevice));
         Scalar one = Traits::one(), zero_val = Traits::zero();
-        int lda_q = m, lda_us = r, ldc = m;
-        const char trN = 'N';
-        if constexpr (!Traits::is_complex) {
-            dgemm_(&trN, &trN, &m, &small_k, &r, &one,
-                   h_rsvd_Q_.data(), &lda_q, h_rsvd_U_small_.data(), &lda_us,
-                   &zero_val, h_svd_U_.data(), &ldc);
-        } else {
-            zgemm_(&trN, &trN, &m, &small_k, &r, &one,
-                   h_rsvd_Q_.data(), &lda_q, h_rsvd_U_small_.data(), &lda_us,
-                   &zero_val, h_svd_U_.data(), &ldc);
-        }
+        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            rocblas_operation_none, rocblas_operation_none,
+            m, small_k, r, &one,
+            d_rsvd_Q_, m,
+            d_rsvd_B_, r,
+            &zero_val,
+            d_rsvd_U_full_, m));
+        HIP_CHECK(hipStreamSynchronize(stream_));
     }
 
-    Scalar* h_U_data = h_svd_U_.data();
+    // Now: U_full (m × small_k) is on GPU at d_rsvd_U_full_
+    //      S (small_k) and Vh (small_k × n_svd) are on host
     RealType* h_S_data = h_svd_S_.data();
     Scalar* h_Vh_data = h_svd_Vh_.data();
 
@@ -1141,36 +1092,51 @@ void DMRG2GPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction) {
     if (new_k == 0) new_k = 1;
 
     if (direction == 'R') {
+        // MPS[site] = U_full[:, :new_k] — copy from GPU to GPU
         allocate_mps_tensor(site, cL, new_k);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_U_data,
-                            m * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
+        if (new_k == small_k) {
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_rsvd_U_full_,
+                                (size_t)m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice));
+        } else {
+            // Need to copy column subset — download, extract, re-upload
+            HIP_CHECK(hipMemcpy(h_svd_U_.data(), d_rsvd_U_full_,
+                                (size_t)m * small_k * sizeof(Scalar), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_svd_U_.data(),
+                                (size_t)m * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
+        }
 
+        // MPS[site+1] = diag(S[:new_k]) @ Vh[:new_k, :]
         for (int j = 0; j < n_svd; j++)
             for (int i = 0; i < new_k; i++)
                 h_svd_tmp_[i + j * new_k] = Traits::scale_by_real(h_S_data[i], h_Vh_data[i + j * small_k]);
 
         allocate_mps_tensor(site + 1, new_k, cR);
         HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_svd_tmp_.data(),
-                            new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+                            (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
     } else {
+        // MPS[site] = U_full[:, :new_k] @ diag(S[:new_k])
+        HIP_CHECK(hipMemcpy(h_svd_U_.data(), d_rsvd_U_full_,
+                            (size_t)m * small_k * sizeof(Scalar), hipMemcpyDeviceToHost));
+        Scalar* h_U_data = h_svd_U_.data();
         for (int j = 0; j < new_k; j++)
             for (int i = 0; i < m; i++)
                 h_svd_tmp_[i + j * m] = Traits::scale_by_real(h_S_data[j], h_U_data[i + j * m]);
 
         allocate_mps_tensor(site, cL, new_k);
         HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_svd_tmp_.data(),
-                            m * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
+                            (size_t)m * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
 
+        // MPS[site+1] = Vh[:new_k, :]
         allocate_mps_tensor(site + 1, new_k, cR);
         if (new_k == small_k) {
             HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_Vh_data,
-                                small_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+                                (size_t)small_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
         } else {
             for (int j = 0; j < n_svd; j++)
                 for (int i = 0; i < new_k; i++)
                     h_svd_tmp_[i + j * new_k] = h_Vh_data[i + j * small_k];
             HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_svd_tmp_.data(),
-                                new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+                                (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
         }
     }
 

@@ -112,8 +112,9 @@ private:
     Scalar* d_rsvd_Y_;        // (m, k+p) projected result on GPU
     Scalar* d_rsvd_Q_;        // (m, k+p) QR factor on GPU
     Scalar* d_rsvd_B_;        // (k+p, n) projected matrix on GPU
-    std::vector<Scalar> h_rsvd_Y_, h_rsvd_Q_, h_rsvd_B_;
-    std::vector<Scalar> h_rsvd_tau_, h_rsvd_qr_work_;
+    Scalar* d_rsvd_ipiv_;     // (k+p) QR pivot/tau on GPU (rocSOLVER)
+    Scalar* d_rsvd_U_full_;   // (m, k+p) for U = Q @ U_small on GPU
+    std::vector<Scalar> h_rsvd_B_;
     std::vector<Scalar> h_rsvd_U_small_;  // (k+p, k+p) from SVD of B
 
     // Core algorithm
