@@ -37,6 +37,7 @@ public:
     double get_energy() const { return energy_; }
     void get_mps(std::vector<std::vector<Scalar>>& h_mps) const;
     void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
+    void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
 
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }
@@ -114,10 +115,21 @@ private:
         std::vector<Scalar> h_svd_A, h_svd_U, h_svd_Vh, h_svd_work, h_svd_tmp;
         std::vector<RealType> h_svd_S;
         std::vector<RealType> h_svd_rwork;
+        // Randomized truncated SVD (GPU QR)
+        Scalar* d_rsvd_omega;     // (n, r) random projection on GPU
+        Scalar* d_rsvd_Y;         // (m, r) projected result on GPU
+        Scalar* d_rsvd_Q;         // (m, r) QR factor on GPU
+        Scalar* d_rsvd_B;         // (r, n) projected matrix on GPU
+        Scalar* d_rsvd_ipiv;      // (r) QR tau on GPU (rocSOLVER)
+        Scalar* d_rsvd_U_full;    // (m, r) for U = Q @ U_small on GPU
+        std::vector<Scalar> h_rsvd_B;          // (r, n) host copy
+        std::vector<Scalar> h_rsvd_U_small;    // (r, r) from SVD of B
     };
     std::vector<StreamWorkspace> workspaces_;
 
     bool use_cpu_svd_;
+    bool use_rsvd_;
+    int rsvd_oversampling_;
     int theta_size_max_;
     int max_lanczos_iter_;
 
@@ -126,6 +138,7 @@ private:
     void apply_heff_two_site(int site, const Scalar* d_in, Scalar* d_out, int si);
     double lanczos_eigensolver(int site, Scalar* d_theta, int theta_size, int si);
     void svd_split(int site, Scalar* d_theta, char direction, int si);
+    void rsvd_split(int site, Scalar* d_theta, char direction, int si);
     double optimize_bond(int site, char direction, int si);
 
     // === Environment updates (stream-aware) ===

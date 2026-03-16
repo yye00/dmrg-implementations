@@ -135,6 +135,16 @@ struct ScalarTraits<double> {
             RealType* E, rocblas_workmode wm, int* info) {
         return rocsolver_dgesvd(h, lu, rv, m, n, A, lda, S, U, ldu, Vh, ldvh, E, wm, info);
     }
+
+    // --- rocSOLVER QR ---
+    static rocblas_status rocsolver_geqrf(rocblas_handle h,
+            int m, int n, Scalar* A, int lda, Scalar* ipiv) {
+        return rocsolver_dgeqrf(h, m, n, A, lda, ipiv);
+    }
+    static rocblas_status rocsolver_orgqr(rocblas_handle h,
+            int m, int n, int k, Scalar* A, int lda, Scalar* ipiv) {
+        return rocsolver_dorgqr(h, m, n, k, A, lda, ipiv);
+    }
 };
 
 // ============================================================================
@@ -263,6 +273,20 @@ struct ScalarTraits<hipDoubleComplex> {
             reinterpret_cast<rocblas_double_complex*>(U), ldu,
             reinterpret_cast<rocblas_double_complex*>(Vh), ldvh,
             E, wm, info);
+    }
+
+    // --- rocSOLVER QR ---
+    static rocblas_status rocsolver_geqrf(rocblas_handle h,
+            int m, int n, Scalar* A, int lda, Scalar* ipiv) {
+        return rocsolver_zgeqrf(h, m, n,
+            reinterpret_cast<rocblas_double_complex*>(A), lda,
+            reinterpret_cast<rocblas_double_complex*>(ipiv));
+    }
+    static rocblas_status rocsolver_orgqr(rocblas_handle h,
+            int m, int n, int k, Scalar* A, int lda, Scalar* ipiv) {
+        return rocsolver_zungqr(h, m, n, k,
+            reinterpret_cast<rocblas_double_complex*>(A), lda,
+            reinterpret_cast<rocblas_double_complex*>(ipiv));
     }
 };
 

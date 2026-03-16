@@ -138,7 +138,7 @@ void build_josephson_mpo(int L, int d, int D_mpo,
 // ============================================================================
 int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
                     int n_local, int n_warmup, bool gpu_svd, bool ns_split,
-                    bool davidson) {
+                    bool davidson, bool rsvd) {
     int d = 2;
     int D_mpo = 5;
 
@@ -149,7 +149,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
     printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
            n_segments, n_outer, n_local, n_warmup);
     printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
-    printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : "SVD");
+    printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
     printf("  Eigensolver: %s\n", davidson ? "Block-Davidson" : "Lanczos");
     printf("======================================\n\n");
 
@@ -164,6 +164,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
     pdmrg.set_cpu_svd(!gpu_svd);
     pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
+    pdmrg.set_rsvd(rsvd);
     pdmrg.initialize_mps_random();
 
     std::vector<double*> h_mpo_tensors(L);
@@ -194,7 +195,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
 // ============================================================================
 int test_josephson(int L, int chi_max, int n_outer, int n_segments,
                    int n_local, int n_warmup, bool gpu_svd, bool ns_split,
-                   bool davidson, int n_max, double E_J, double E_C, double phi_ext) {
+                   bool davidson, bool rsvd, int n_max, double E_J, double E_C, double phi_ext) {
     int d = 2 * n_max + 1;
     int D_mpo = 4;
 
@@ -207,7 +208,7 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
            n_segments, n_outer, n_local, n_warmup);
     printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/%.1f\n", E_J, E_C, M_PI / phi_ext);
     printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
-    printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : "SVD");
+    printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
     printf("  Eigensolver: %s\n", davidson ? "Block-Davidson" : "Lanczos");
     printf("======================================\n\n");
 
@@ -224,6 +225,7 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
     pdmrg.set_cpu_svd(!gpu_svd);
     pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
+    pdmrg.set_rsvd(rsvd);
     pdmrg.initialize_mps_random();
 
     std::vector<Complex*> h_mpo_tensors(L);
@@ -262,6 +264,7 @@ int main(int argc, char** argv) {
     bool gpu_svd = false;
     bool ns_split = true;  // default: use Newton-Schulz for bond split
     bool davidson = false;  // default: use Lanczos eigensolver
+    bool rsvd = false;      // default: no randomized SVD
     bool run_josephson = false;
     int n_max = 1;
     double E_J = 1.0, E_C = 0.5, phi_ext = M_PI / 4;
@@ -273,6 +276,7 @@ int main(int argc, char** argv) {
             if (std::string(argv[i]) == "--gpu-svd") { gpu_svd = true; continue; }
             if (std::string(argv[i]) == "--ns-split") { ns_split = true; continue; }
             if (std::string(argv[i]) == "--svd-split") { ns_split = false; continue; }
+            if (std::string(argv[i]) == "--rsvd") { rsvd = true; ns_split = false; continue; }
             if (std::string(argv[i]) == "--davidson") { davidson = true; continue; }
             if (std::string(argv[i]) == "--josephson") { run_josephson = true; continue; }
             if (std::string(argv[i]) == "--segments" && i+1 < argc) { n_segments = std::atoi(argv[++i]); continue; }
@@ -293,10 +297,10 @@ int main(int argc, char** argv) {
     try {
         if (run_josephson) {
             return test_josephson(L, chi_max, n_outer, n_segments, n_local, n_warmup,
-                                  gpu_svd, ns_split, davidson, n_max, E_J, E_C, phi_ext);
+                                  gpu_svd, ns_split, davidson, rsvd, n_max, E_J, E_C, phi_ext);
         } else {
             return test_heisenberg(L, chi_max, n_outer, n_segments, n_local, n_warmup,
-                                   gpu_svd, ns_split, davidson);
+                                   gpu_svd, ns_split, davidson, rsvd);
         }
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << std::endl;

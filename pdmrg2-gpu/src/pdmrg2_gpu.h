@@ -39,6 +39,7 @@ public:
     void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
     void set_use_ns_split(bool use_ns) { use_ns_split_ = use_ns; }
     void set_use_davidson(bool use_dav) { use_davidson_ = use_dav; }
+    void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
 
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }
@@ -139,12 +140,24 @@ private:
         std::vector<RealType> h_ns_eigvals;
         std::vector<Scalar> h_ns_syev_work;
         std::vector<RealType> h_ns_syev_rwork;
+
+        // === rSVD workspace (Halko-Martinsson-Tropp) ===
+        Scalar* d_rsvd_omega;    // (n, r) random projection on GPU
+        Scalar* d_rsvd_Y;       // (m, r) Y = theta @ Omega on GPU
+        Scalar* d_rsvd_Q;       // (m, r) QR result on GPU
+        Scalar* d_rsvd_B;       // (r, n) B = Q^H @ theta; reused for U_small upload
+        Scalar* d_rsvd_ipiv;    // (r) QR tau on GPU (rocSOLVER)
+        Scalar* d_rsvd_U_full;  // (m, r) U = Q @ U_small on GPU
+        std::vector<Scalar> h_rsvd_B;       // host buffer for CPU SVD of small B
+        std::vector<Scalar> h_rsvd_U_small; // (r, r) from SVD of B
     };
     std::vector<StreamWorkspace> workspaces_;
 
     bool use_cpu_svd_;
     bool use_ns_split_;
     bool use_davidson_;
+    bool use_rsvd_;
+    int rsvd_oversampling_;
     int theta_size_max_;
     int max_lanczos_iter_;
     int davidson_b_;
@@ -157,6 +170,7 @@ private:
     double lanczos_eigensolver(int site, Scalar* d_theta, int theta_size, int si);
     void ns_split(int site, Scalar* d_theta, char direction, int si);
     void svd_split(int site, Scalar* d_theta, char direction, int si);
+    void rsvd_split(int site, Scalar* d_theta, char direction, int si);
     double optimize_bond(int site, char direction, int si);
 
     // === Newton-Schulz polar decomposition ===

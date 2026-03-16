@@ -20,7 +20,7 @@ tmux attach-session -t test_remote
 #### Method 2: Direct SSH (Passwordless)
 ```bash
 # Direct SSH connection (no password required)
-ssh hotaisle@23.183.40.82
+ssh hotaisle@23.183.40.81
 ```
 
 **Remote Host Details**:
@@ -57,7 +57,7 @@ tmux send-keys -t test_remote 'cd ~/dmrg-implementations/pdmrg-gpu' Enter
 tmux capture-pane -t test_remote -p | tail -20
 
 # Direct SSH
-ssh hotaisle@23.183.40.82
+ssh hotaisle@23.183.40.81
 ```
 
 ### GPU Verification
