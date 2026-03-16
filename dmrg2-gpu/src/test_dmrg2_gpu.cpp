@@ -184,7 +184,7 @@ int test_heisenberg(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd = 
 // ============================================================================
 // Josephson Junction test (complex128)
 // ============================================================================
-int test_josephson(int L, int chi_max, int n_sweeps, bool gpu_svd,
+int test_josephson(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd,
                    int n_max, double E_J, double E_C, double phi_ext) {
     int d = 2 * n_max + 1;
     int D_mpo = 4;
@@ -195,7 +195,8 @@ int test_josephson(int L, int chi_max, int n_sweeps, bool gpu_svd,
     printf("  L=%d, d=%d (n_max=%d), chi_max=%d, D_mpo=%d, sweeps=%d\n",
            L, d, n_max, chi_max, D_mpo, n_sweeps);
     printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/%.1f\n", E_J, E_C, M_PI / phi_ext);
-    printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
+    printf("  SVD: %s%s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)",
+           rsvd ? " + randomized truncation" : "");
     printf("======================================\n\n");
 
     std::map<int, double> exact_energies;
@@ -209,6 +210,7 @@ int test_josephson(int L, int chi_max, int n_sweeps, bool gpu_svd,
 
     DMRG2GPU<Complex> dmrg(L, d, chi_max, D_mpo, 1e-12);
     dmrg.set_cpu_svd(!gpu_svd);
+    dmrg.set_rsvd(rsvd);
     dmrg.initialize_mps_random();
 
     std::vector<Complex*> h_mpo_tensors(L);
@@ -268,7 +270,7 @@ int main(int argc, char** argv) {
 
     try {
         if (run_josephson) {
-            return test_josephson(L, chi_max, n_sweeps, gpu_svd, n_max, E_J, E_C, phi_ext);
+            return test_josephson(L, chi_max, n_sweeps, gpu_svd, rsvd, n_max, E_J, E_C, phi_ext);
         } else {
             return test_heisenberg(L, chi_max, n_sweeps, gpu_svd, rsvd);
         }
