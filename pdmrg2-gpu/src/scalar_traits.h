@@ -532,4 +532,81 @@ inline void launch_scaled_identity_minus(hipDoubleComplex* data, int n, double a
     hipLaunchKernelGGL(scaled_identity_minus_complex, dim3(grid), dim3(block), 0, stream, data, n, alpha);
 }
 
+// ============================================================================
+// GPU-side diagonal scaling kernels for SVD factor absorption
+// Scale columns or rows of a column-major matrix by a real diagonal vector.
+// Replaces host-side scaling loops + H↔D round-trips.
+// ============================================================================
+
+// Scale columns of A (m × n, column-major) by real diagonal d:
+//   C[i, j] = A[i, j] * d[j]     (each column j multiplied by d[j])
+// Used for U * diag(S): columns of U scaled by singular values.
+template<typename Scalar>
+__global__ void scale_columns_by_real_kernel(const Scalar* __restrict__ A, int lda,
+                                              const double* __restrict__ d_diag,
+                                              Scalar* __restrict__ C, int ldc,
+                                              int m, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = m * n;
+    if (idx < total) {
+        int i = idx % m;   // row
+        int j = idx / m;   // column
+        double s = d_diag[j];
+        Scalar a = A[i + j * lda];
+        if constexpr (sizeof(Scalar) == sizeof(double)) {
+            C[i + j * ldc] = s * a;
+        } else {
+            // hipDoubleComplex
+            C[i + j * ldc] = make_hipDoubleComplex(s * hipCreal(a), s * hipCimag(a));
+        }
+    }
+}
+
+// Scale rows of A (m × n, column-major) by real diagonal d:
+//   C[i, j] = d[i] * A[i, j]     (each row i multiplied by d[i])
+// Used for diag(S) * Vh: rows of Vh scaled by singular values.
+template<typename Scalar>
+__global__ void scale_rows_by_real_kernel(const Scalar* __restrict__ A, int lda,
+                                           const double* __restrict__ d_diag,
+                                           Scalar* __restrict__ C, int ldc,
+                                           int m, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = m * n;
+    if (idx < total) {
+        int i = idx % m;   // row
+        int j = idx / m;   // column
+        double s = d_diag[i];
+        Scalar a = A[i + j * lda];
+        if constexpr (sizeof(Scalar) == sizeof(double)) {
+            C[i + j * ldc] = s * a;
+        } else {
+            C[i + j * ldc] = make_hipDoubleComplex(s * hipCreal(a), s * hipCimag(a));
+        }
+    }
+}
+
+// Helper to launch column-scale: C = A * diag(d), where A is (m × n) column-major
+template<typename Scalar>
+inline void scale_columns_by_real(const Scalar* A, int lda, const double* d_diag,
+                                   Scalar* C, int ldc, int m, int n, hipStream_t stream) {
+    int total = m * n;
+    int block = 256;
+    int grid = (total + block - 1) / block;
+    hipLaunchKernelGGL(scale_columns_by_real_kernel<Scalar>,
+                       dim3(grid), dim3(block), 0, stream,
+                       A, lda, d_diag, C, ldc, m, n);
+}
+
+// Helper to launch row-scale: C = diag(d) * A, where A is (m × n) column-major
+template<typename Scalar>
+inline void scale_rows_by_real(const Scalar* A, int lda, const double* d_diag,
+                                Scalar* C, int ldc, int m, int n, hipStream_t stream) {
+    int total = m * n;
+    int block = 256;
+    int grid = (total + block - 1) / block;
+    hipLaunchKernelGGL(scale_rows_by_real_kernel<Scalar>,
+                       dim3(grid), dim3(block), 0, stream,
+                       A, lda, d_diag, C, ldc, m, n);
+}
+
 #endif // SCALAR_TRAITS_H
