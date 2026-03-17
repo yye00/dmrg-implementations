@@ -337,14 +337,71 @@ def run_gpu_pdmrg2(L, chi, sweeps, segments, model='heisenberg', nmax=2):
 # Main benchmark orchestrator
 # ============================================================================
 
+def make_result_key(r):
+    """Create a unique key for a result to detect duplicates."""
+    impl = r['impl']
+    model = r['model']
+    L = r['L']
+    chi = r['chi']
+    p = r.get('threads', r.get('np', r.get('segments', '')))
+    return f"{impl}|{model}|{L}|{chi}|{p}"
+
+
+def load_existing_results():
+    """Load previously completed results for resume support."""
+    path = os.path.join(RESULTS_DIR, 'results.json')
+    if os.path.exists(path):
+        with open(path) as f:
+            results = json.load(f)
+        log(f"Loaded {len(results)} existing results for resume")
+        return results
+    return []
+
+
 def run_all_benchmarks():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    all_results = []
+    # Resume: load existing results and build lookup of completed runs
+    all_results = load_existing_results()
+    completed = set(make_result_key(r) for r in all_results)
+
+    # Timeout tracker: (impl, model, chi, parallelism) -> smallest L that timed out
+    # If L_new >= timeout_L for same (impl, model, chi, parallelism), skip it
+    timeout_at = {}
+    for r in all_results:
+        if not r['success']:
+            p = r.get('threads', r.get('np', r.get('segments', '')))
+            key = (r['impl'], r['model'], r['chi'], p)
+            prev = timeout_at.get(key, float('inf'))
+            timeout_at[key] = min(prev, r['L'])
+
     start_time = time.time()
 
     def save():
         save_results(all_results)
+
+    def should_skip_timeout(impl, model, L, chi, parallelism):
+        """Skip if a smaller L already timed out for same (impl, model, chi, parallelism)."""
+        key = (impl, model, chi, parallelism)
+        if key in timeout_at and L >= timeout_at[key]:
+            return True
+        return False
+
+    def record_timeout(impl, model, L, chi, parallelism):
+        """Record that this config timed out so larger L values are skipped."""
+        key = (impl, model, chi, parallelism)
+        prev = timeout_at.get(key, float('inf'))
+        timeout_at[key] = min(prev, L)
+
+    def is_completed(key):
+        return key in completed
+
+    def log_result(r):
+        e_str = f"{r['energy']:.12f}" if r['energy'] else 'FAIL'
+        t_str = f"{r['solve_time']:.1f}s" if r.get('solve_time') else (
+            f"{r['wall_time']:.1f}s" if isinstance(r['wall_time'], (int, float)) else str(r['wall_time']))
+        status = 'OK' if r['success'] else 'TIMEOUT/FAIL'
+        log(f"    E={e_str}  t={t_str}  {status}")
 
     # ------------------------------------------------------------------
     # Phase 1: quimb reference (DMRG1 + DMRG2, all thread counts)
@@ -354,26 +411,41 @@ def run_all_benchmarks():
     log("=" * 80)
 
     for dmrg_type in ['DMRG1', 'DMRG2']:
+        impl_name = f'quimb-{dmrg_type.lower()}'
         # Heisenberg
         for L, chi, sweeps in HEISENBERG_SIZES:
             for threads in QUIMB_THREADS:
-                log(f"  quimb-{dmrg_type.lower()} heisenberg L={L} chi={chi} threads={threads}")
+                key = f"{impl_name}|heisenberg|{L}|{chi}|{threads}"
+                if is_completed(key):
+                    continue
+                if should_skip_timeout(impl_name, 'heisenberg', L, chi, threads):
+                    log(f"  SKIP {impl_name} heisenberg L={L} chi={chi} threads={threads} (smaller L timed out)")
+                    continue
+                log(f"  {impl_name} heisenberg L={L} chi={chi} threads={threads}")
                 r = run_quimb_heisenberg(L, chi, sweeps, threads, dmrg_type)
                 all_results.append(r)
-                e_str = f"{r['energy']:.12f}" if r['energy'] else 'FAIL'
-                t_str = f"{r['solve_time']:.1f}s" if r['solve_time'] else f"{r['wall_time']:.1f}s(wall)"
-                log(f"    E={e_str}  t={t_str}  {'OK' if r['success'] else 'FAIL'}")
+                completed.add(key)
+                if not r['success']:
+                    record_timeout(impl_name, 'heisenberg', L, chi, threads)
+                log_result(r)
                 save()
 
         # Josephson
         for L, chi, sweeps, nmax in JOSEPHSON_SIZES:
             for threads in QUIMB_THREADS:
-                log(f"  quimb-{dmrg_type.lower()} josephson L={L} chi={chi} threads={threads}")
+                key = f"{impl_name}|josephson|{L}|{chi}|{threads}"
+                if is_completed(key):
+                    continue
+                if should_skip_timeout(impl_name, 'josephson', L, chi, threads):
+                    log(f"  SKIP {impl_name} josephson L={L} chi={chi} threads={threads} (smaller L timed out)")
+                    continue
+                log(f"  {impl_name} josephson L={L} chi={chi} threads={threads}")
                 r = run_quimb_josephson(L, chi, sweeps, nmax, threads, dmrg_type)
                 all_results.append(r)
-                e_str = f"{r['energy']:.12f}" if r['energy'] else 'FAIL'
-                t_str = f"{r['solve_time']:.1f}s" if r['solve_time'] else f"{r['wall_time']:.1f}s(wall)"
-                log(f"    E={e_str}  t={t_str}  {'OK' if r['success'] else 'FAIL'}")
+                completed.add(key)
+                if not r['success']:
+                    record_timeout(impl_name, 'josephson', L, chi, threads)
+                log_result(r)
                 save()
 
     # ------------------------------------------------------------------
@@ -388,30 +460,40 @@ def run_all_benchmarks():
         for L, chi, sweeps in HEISENBERG_SIZES:
             for np_val in MPI_NP:
                 if np_val > L // 2:
-                    log(f"  SKIP {impl} heisenberg L={L} np={np_val} (too many procs)")
+                    continue
+                key = f"{impl}|heisenberg|{L}|{chi}|{np_val}"
+                if is_completed(key):
+                    continue
+                if should_skip_timeout(impl, 'heisenberg', L, chi, np_val):
+                    log(f"  SKIP {impl} heisenberg L={L} chi={chi} np={np_val} (smaller L timed out)")
                     continue
                 log(f"  {impl} heisenberg L={L} chi={chi} np={np_val}")
                 r = run_mpi_pdmrg(L, chi, sweeps, np_val, 'heisenberg', impl=impl)
                 all_results.append(r)
-                e_str = f"{r['energy']:.12f}" if r['energy'] else 'FAIL'
-                t_str = f"{r['solve_time']:.1f}s" if r['solve_time'] else f"{r['wall_time']:.1f}s(wall)"
-                status = 'TIMEOUT' if 'TIMEOUT' in str(r.get('raw_output', '')) else ('OK' if r['success'] else 'FAIL')
-                log(f"    E={e_str}  t={t_str}  {status}")
+                completed.add(key)
+                if not r['success']:
+                    record_timeout(impl, 'heisenberg', L, chi, np_val)
+                log_result(r)
                 save()
 
         # Josephson
         for L, chi, sweeps, nmax in JOSEPHSON_SIZES:
             for np_val in MPI_NP:
                 if np_val > L // 2:
-                    log(f"  SKIP {impl} josephson L={L} np={np_val} (too many procs)")
+                    continue
+                key = f"{impl}|josephson|{L}|{chi}|{np_val}"
+                if is_completed(key):
+                    continue
+                if should_skip_timeout(impl, 'josephson', L, chi, np_val):
+                    log(f"  SKIP {impl} josephson L={L} chi={chi} np={np_val} (smaller L timed out)")
                     continue
                 log(f"  {impl} josephson L={L} chi={chi} np={np_val}")
                 r = run_mpi_pdmrg(L, chi, sweeps, np_val, 'josephson', nmax, impl=impl)
                 all_results.append(r)
-                e_str = f"{r['energy']:.12f}" if r['energy'] else 'FAIL'
-                t_str = f"{r['solve_time']:.1f}s" if r['solve_time'] else f"{r['wall_time']:.1f}s(wall)"
-                status = 'TIMEOUT' if 'TIMEOUT' in str(r.get('raw_output', '')) else ('OK' if r['success'] else 'FAIL')
-                log(f"    E={e_str}  t={t_str}  {status}")
+                completed.add(key)
+                if not r['success']:
+                    record_timeout(impl, 'josephson', L, chi, np_val)
+                log_result(r)
                 save()
 
     # ------------------------------------------------------------------
@@ -427,14 +509,20 @@ def run_all_benchmarks():
             for seg in GPU_SEGMENTS:
                 max_seg = max_segments_for_L(L)
                 if seg > max_seg:
-                    log(f"  SKIP {impl_name} heisenberg L={L} seg={seg} (need >=3 sites/seg)")
+                    continue
+                key = f"{impl_name}|heisenberg|{L}|{chi}|{seg}"
+                if is_completed(key):
+                    continue
+                if should_skip_timeout(impl_name, 'heisenberg', L, chi, seg):
+                    log(f"  SKIP {impl_name} heisenberg L={L} chi={chi} seg={seg} (smaller L timed out)")
                     continue
                 log(f"  {impl_name} heisenberg L={L} chi={chi} segments={seg}")
                 r = gpu_runner(L, chi, sweeps, seg, 'heisenberg')
                 all_results.append(r)
-                e_str = f"{r['energy']:.12f}" if r['energy'] else 'FAIL'
-                t_str = f"{r['wall_time']:.1f}s" if isinstance(r['wall_time'], (int, float)) else str(r['wall_time'])
-                log(f"    E={e_str}  t={t_str}  {'OK' if r['success'] else 'FAIL'}")
+                completed.add(key)
+                if not r['success']:
+                    record_timeout(impl_name, 'heisenberg', L, chi, seg)
+                log_result(r)
                 save()
 
         # Josephson
@@ -442,14 +530,20 @@ def run_all_benchmarks():
             for seg in GPU_SEGMENTS:
                 max_seg = max_segments_for_L(L)
                 if seg > max_seg:
-                    log(f"  SKIP {impl_name} josephson L={L} seg={seg} (need >=3 sites/seg)")
+                    continue
+                key = f"{impl_name}|josephson|{L}|{chi}|{seg}"
+                if is_completed(key):
+                    continue
+                if should_skip_timeout(impl_name, 'josephson', L, chi, seg):
+                    log(f"  SKIP {impl_name} josephson L={L} chi={chi} seg={seg} (smaller L timed out)")
                     continue
                 log(f"  {impl_name} josephson L={L} chi={chi} segments={seg}")
                 r = gpu_runner(L, chi, sweeps, seg, 'josephson', nmax)
                 all_results.append(r)
-                e_str = f"{r['energy']:.12f}" if r['energy'] else 'FAIL'
-                t_str = f"{r['wall_time']:.1f}s" if isinstance(r['wall_time'], (int, float)) else str(r['wall_time'])
-                log(f"    E={e_str}  t={t_str}  {'OK' if r['success'] else 'FAIL'}")
+                completed.add(key)
+                if not r['success']:
+                    record_timeout(impl_name, 'josephson', L, chi, seg)
+                log_result(r)
                 save()
 
     # ------------------------------------------------------------------
