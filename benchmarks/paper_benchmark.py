@@ -8,7 +8,7 @@ at multiple system sizes, bond dimensions, and parallelism levels.
 Results are saved as JSON for reproducibility and analysis.
 
 Usage (on MI300X remote host):
-    tmux new-session -d -s paper_bench 'python3 benchmarks/paper_benchmark.py 2>&1 | tee benchmarks/paper_results/benchmark.log'
+    tmux new-session -d -s paper_bench 'cd ~/dmrg-implementations && python3 benchmarks/paper_benchmark.py 2>&1 | tee benchmarks/paper_results/benchmark.log'
 """
 
 import subprocess
@@ -17,7 +17,7 @@ import re
 import sys
 import os
 import json
-import signal
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -91,6 +91,26 @@ def run_cmd(cmd, env_extra=None, timeout=TIMEOUT):
         return 'TIMEOUT', timeout, False
 
 
+def run_python_script(script_content, env_extra=None, timeout=TIMEOUT, mpi_np=None):
+    """Write script to temp file and run it, avoiding shell quoting issues."""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, dir='/tmp') as f:
+        f.write(script_content)
+        script_path = f.name
+
+    try:
+        if mpi_np:
+            cmd = (f'mpirun --allow-run-as-root --oversubscribe '
+                   f'-np {mpi_np} python3 {script_path}')
+        else:
+            cmd = f'python3 {script_path}'
+        return run_cmd(cmd, env_extra=env_extra, timeout=timeout)
+    finally:
+        try:
+            os.unlink(script_path)
+        except OSError:
+            pass
+
+
 def extract(text, pattern):
     """Extract first match from text."""
     m = re.search(pattern, text)
@@ -98,7 +118,7 @@ def extract(text, pattern):
 
 
 def save_results(results, filename='results.json'):
-    """Append/save results to JSON file."""
+    """Save results to JSON file."""
     path = os.path.join(RESULTS_DIR, filename)
     with open(path, 'w') as f:
         json.dump(results, f, indent=2, default=str)
@@ -112,10 +132,9 @@ def log(msg):
     sys.stdout.flush()
 
 
-def min_segments_for_L(L, two_site=True):
-    """Max segments allowed: need >=2 sites per segment (>=3 for 2-site DMRG safety)."""
-    min_per_seg = 3 if two_site else 2
-    return L // min_per_seg
+def max_segments_for_L(L):
+    """Max segments allowed: need >=3 sites per segment for 2-site DMRG."""
+    return L // 3
 
 
 # ============================================================================
@@ -126,17 +145,24 @@ def run_quimb_heisenberg(L, chi, sweeps, threads, dmrg_type='DMRG2'):
     """Run quimb DMRG1 or DMRG2 for Heisenberg model."""
     env = {'OPENBLAS_NUM_THREADS': str(threads), 'OMP_NUM_THREADS': str(threads),
            'MKL_NUM_THREADS': str(threads)}
-    cls = dmrg_type
-    script = (
-        f'import time, quimb.tensor as qtn; '
-        f'dmrg = qtn.{cls}(qtn.MPO_ham_heis(L={L}, j=1.0, bz=0.0, cyclic=False), '
-        f'bond_dims=[{chi}], cutoffs=[1e-12]); '
-        f't0 = time.time(); dmrg.solve(max_sweeps={sweeps}, tol=1e-10, verbosity=0); '
-        f't1 = time.time(); '
-        f'e = dmrg.energy; e = e.real if hasattr(e, "real") else e; '
-        f'print(f"ENERGY={{e:.15f}}"); print(f"TIME={{t1-t0:.3f}}")'
-    )
-    out, wall, ok = run_cmd(f'python3 -c "{script}"', env_extra=env)
+    script = f"""\
+import time
+import quimb.tensor as qtn
+
+dmrg = qtn.{dmrg_type}(
+    qtn.MPO_ham_heis(L={L}, j=1.0, bz=0.0, cyclic=False),
+    bond_dims=[{chi}], cutoffs=[1e-12]
+)
+t0 = time.time()
+dmrg.solve(max_sweeps={sweeps}, tol=1e-10, verbosity=0)
+t1 = time.time()
+e = dmrg.energy
+if hasattr(e, 'real'):
+    e = e.real
+print(f"ENERGY={{e:.15f}}")
+print(f"TIME={{t1-t0:.3f}}")
+"""
+    out, wall, ok = run_python_script(script, env_extra=env)
     energy = extract(out, r'ENERGY=([-\d.eE+]+)')
     solve_time = extract(out, r'TIME=([\d.]+)')
     return {
@@ -156,19 +182,25 @@ def run_quimb_josephson(L, chi, sweeps, nmax, threads, dmrg_type='DMRG2'):
     """Run quimb DMRG1 or DMRG2 for Josephson Junction model."""
     env = {'OPENBLAS_NUM_THREADS': str(threads), 'OMP_NUM_THREADS': str(threads),
            'MKL_NUM_THREADS': str(threads)}
-    cls = dmrg_type
-    script = (
-        f'import time, sys; sys.path.insert(0, "{REPO}"); '
-        f'from benchmarks.lib.models import build_josephson_mpo; '
-        f'import quimb.tensor as qtn; '
-        f'mpo = build_josephson_mpo({L}, n_max={nmax}); '
-        f'dmrg = qtn.{cls}(mpo, bond_dims=[{chi}], cutoffs=[1e-12]); '
-        f't0 = time.time(); dmrg.solve(max_sweeps={sweeps}, tol=1e-10, verbosity=0); '
-        f't1 = time.time(); '
-        f'e = dmrg.energy; e = e.real if hasattr(e, "real") else e; '
-        f'print(f"ENERGY={{e:.15f}}"); print(f"TIME={{t1-t0:.3f}}")'
-    )
-    out, wall, ok = run_cmd(f'python3 -c "{script}"', env_extra=env)
+    script = f"""\
+import time
+import sys
+sys.path.insert(0, "{REPO}")
+from benchmarks.lib.models import build_josephson_mpo
+import quimb.tensor as qtn
+
+mpo = build_josephson_mpo({L}, n_max={nmax})
+dmrg = qtn.{dmrg_type}(mpo, bond_dims=[{chi}], cutoffs=[1e-12])
+t0 = time.time()
+dmrg.solve(max_sweeps={sweeps}, tol=1e-10, verbosity=0)
+t1 = time.time()
+e = dmrg.energy
+if hasattr(e, 'real'):
+    e = e.real
+print(f"ENERGY={{e:.15f}}")
+print(f"TIME={{t1-t0:.3f}}")
+"""
+    out, wall, ok = run_python_script(script, env_extra=env)
     energy = extract(out, r'ENERGY=([-\d.eE+]+)')
     solve_time = extract(out, r'TIME=([\d.]+)')
     return {
@@ -195,33 +227,35 @@ def run_mpi_pdmrg(L, chi, sweeps, np_val, model='heisenberg', nmax=2, impl='pdmr
            'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1'}
 
     if model == 'heisenberg':
-        mpo_code = (
-            f'from pdmrg.hamiltonians.heisenberg import build_heisenberg_mpo; '
-            f'mpo = build_heisenberg_mpo({L})'
-        )
+        mpo_setup = f"""\
+from pdmrg.hamiltonians.heisenberg import build_heisenberg_mpo
+mpo = build_heisenberg_mpo({L})
+"""
     else:
-        mpo_code = (
-            f'import sys; sys.path.insert(0, "{REPO}"); '
-            f'from benchmarks.lib.models import build_josephson_mpo; '
-            f'mpo = build_josephson_mpo({L}, n_max={nmax})'
-        )
+        mpo_setup = f"""\
+import sys
+sys.path.insert(0, "{REPO}")
+from benchmarks.lib.models import build_josephson_mpo
+mpo = build_josephson_mpo({L}, n_max={nmax})
+"""
 
-    script = (
-        f'import sys, time; sys.path.insert(0, "{REPO}/{pkg_dir}"); '
-        f'{mpo_code}; '
-        f'from pdmrg.dmrg import pdmrg_main; '
-        f'from mpi4py import MPI; '
-        f't0 = time.time(); '
-        f'energy, pmps = pdmrg_main({L}, mpo, max_sweeps={sweeps}, bond_dim={chi}, tol=1e-10, verbose=False); '
-        f't1 = time.time(); '
-        f'r = MPI.COMM_WORLD.Get_rank(); '
-        f'print(f"ENERGY={{energy:.15f}}") if r == 0 else None; '
-        f'print(f"TIME={{t1-t0:.3f}}") if r == 0 else None'
-    )
+    script = f"""\
+import sys
+import time
+sys.path.insert(0, "{REPO}/{pkg_dir}")
+{mpo_setup}
+from pdmrg.dmrg import pdmrg_main
+from mpi4py import MPI
 
-    cmd = (f'mpirun --allow-run-as-root --oversubscribe -np {np_val} '
-           f'python3 -c "{script}"')
-    out, wall, ok = run_cmd(cmd, env_extra=env)
+t0 = time.time()
+energy, pmps = pdmrg_main({L}, mpo, max_sweeps={sweeps}, bond_dim={chi}, tol=1e-10, verbose=False)
+t1 = time.time()
+
+if MPI.COMM_WORLD.Get_rank() == 0:
+    print(f"ENERGY={{energy:.15f}}")
+    print(f"TIME={{t1-t0:.3f}}")
+"""
+    out, wall, ok = run_python_script(script, env_extra=env, mpi_np=np_val)
     energy = extract(out, r'ENERGY=([-\d.eE+]+)')
     solve_time = extract(out, r'TIME=([\d.]+)')
 
@@ -391,7 +425,7 @@ def run_all_benchmarks():
         # Heisenberg
         for L, chi, sweeps in HEISENBERG_SIZES:
             for seg in GPU_SEGMENTS:
-                max_seg = min_segments_for_L(L)
+                max_seg = max_segments_for_L(L)
                 if seg > max_seg:
                     log(f"  SKIP {impl_name} heisenberg L={L} seg={seg} (need >=3 sites/seg)")
                     continue
@@ -406,7 +440,7 @@ def run_all_benchmarks():
         # Josephson
         for L, chi, sweeps, nmax in JOSEPHSON_SIZES:
             for seg in GPU_SEGMENTS:
-                max_seg = min_segments_for_L(L)
+                max_seg = max_segments_for_L(L)
                 if seg > max_seg:
                     log(f"  SKIP {impl_name} josephson L={L} seg={seg} (need >=3 sites/seg)")
                     continue
