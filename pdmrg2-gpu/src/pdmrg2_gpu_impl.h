@@ -2330,9 +2330,11 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
               << total_parallel_time << " s, boundary time: " << total_boundary_time << " s" << std::endl;
 
     // === Polish phase: full-chain sweeps to converge to tight tolerance ===
-    if (n_segments_ > 1 && !outer_converged) {
+    // Always run polish when using multiple segments — parallel DMRG leaves
+    // stale boundary environments that only full-chain sweeps can fix.
+    if (n_segments_ > 1) {
         int n_polish = 10;
-        std::cout << "Polish sweeps (full-chain, max " << n_polish << ")..." << std::endl;
+        std::cout << "Polish sweeps (full-chain dmrg2, max " << n_polish << ")..." << std::endl;
         build_initial_environments();
         for (int sw = 0; sw < n_polish; sw++) {
             auto t_sw = std::chrono::high_resolution_clock::now();
@@ -2351,8 +2353,6 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
                 break;
             }
         }
-    } else if (outer_converged) {
-        std::cout << "Skipping polish (outer loop converged)" << std::endl;
     }
 
     auto t_end = std::chrono::high_resolution_clock::now();

@@ -1456,8 +1456,9 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     }
 
     // === Polish phase: full-chain sweeps to converge to tight tolerance ===
-    // Skip polish if outer loop already converged (dE < tol)
-    if (n_segments_ > 1 && !outer_converged) {
+    // Always run polish when using multiple segments — parallel DMRG leaves
+    // stale boundary environments that only full-chain sweeps can fix.
+    if (n_segments_ > 1) {
         int n_polish = 10;
         std::cout << "Polish sweeps (full-chain dmrg2, max " << n_polish << ")..." << std::endl;
         build_initial_environments();
@@ -1478,8 +1479,6 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
                 break;
             }
         }
-    } else if (outer_converged) {
-        std::cout << "Skipping polish (outer loop converged)" << std::endl;
     }
 
     auto t_end = std::chrono::high_resolution_clock::now();
