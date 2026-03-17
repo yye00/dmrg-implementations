@@ -948,9 +948,10 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_);
 
-    Scalar* h_U_data;
-    RealType* h_S_data;
-    Scalar* h_Vh_data;
+    Scalar* h_U_data = nullptr;
+    RealType* h_S_data = nullptr;
+    Scalar* h_Vh_data = nullptr;
+    bool gpu_svd_path = false;
 
     if (use_cpu_svd_) {
         HIP_CHECK(hipMemcpyAsync(ws.h_svd_A.data(), d_theta, m * n_svd * sizeof(Scalar),
@@ -983,13 +984,10 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
             rocblas_outofplace,
             ws.d_svd_info);
 
-        HIP_CHECK(hipMemcpy(ws.h_svd_U.data(), ws.d_svd_U, m * full_k * sizeof(Scalar), hipMemcpyDeviceToHost));
+        // GPU SVD: U, S, Vh already on device. Only download S for truncation check.
         HIP_CHECK(hipMemcpy(ws.h_svd_S.data(), ws.d_svd_S, full_k * sizeof(RealType), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(ws.h_svd_Vh.data(), ws.d_svd_Vh, full_k * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
-
-        h_U_data = ws.h_svd_U.data();
         h_S_data = ws.h_svd_S.data();
-        h_Vh_data = ws.h_svd_Vh.data();
+        gpu_svd_path = true;
     }
 
     // Truncation
@@ -999,38 +997,77 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
     }
     if (new_k == 0) new_k = 1;
 
-    if (direction == 'R') {
-        allocate_mps_tensor(site, cL, new_k);
-        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], h_U_data,
-                    m * new_k * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+    if (gpu_svd_path) {
+        // GPU SVD path: U, S, Vh all on device already
+        // d_svd_U (m × full_k, lda=m), d_svd_S (full_k), d_svd_Vh (full_k × n_svd, lda=full_k)
 
-        for (int j = 0; j < n_svd; j++)
-            for (int i = 0; i < new_k; i++)
-                ws.h_svd_tmp[i + j * new_k] = Traits::scale_by_real(h_S_data[i], h_Vh_data[i + j * full_k]);
-
-        allocate_mps_tensor(site + 1, new_k, cR);
-        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], ws.h_svd_tmp.data(),
-                    new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
-
-    } else {  // direction == 'L'
-        for (int j = 0; j < new_k; j++)
-            for (int i = 0; i < m; i++)
-                ws.h_svd_tmp[i + j * m] = Traits::scale_by_real(h_S_data[j], h_U_data[i + j * m]);
-
-        allocate_mps_tensor(site, cL, new_k);
-        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.h_svd_tmp.data(),
-                    m * new_k * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
-
-        allocate_mps_tensor(site + 1, new_k, cR);
-        if (new_k == full_k) {
-            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], h_Vh_data,
-                        full_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+        if (direction == 'R') {
+            // MPS[site] = U[:, :new_k]
+            allocate_mps_tensor(site, cL, new_k);
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.d_svd_U,
+                        (size_t)m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
+            // MPS[site+1] = diag(S) @ Vh[:new_k, :] — scale rows on GPU
+            allocate_mps_tensor(site + 1, new_k, cR);
+            scale_rows_by_real(ws.d_svd_Vh, full_k, ws.d_svd_S,
+                               d_mps_tensors_[site + 1], new_k, new_k, n_svd, streams_[si]);
         } else {
-            for (int j = 0; j < n_svd; j++)
-                for (int i = 0; i < new_k; i++)
-                    ws.h_svd_tmp[i + j * new_k] = h_Vh_data[i + j * full_k];
-            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], ws.h_svd_tmp.data(),
-                        new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+            // MPS[site] = U[:, :new_k] @ diag(S) — scale columns on GPU
+            allocate_mps_tensor(site, cL, new_k);
+            scale_columns_by_real(ws.d_svd_U, m, ws.d_svd_S,
+                                  d_mps_tensors_[site], m, m, new_k, streams_[si]);
+            // MPS[site+1] = Vh[:new_k, :]
+            allocate_mps_tensor(site + 1, new_k, cR);
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], ws.d_svd_Vh,
+                        (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
+        }
+    } else {
+        // CPU SVD path: U, S, Vh on host. Upload S + raw factors, scale on GPU.
+        HIP_CHECK(hipMemcpyAsync(ws.d_svd_S, h_S_data, new_k * sizeof(RealType),
+                                  hipMemcpyHostToDevice, streams_[si]));
+
+        if (direction == 'R') {
+            // MPS[site] = U[:, :new_k]
+            allocate_mps_tensor(site, cL, new_k);
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], h_U_data,
+                        m * new_k * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+
+            // MPS[site+1] = diag(S) @ Vh[:new_k, :] — scale rows of Vh by S on GPU
+            if (new_k == full_k) {
+                HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, h_Vh_data,
+                            (size_t)full_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+            } else {
+                // Pack contiguous new_k rows from leading-dim full_k layout
+                for (int j = 0; j < n_svd; j++)
+                    for (int i = 0; i < new_k; i++)
+                        ws.h_svd_tmp[i + j * new_k] = h_Vh_data[i + j * full_k];
+                HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, ws.h_svd_tmp.data(),
+                            (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+            }
+            allocate_mps_tensor(site + 1, new_k, cR);
+            int vh_ld = (new_k == full_k) ? full_k : new_k;
+            scale_rows_by_real(ws.d_svd_work, vh_ld, ws.d_svd_S,
+                               d_mps_tensors_[site + 1], new_k, new_k, n_svd, streams_[si]);
+
+        } else {  // direction == 'L'
+            // MPS[site] = U[:, :new_k] @ diag(S) — scale columns of U by S on GPU
+            HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, h_U_data,
+                        (size_t)m * new_k * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+            allocate_mps_tensor(site, cL, new_k);
+            scale_columns_by_real(ws.d_svd_work, m, ws.d_svd_S,
+                                  d_mps_tensors_[site], m, m, new_k, streams_[si]);
+
+            // MPS[site+1] = Vh[:new_k, :]
+            allocate_mps_tensor(site + 1, new_k, cR);
+            if (new_k == full_k) {
+                HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], h_Vh_data,
+                            (size_t)full_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+            } else {
+                for (int j = 0; j < n_svd; j++)
+                    for (int i = 0; i < new_k; i++)
+                        ws.h_svd_tmp[i + j * new_k] = h_Vh_data[i + j * full_k];
+                HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], ws.h_svd_tmp.data(),
+                            (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+            }
         }
     }
 
@@ -1153,40 +1190,45 @@ void PDMRGGPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction, int
     }
     if (new_k == 0) new_k = 1;
 
+    // Upload S to device for GPU-side scaling
+    HIP_CHECK(hipMemcpyAsync(ws.d_svd_S, h_S_data, new_k * sizeof(RealType),
+                              hipMemcpyHostToDevice, streams_[si]));
+
     if (direction == 'R') {
-        // MPS[site] = U_full[:, :new_k]
+        // MPS[site] = U_full[:, :new_k]  (U_full already on GPU)
         allocate_mps_tensor(site, cL, new_k);
         if (new_k == small_k) {
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], ws.d_rsvd_U_full,
-                                (size_t)m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice));
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.d_rsvd_U_full,
+                                (size_t)m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
         } else {
-            // Need to copy column subset — download, extract, re-upload
-            HIP_CHECK(hipMemcpy(ws.h_svd_U.data(), ws.d_rsvd_U_full,
-                                (size_t)m * small_k * sizeof(Scalar), hipMemcpyDeviceToHost));
-            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.h_svd_U.data(),
-                                (size_t)m * new_k * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+            // Column subset: first new_k columns are contiguous in column-major
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.d_rsvd_U_full,
+                                (size_t)m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
         }
 
-        // MPS[site+1] = diag(S[:new_k]) @ Vh[:new_k, :]
-        for (int j = 0; j < n_svd; j++)
-            for (int i = 0; i < new_k; i++)
-                ws.h_svd_tmp[i + j * new_k] = Traits::scale_by_real(h_S_data[i], h_Vh_data[i + j * small_k]);
-
+        // MPS[site+1] = diag(S) @ Vh[:new_k, :] — scale rows of Vh by S on GPU
+        // Vh is on host with leading dim small_k, pack to new_k and upload
+        if (new_k == small_k) {
+            HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, h_Vh_data,
+                        (size_t)small_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+        } else {
+            for (int j = 0; j < n_svd; j++)
+                for (int i = 0; i < new_k; i++)
+                    ws.h_svd_tmp[i + j * new_k] = h_Vh_data[i + j * small_k];
+            HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, ws.h_svd_tmp.data(),
+                        (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+        }
         allocate_mps_tensor(site + 1, new_k, cR);
-        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], ws.h_svd_tmp.data(),
-                            (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
-    } else {
-        // MPS[site] = U_full[:, :new_k] @ diag(S[:new_k])
-        HIP_CHECK(hipMemcpy(ws.h_svd_U.data(), ws.d_rsvd_U_full,
-                            (size_t)m * small_k * sizeof(Scalar), hipMemcpyDeviceToHost));
-        Scalar* h_U_data = ws.h_svd_U.data();
-        for (int j = 0; j < new_k; j++)
-            for (int i = 0; i < m; i++)
-                ws.h_svd_tmp[i + j * m] = Traits::scale_by_real(h_S_data[j], h_U_data[i + j * m]);
+        int vh_ld = (new_k == small_k) ? small_k : new_k;
+        scale_rows_by_real(ws.d_svd_work, vh_ld, ws.d_svd_S,
+                           d_mps_tensors_[site + 1], new_k, new_k, n_svd, streams_[si]);
 
+    } else {
+        // MPS[site] = U_full[:, :new_k] @ diag(S) — scale columns on GPU
+        // U_full already on GPU at d_rsvd_U_full
         allocate_mps_tensor(site, cL, new_k);
-        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.h_svd_tmp.data(),
-                            (size_t)m * new_k * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+        scale_columns_by_real(ws.d_rsvd_U_full, m, ws.d_svd_S,
+                              d_mps_tensors_[site], m, m, new_k, streams_[si]);
 
         // MPS[site+1] = Vh[:new_k, :]
         allocate_mps_tensor(site + 1, new_k, cR);
