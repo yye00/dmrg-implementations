@@ -365,15 +365,16 @@ def run_all_benchmarks():
     all_results = load_existing_results()
     completed = set(make_result_key(r) for r in all_results)
 
-    # Timeout tracker: (impl, model, chi, parallelism) -> smallest L that timed out
-    # If L_new >= timeout_L for same (impl, model, chi, parallelism), skip it
-    timeout_at = {}
+    # Timeout tracking: aggressive skip logic
+    timeout_at = {}  # legacy: (impl, model, chi, parallelism) -> smallest L
+    timeout_records = []  # new: list of ((impl, model), L, chi) for cross-parameter skipping
     for r in all_results:
         if not r['success']:
             p = r.get('threads', r.get('np', r.get('segments', '')))
             key = (r['impl'], r['model'], r['chi'], p)
             prev = timeout_at.get(key, float('inf'))
             timeout_at[key] = min(prev, r['L'])
+            timeout_records.append(((r['impl'], r['model']), r['L'], r['chi']))
 
     start_time = time.time()
 
@@ -381,14 +382,31 @@ def run_all_benchmarks():
         save_results(all_results)
 
     def should_skip_timeout(impl, model, L, chi, parallelism):
-        """Skip if a smaller L already timed out for same (impl, model, chi, parallelism)."""
-        key = (impl, model, chi, parallelism)
-        if key in timeout_at and L >= timeout_at[key]:
-            return True
+        """Aggressively skip if we can infer this will timeout.
+
+        Skip when ANY of these hold:
+        1. A smaller L timed out at same (impl, model, chi) with ANY parallelism
+        2. A smaller chi timed out at same (impl, model, L) with ANY parallelism
+        3. Same (impl, model, L, chi) timed out with ANY parallelism value
+        """
+        for key, tL, tchi in timeout_records:
+            if key[0] != impl or key[1] != model:
+                continue
+            # Same chi, smaller or equal L timed out → skip larger L
+            if tchi == chi and L >= tL:
+                return True
+            # Same L, smaller or equal chi timed out → skip larger chi
+            if tL == L and chi >= tchi:
+                return True
+            # Smaller L AND smaller chi timed out → definitely skip
+            if L >= tL and chi >= tchi:
+                return True
         return False
 
     def record_timeout(impl, model, L, chi, parallelism):
-        """Record that this config timed out so larger L values are skipped."""
+        """Record that this config timed out for aggressive skip logic."""
+        timeout_records.append(((impl, model), L, chi))
+        # Also keep the old dict for backward compat
         key = (impl, model, chi, parallelism)
         prev = timeout_at.get(key, float('inf'))
         timeout_at[key] = min(prev, L)
