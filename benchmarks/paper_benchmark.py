@@ -405,10 +405,12 @@ def run_all_benchmarks():
                 return True
         return False
 
-    def record_timeout(impl, model, L, chi, parallelism):
-        """Record that this config timed out for aggressive skip logic."""
+    def record_timeout(impl, model, L, chi, parallelism, wall_time=0):
+        """Record that this config timed out for aggressive skip logic.
+        Only records real timeouts (>=90% of TIMEOUT), not config errors."""
+        if wall_time < TIMEOUT * 0.9:
+            return
         timeout_records.append(((impl, model), L, chi))
-        # Also keep the old dict for backward compat
         key = (impl, model, chi, parallelism)
         prev = timeout_at.get(key, float('inf'))
         timeout_at[key] = min(prev, L)
@@ -446,7 +448,7 @@ def run_all_benchmarks():
                 all_results.append(r)
                 completed.add(key)
                 if not r['success']:
-                    record_timeout(impl_name, 'heisenberg', L, chi, threads)
+                    record_timeout(impl_name, 'heisenberg', L, chi, threads, r.get('wall_time', 0))
                 log_result(r)
                 save()
 
@@ -464,7 +466,7 @@ def run_all_benchmarks():
                 all_results.append(r)
                 completed.add(key)
                 if not r['success']:
-                    record_timeout(impl_name, 'josephson', L, chi, threads)
+                    record_timeout(impl_name, 'josephson', L, chi, threads, r.get('wall_time', 0))
                 log_result(r)
                 save()
 
@@ -492,7 +494,7 @@ def run_all_benchmarks():
                 all_results.append(r)
                 completed.add(key)
                 if not r['success']:
-                    record_timeout(impl, 'heisenberg', L, chi, np_val)
+                    record_timeout(impl, 'heisenberg', L, chi, np_val, r.get('wall_time', 0))
                 log_result(r)
                 save()
 
@@ -512,7 +514,7 @@ def run_all_benchmarks():
                 all_results.append(r)
                 completed.add(key)
                 if not r['success']:
-                    record_timeout(impl, 'josephson', L, chi, np_val)
+                    record_timeout(impl, 'josephson', L, chi, np_val, r.get('wall_time', 0))
                 log_result(r)
                 save()
 
@@ -541,7 +543,7 @@ def run_all_benchmarks():
                 all_results.append(r)
                 completed.add(key)
                 if not r['success']:
-                    record_timeout(impl_name, 'heisenberg', L, chi, seg)
+                    record_timeout(impl_name, 'heisenberg', L, chi, seg, r.get('wall_time', 0))
                 log_result(r)
                 save()
 
@@ -562,7 +564,7 @@ def run_all_benchmarks():
                 all_results.append(r)
                 completed.add(key)
                 if not r['success']:
-                    record_timeout(impl_name, 'josephson', L, chi, seg)
+                    record_timeout(impl_name, 'josephson', L, chi, seg, r.get('wall_time', 0))
                 log_result(r)
                 save()
 
