@@ -70,6 +70,10 @@ JOSEPHSON_SIZES = [
 QUIMB_THREADS = [1, 2, 4, 8, 12]
 MPI_NP = [2, 4, 8]
 GPU_SEGMENTS = [2, 4, 8, 16]
+MAX_CORES = 12
+# Hybrid MPI+threads combos: (np, threads) where np*threads <= MAX_CORES
+HYBRID_COMBOS = [(np_val, thr) for np_val in [2, 4, 8]
+                 for thr in [1, 2, 4] if np_val * thr <= MAX_CORES]
 
 
 # ============================================================================
@@ -220,11 +224,11 @@ print(f"TIME={{t1-t0:.3f}}")
 # MPI PDMRG / PDMRG2 runners
 # ============================================================================
 
-def run_mpi_pdmrg(L, chi, sweeps, np_val, model='heisenberg', nmax=2, impl='pdmrg'):
+def run_mpi_pdmrg(L, chi, sweeps, np_val, model='heisenberg', nmax=2, impl='pdmrg', threads=1):
     """Run MPI-based pdmrg or pdmrg2."""
     pkg_dir = 'pdmrg' if impl == 'pdmrg' else 'pdmrg2'
     env = {'PYTHONPATH': f'{REPO}/{pkg_dir}:{REPO}:' + os.environ.get('PYTHONPATH', ''),
-           'OPENBLAS_NUM_THREADS': '1', 'OMP_NUM_THREADS': '1'}
+           'OPENBLAS_NUM_THREADS': str(threads), 'OMP_NUM_THREADS': str(threads)}
 
     if model == 'heisenberg':
         mpo_setup = f"""\
@@ -264,6 +268,7 @@ if MPI.COMM_WORLD.Get_rank() == 0:
         'model': model,
         'L': L, 'chi': chi, 'sweeps': sweeps,
         'np': np_val,
+        'threads': threads,
         'energy': float(energy) if energy else None,
         'solve_time': float(solve_time) if solve_time else None,
         'wall_time': wall,
@@ -343,7 +348,13 @@ def make_result_key(r):
     model = r['model']
     L = r['L']
     chi = r['chi']
-    p = r.get('threads', r.get('np', r.get('segments', '')))
+    # For MPI results with both np and threads, include both
+    np_val = r.get('np')
+    threads = r.get('threads')
+    if np_val is not None and threads is not None:
+        p = f"{np_val}x{threads}"
+    else:
+        p = r.get('threads', r.get('np', r.get('segments', '')))
     return f"{impl}|{model}|{L}|{chi}|{p}"
 
 
@@ -511,6 +522,54 @@ def run_all_benchmarks():
                     continue
                 log(f"  {impl} josephson L={L} chi={chi} np={np_val}")
                 r = run_mpi_pdmrg(L, chi, sweeps, np_val, 'josephson', nmax, impl=impl)
+                all_results.append(r)
+                completed.add(key)
+                if not r['success']:
+                    record_timeout(impl, 'josephson', L, chi, np_val, r.get('wall_time', 0))
+                log_result(r)
+                save()
+
+    # ------------------------------------------------------------------
+    # Phase 2b: Hybrid MPI+threads (pdmrg + pdmrg2)
+    # ------------------------------------------------------------------
+    log("=" * 80)
+    log("PHASE 2b: Hybrid MPI+threads (pdmrg + pdmrg2)")
+    log("=" * 80)
+
+    for impl in ['pdmrg', 'pdmrg2']:
+        # Heisenberg
+        for L, chi, sweeps in HEISENBERG_SIZES:
+            for np_val, threads in HYBRID_COMBOS:
+                if np_val > L // 2:
+                    continue
+                key = f"{impl}|heisenberg|{L}|{chi}|{np_val}x{threads}"
+                if is_completed(key):
+                    continue
+                if should_skip_timeout(impl, 'heisenberg', L, chi, np_val):
+                    log(f"  SKIP {impl} heisenberg L={L} chi={chi} np={np_val}x{threads} (smaller L timed out)")
+                    continue
+                log(f"  {impl} heisenberg L={L} chi={chi} np={np_val} threads={threads}")
+                r = run_mpi_pdmrg(L, chi, sweeps, np_val, 'heisenberg', impl=impl, threads=threads)
+                all_results.append(r)
+                completed.add(key)
+                if not r['success']:
+                    record_timeout(impl, 'heisenberg', L, chi, np_val, r.get('wall_time', 0))
+                log_result(r)
+                save()
+
+        # Josephson
+        for L, chi, sweeps, nmax in JOSEPHSON_SIZES:
+            for np_val, threads in HYBRID_COMBOS:
+                if np_val > L // 2:
+                    continue
+                key = f"{impl}|josephson|{L}|{chi}|{np_val}x{threads}"
+                if is_completed(key):
+                    continue
+                if should_skip_timeout(impl, 'josephson', L, chi, np_val):
+                    log(f"  SKIP {impl} josephson L={L} chi={chi} np={np_val}x{threads} (smaller L timed out)")
+                    continue
+                log(f"  {impl} josephson L={L} chi={chi} np={np_val} threads={threads}")
+                r = run_mpi_pdmrg(L, chi, sweeps, np_val, 'josephson', nmax, impl=impl, threads=threads)
                 all_results.append(r)
                 completed.add(key)
                 if not r['success']:
