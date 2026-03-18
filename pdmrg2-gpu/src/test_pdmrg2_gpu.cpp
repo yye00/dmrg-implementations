@@ -261,7 +261,7 @@ int main(int argc, char** argv) {
     int n_segments = 2;
     int n_local = 2;
     int n_warmup = 3;
-    bool gpu_svd = false;
+    bool gpu_svd = true;
     bool ns_split = true;  // default: use Newton-Schulz for bond split
     bool davidson = false;  // default: use Lanczos eigensolver
     bool rsvd = false;      // default: no randomized SVD
@@ -273,7 +273,7 @@ int main(int argc, char** argv) {
     {
         int pos = 0;
         for (int i = 1; i < argc; i++) {
-            if (std::string(argv[i]) == "--gpu-svd") { gpu_svd = true; continue; }
+            if (std::string(argv[i]) == "--cpu-svd") { gpu_svd = false; continue; }
             if (std::string(argv[i]) == "--ns-split") { ns_split = true; continue; }
             if (std::string(argv[i]) == "--svd-split") { ns_split = false; continue; }
             if (std::string(argv[i]) == "--rsvd") { rsvd = true; ns_split = false; continue; }

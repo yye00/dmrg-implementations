@@ -103,7 +103,7 @@ PDMRG2GPU<Scalar>::PDMRG2GPU(int L, int d, int chi_max, int D_mpo, int n_segment
     max_lanczos_iter_ = std::min(100, theta_size_max_);
     davidson_b_ = 4;
     davidson_max_sub_ = std::min(davidson_b_ * 8, theta_size_max_);
-    use_cpu_svd_ = true;
+    use_cpu_svd_ = false;
     use_ns_split_ = true;  // default: use Newton-Schulz for bond split
     use_davidson_ = false;  // default: use Lanczos (device-pointer-mode, 2-3 syncs/bond)
     use_rsvd_ = false;

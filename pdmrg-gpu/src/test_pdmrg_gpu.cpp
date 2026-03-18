@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
     int n_segments = 2;
     int n_local = 2;
     int n_warmup = 3;
-    bool gpu_svd = false;
+    bool gpu_svd = true;
     bool use_rsvd = false;
     bool run_josephson = false;
     int n_max = 1;
@@ -264,7 +264,7 @@ int main(int argc, char** argv) {
     {
         int pos = 0;
         for (int i = 1; i < argc; i++) {
-            if (std::string(argv[i]) == "--gpu-svd") { gpu_svd = true; continue; }
+            if (std::string(argv[i]) == "--cpu-svd") { gpu_svd = false; continue; }
             if (std::string(argv[i]) == "--rsvd") { use_rsvd = true; continue; }
             if (std::string(argv[i]) == "--josephson") { run_josephson = true; continue; }
             if (std::string(argv[i]) == "--segments" && i+1 < argc) { n_segments = std::atoi(argv[++i]); continue; }

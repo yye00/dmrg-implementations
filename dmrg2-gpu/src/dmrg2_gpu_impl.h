@@ -124,7 +124,7 @@ DMRG2GPU<Scalar>::DMRG2GPU(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_svd_work_, theta_size_max_ * sizeof(Scalar)));
 
     // CPU SVD workspace
-    use_cpu_svd_ = true;
+    use_cpu_svd_ = false;
     h_svd_A_.resize(theta_size_max_);
     h_svd_U_.resize((size_t)svd_max_m * svd_max_k);
     h_svd_S_.resize(svd_max_k);

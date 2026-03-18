@@ -106,7 +106,7 @@ PDMRGGPU<Scalar>::PDMRGGPU(int L, int d, int chi_max, int D_mpo, int n_segments,
     // Allocate per-stream workspaces
     theta_size_max_ = chi_max_ * dd * chi_max_;
     max_lanczos_iter_ = std::min(100, theta_size_max_);
-    use_cpu_svd_ = true;
+    use_cpu_svd_ = false;
     use_rsvd_ = false;
     rsvd_oversampling_ = 20;
 

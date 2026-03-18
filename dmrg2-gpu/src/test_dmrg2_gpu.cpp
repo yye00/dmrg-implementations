@@ -156,7 +156,7 @@ int test_heisenberg(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd = 
     DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
     dmrg.set_cpu_svd(!gpu_svd);
     dmrg.set_rsvd(rsvd);
-    dmrg.initialize_mps_random();
+    dmrg.initialize_mps_neel();
 
     std::vector<double*> h_mpo_tensors(L);
     build_heisenberg_mpo(L, D_mpo, h_mpo_tensors);
@@ -243,7 +243,7 @@ int main(int argc, char** argv) {
     int L = 8;
     int chi_max = 32;
     int n_sweeps = 30;
-    bool gpu_svd = false;
+    bool gpu_svd = true;
     bool rsvd = false;
     bool run_josephson = false;
     int n_max = 1;
@@ -253,7 +253,7 @@ int main(int argc, char** argv) {
     {
         int pos = 0;
         for (int i = 1; i < argc; i++) {
-            if (std::string(argv[i]) == "--gpu-svd") { gpu_svd = true; continue; }
+            if (std::string(argv[i]) == "--cpu-svd") { gpu_svd = false; continue; }
             if (std::string(argv[i]) == "--rsvd") { rsvd = true; continue; }
             if (std::string(argv[i]) == "--josephson") { run_josephson = true; continue; }
             if (std::string(argv[i]) == "--nmax" && i+1 < argc) { n_max = std::atoi(argv[++i]); continue; }
