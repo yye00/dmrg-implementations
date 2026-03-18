@@ -362,8 +362,10 @@ def run_all_benchmarks():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
     # Resume: load existing results and build lookup of completed runs
+    # Only count successes and real timeouts as completed; retry config errors
     all_results = load_existing_results()
-    completed = set(make_result_key(r) for r in all_results)
+    completed = set(make_result_key(r) for r in all_results
+                    if r['success'] or r.get('wall_time', 0) >= TIMEOUT * 0.9)
 
     # Timeout tracking: aggressive skip logic (only real timeouts, not config errors)
     timeout_at = {}  # legacy: (impl, model, chi, parallelism) -> smallest L
