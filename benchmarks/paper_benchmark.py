@@ -365,11 +365,11 @@ def run_all_benchmarks():
     all_results = load_existing_results()
     completed = set(make_result_key(r) for r in all_results)
 
-    # Timeout tracking: aggressive skip logic
+    # Timeout tracking: aggressive skip logic (only real timeouts, not config errors)
     timeout_at = {}  # legacy: (impl, model, chi, parallelism) -> smallest L
     timeout_records = []  # new: list of ((impl, model), L, chi) for cross-parameter skipping
     for r in all_results:
-        if not r['success']:
+        if not r['success'] and r.get('wall_time', 0) >= TIMEOUT * 0.9:
             p = r.get('threads', r.get('np', r.get('segments', '')))
             key = (r['impl'], r['model'], r['chi'], p)
             prev = timeout_at.get(key, float('inf'))
