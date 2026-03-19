@@ -660,11 +660,14 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         mps_arrays = None
         
     else:
+        # Cap warmup bond dim at target to avoid unreachable convergence
+        bond_dim_warmup = min(bond_dim_warmup, bond_dim)
+
         # Serial warmup on rank 0
         if rank == 0 and verbose:
             print(f"PDMRG: L={L}, bond_dim={bond_dim}, n_procs={n_procs}")
-            print(f"Phase 0: Serial warmup (quimb DMRG2, m={bond_dim})")
-        
+            print(f"Phase 0: Serial warmup (quimb DMRG2, m={bond_dim_warmup})")
+
         warmup_energy = None
         local_mps = None
         if rank == 0:

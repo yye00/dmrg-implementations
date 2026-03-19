@@ -575,6 +575,10 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
                initial_mps=None):
     """Run the full PDMRG algorithm.
 
+    Note: bond_dim_warmup is capped at bond_dim to avoid warmup producing
+    an MPS more precise than the target chi can maintain, which makes
+    convergence impossible.
+
     For n_procs > 1, uses staggered sweeps (Fig. 4 of the paper):
       - Even ranks start at right end, sweep left first
       - Odd ranks start at left end, sweep right first
@@ -663,11 +667,14 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         mps_arrays = None
         
     else:
+        # Cap warmup bond dim at target to avoid unreachable convergence
+        bond_dim_warmup = min(bond_dim_warmup, bond_dim)
+
         # Serial warmup on rank 0
         if rank == 0 and verbose:
             print(f"PDMRG: L={L}, bond_dim={bond_dim}, n_procs={n_procs}")
-            print(f"Phase 0: Serial warmup (quimb DMRG2, m={bond_dim})")
-        
+            print(f"Phase 0: Serial warmup (quimb DMRG2, m={bond_dim_warmup})")
+
         warmup_energy = None
         local_mps = None
         if rank == 0:

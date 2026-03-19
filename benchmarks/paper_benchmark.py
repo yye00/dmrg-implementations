@@ -67,7 +67,11 @@ JOSEPHSON_SIZES = [
 ]
 
 # Parallelism sweeps
-QUIMB_THREADS = [1, 2, 4, 8, 12]
+# Note: OpenBLAS thread counts >4 cause severe anti-scaling for quimb,
+# especially with complex-valued Josephson (80-100x slowdown at 12 threads).
+# Root cause: OpenBLAS pthread overhead per BLAS call dominates for small matrices.
+# Cap at 4 threads — beyond that, use MPI parallelism instead.
+QUIMB_THREADS = [1, 2, 4]
 MPI_NP = [2, 4, 8]
 GPU_SEGMENTS = [2, 4, 8, 16]
 MAX_CORES = 12
