@@ -43,8 +43,8 @@ def solve_effective_hamiltonian(H_eff, v0=None, tol=1e-10, maxiter=None):
     Parameters
     ----------
     H_eff : LinearOperator
-        Effective Hamiltonian as a LinearOperator (from build_effective_hamiltonian_1site
-        or build_effective_hamiltonian_2site)
+        Effective Hamiltonian as a LinearOperator (e.g. from _build_heff_numpy_1site
+        or _build_heff_numpy_2site in local_microstep)
     v0 : numpy.ndarray, optional
         Initial guess for the eigenvector (flattened). If None, a random guess is used.
         Shape should be (H_eff.shape[0],)
@@ -62,25 +62,13 @@ def solve_effective_hamiltonian(H_eff, v0=None, tol=1e-10, maxiter=None):
 
     Examples
     --------
-    >>> from a2dmrg.numerics.effective_ham import build_effective_hamiltonian_1site
-    >>> from a2dmrg.environments import build_left_environments, build_right_environments
-    >>> from quimb.tensor import MPS_rand_state, MPO_ham_heis
+    >>> from a2dmrg.numerics.local_microstep import _build_heff_numpy_1site
+    >>> from a2dmrg.environments.environment import build_environments_incremental
     >>>
-    >>> # Create system
-    >>> L, d = 6, 2
-    >>> mps = MPS_rand_state(L, bond_dim=4)
-    >>> mpo = MPO_ham_heis(L, cyclic=False)
-    >>>
-    >>> # Build H_eff for site 3
-    >>> L_envs = build_left_environments(mps, mpo)
-    >>> R_envs = build_right_environments(mps, mpo)
-    >>> i = 3
-    >>> W_i = mpo[i].data
-    >>> chi_L, d, chi_R = mps[i].data.shape
-    >>> H_eff = build_effective_hamiltonian_1site(L_envs[i], W_i, R_envs[i], (chi_L, d, chi_R))
-    >>>
-    >>> # Solve for ground state
-    >>> v0 = mps[i].data.ravel()
+    >>> # Build environments and solve for ground state at site i
+    >>> L_envs, R_envs, canon = build_environments_incremental(mps_arrays, mpo_arrays)
+    >>> H_eff = _build_heff_numpy_1site(L_envs[i], mpo_arrays[i], R_envs[i+1])
+    >>> v0 = canon[i].ravel()
     >>> energy, eigvec = solve_effective_hamiltonian(H_eff, v0=v0)
     >>> print(f"Ground state energy: {energy}")
     """
