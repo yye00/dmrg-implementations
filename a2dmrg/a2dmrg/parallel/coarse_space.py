@@ -73,7 +73,7 @@ def filter_redundant_candidates(
     retained_indices : List[int]
         Indices of retained candidates in original list
     """
-    from a2dmrg.numerics.observables import compute_overlap
+    from a2dmrg.numerics.observables import compute_overlap_numpy
     import numpy as np
 
     if len(candidate_mps_list) == 0:
@@ -90,11 +90,11 @@ def filter_redundant_candidates(
         # Compute overlap with all retained candidates
         is_redundant = False
         for retained in filtered:
-            overlap = compute_overlap(candidate, retained)
+            overlap = compute_overlap_numpy(candidate, retained)
 
             # Normalize overlap by norms
-            norm_candidate = np.sqrt(compute_overlap(candidate, candidate))
-            norm_retained = np.sqrt(compute_overlap(retained, retained))
+            norm_candidate = np.sqrt(abs(compute_overlap_numpy(candidate, candidate)))
+            norm_retained = np.sqrt(abs(compute_overlap_numpy(retained, retained)))
 
             if norm_candidate < 1e-14 or norm_retained < 1e-14:
                 # Degenerate case: zero norm MPS
@@ -117,7 +117,7 @@ def filter_redundant_candidates(
 
 def build_coarse_matrices(
     candidate_mps_list: List,
-    mpo,
+    mpo_arrays,
     comm=None,
     assigned_sites: Optional[List[int]] = None,
     filter_redundant: bool = False,
@@ -138,11 +138,12 @@ def build_coarse_matrices(
 
     Parameters
     ----------
-    candidate_mps_list : List[MPS]
-        List of candidate MPS states: [Y^(0), Y^(1), ..., Y^(d)]
+    candidate_mps_list : List[List[ndarray]]
+        List of candidate MPS states as numpy array lists: [Y^(0), Y^(1), ..., Y^(d)]
         Y^(0) is the original state, Y^(i>0) are locally-updated states
-    mpo : MPO
-        Hamiltonian as Matrix Product Operator
+        Each candidate is a list of ndarray in (chi_L, d, chi_R) format.
+    mpo_arrays : List[ndarray]
+        Pre-extracted MPO arrays in (D_L, D_R, d_up, d_down) format.
     comm : MPI.Comm, optional
         MPI communicator (None for serial mode)
     assigned_sites : List[int], optional
@@ -195,8 +196,8 @@ def build_coarse_matrices(
     ...     candidate_list, mpo, comm=comm, assigned_sites=my_sites
     ... )
     """
-    # Import observable computation functions
-    from a2dmrg.numerics.observables import compute_energy, compute_overlap, compute_cross_energy
+    # Import numpy-based observable computation functions
+    from a2dmrg.numerics.observables import compute_cross_energy_numpy, compute_overlap_numpy
 
     # Filter redundant candidates if requested.
     # NOTE: Default is False to keep this function a pure matrix builder.
@@ -209,25 +210,8 @@ def build_coarse_matrices(
     # Determine matrix dimension
     d_plus_1 = len(candidate_mps_list)
 
-    # Infer dtype from first MPS
-    # Check if any tensor is complex
-    first_mps = candidate_mps_list[0]
-    is_complex = False
-    for tensor in first_mps.tensors:
-        # Get the actual array data
-        if hasattr(tensor, 'data'):
-            data = tensor.data
-        else:
-            data = tensor
-
-        # Convert memoryview to array if needed
-        data_array = np.asarray(data)
-
-        if np.iscomplexobj(data_array):
-            is_complex = True
-            break
-
-    dtype = np.complex128 if is_complex else np.float64
+    # Infer dtype from first MPS (numpy array list)
+    dtype = np.complex128 if np.iscomplexobj(candidate_mps_list[0][0]) else np.float64
 
     # Determine which rows to compute
     if assigned_sites is None:
@@ -274,19 +258,19 @@ def build_coarse_matrices(
 
             if i == j:
                 # Diagonal: ⟨bra|H|bra⟩ via numpy sweep (single pass)
-                H_ij = compute_cross_energy(bra, mpo, bra)
+                H_ij = compute_cross_energy_numpy(bra, mpo_arrays, bra)
                 if not np.iscomplexobj(H_local):
                     H_ij = np.real(H_ij)
                 H_local[i, j] = H_ij
             else:
                 # Off-diagonal: ⟨bra|H|ket⟩ via numpy sweep (no cotengra)
-                H_ij = compute_cross_energy(bra, mpo, ket)
+                H_ij = compute_cross_energy_numpy(bra, mpo_arrays, ket)
                 if not np.iscomplexobj(H_local):
                     H_ij = np.real(H_ij)
                 H_local[i, j] = H_ij
 
             # Compute S_coarse[i,j] = ⟨Y^(i), Y^(j)⟩
-            S_ij = compute_overlap(bra, ket)
+            S_ij = compute_overlap_numpy(bra, ket)
             if not np.iscomplexobj(S_local):
                 S_ij = np.real(S_ij)
             S_local[i, j] = S_ij

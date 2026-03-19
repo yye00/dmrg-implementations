@@ -403,6 +403,10 @@ def a2dmrg_main(
 
         # left_canonicalize(mps, normalize=True)  # DISABLED for A2DMRG
 
+        # Extract MPO arrays once per sweep for numpy pipeline
+        from a2dmrg.numerics.numpy_utils import extract_mpo_arrays
+        mpo_arrays = extract_mpo_arrays(mpo)
+
         # Phase 2: Parallel local micro-steps
         if rank == 0 and verbose:
             print("Phase 2: Performing parallel local micro-steps...", flush=True)
@@ -496,7 +500,7 @@ def a2dmrg_main(
 
             H_coarse, S_coarse = build_coarse_matrices(
                 candidate_mps_list,
-                mpo,
+                mpo_arrays,
                 comm=comm,
                 assigned_sites=assigned_sites,
                 filter_redundant=False,
@@ -518,7 +522,7 @@ def a2dmrg_main(
 
             H_coarse, S_coarse = build_coarse_matrices(
                 candidate_mps_list,
-                mpo,
+                mpo_arrays,
                 comm=None,
                 filter_redundant=False,
             )
@@ -565,23 +569,22 @@ def a2dmrg_main(
         if rank == 0 and verbose:
             print("Phase 5: Compressing MPS...", flush=True)
 
-        # Use quimb's compress with minimal SVD truncation.
-        # CRITICAL: Use cutoff=0 to disable singular value truncation entirely.
-        # This preserves all SVD components up to max_bond, preventing energy increase.
-        # Only bond dimension constraint (max_bond) controls compression.
-        #
-        # Setting cutoff > 0 (e.g., 1e-12 or 1e-14) truncates singular values and
-        # removes entanglement, causing energy to increase by O(1e-10).
+        # Phase 5: Compression using numpy TT-SVD
         compress_t0 = time.perf_counter()
-        mps = combined_mps.copy()
-        mps.compress(max_bond=bond_dim, cutoff=0.0)
-        mps /= mps.norm()  # Normalize after compression
+        from a2dmrg.numerics.compression import tt_svd_compress
+        from a2dmrg.numerics.observables import compute_energy_numpy
+        from a2dmrg.numerics.numpy_utils import arrays_to_quimb_mps
+
+        compressed_arrays = tt_svd_compress(combined_mps, max_bond=bond_dim, normalize=True)
         _tmark("phase5_compress", compress_t0)
 
         # Compute actual energy after compression
         ecomp_t0 = time.perf_counter()
-        energy_after_compression = compute_energy(mps, mpo)
+        energy_after_compression = compute_energy_numpy(compressed_arrays, mpo_arrays)
         _tmark("phase5_energy_after_compression", ecomp_t0)
+
+        # Convert back to quimb MPS for next sweep iteration
+        mps = arrays_to_quimb_mps(compressed_arrays)
 
         # Check convergence using ACTUAL compressed energies, not coarse-space energies
         # This is critical because compression changes the energy!
@@ -641,10 +644,12 @@ def a2dmrg_main(
     if rank == 0 and verbose:
         print(f"\n=== Final Compression to bond_dim={bond_dim} ===", flush=True)
 
-    # Use quimb's compress for final compression too
-    # cutoff=0.0 to preserve all singular values up to max_bond (consistent with sweep compression)
-    mps.compress(max_bond=bond_dim, cutoff=0.0)
-    mps /= mps.norm()
+    # Final compression using numpy TT-SVD (consistent with sweep compression)
+    from a2dmrg.numerics.numpy_utils import extract_mps_arrays, arrays_to_quimb_mps
+    from a2dmrg.numerics.compression import tt_svd_compress
+    final_arrays = extract_mps_arrays(mps)
+    final_arrays = tt_svd_compress(final_arrays, max_bond=bond_dim, normalize=True)
+    mps = arrays_to_quimb_mps(final_arrays)
 
     # Compute energy after A2DMRG (before finalization)
     energy_after_a2dmrg = compute_energy(mps, mpo)

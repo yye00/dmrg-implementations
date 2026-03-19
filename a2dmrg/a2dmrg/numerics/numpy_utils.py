@@ -57,3 +57,40 @@ def extract_mpo_arrays(mpo):
     from a2dmrg.numerics.observables import _get_mpo_array
     L = mpo.L
     return [_get_mpo_array(mpo, i) for i in range(L)]
+
+
+def arrays_to_quimb_mps(arrays, dtype=None):
+    """Convert list of numpy arrays back to quimb MPS.
+
+    Parameters
+    ----------
+    arrays : list of ndarray
+        MPS tensors in (chi_L, d, chi_R) format.
+    dtype : numpy dtype, optional
+        Override dtype.
+
+    Returns
+    -------
+    quimb.tensor.MatrixProductState
+    """
+    L = len(arrays)
+    tensors = []
+    for i in range(L):
+        a = arrays[i]
+        if dtype is not None:
+            a = a.astype(dtype)
+        if i == 0:
+            data = a[0, :, :]  # (d, chi_R)
+            inds = (f'k{i}', f'b{i}-{i+1}')
+        elif i == L - 1:
+            data = a[:, :, 0]  # (chi_L, d)
+            inds = (f'b{i-1}-{i}', f'k{i}')
+        else:
+            data = a  # (chi_L, d, chi_R)
+            inds = (f'b{i-1}-{i}', f'k{i}', f'b{i}-{i+1}')
+        tensors.append(qtn.Tensor(data=data, inds=inds, tags={f'I{i}'}))
+
+    tn = qtn.TensorNetwork(tensors)
+    return qtn.MatrixProductState.from_TN(
+        tn, site_tag_id='I{}', site_ind_id='k{}', cyclic=False, L=L
+    )

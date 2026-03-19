@@ -39,100 +39,77 @@ except ImportError:
     MPI = None
 
 
-def form_linear_combination(
-    candidate_mps_list: List,
-    coefficients: np.ndarray,
-    comm=None,
-    assigned_sites: Optional[List[int]] = None
-):
-    """
-    Form optimal MPS as linear combination Ỹ = Σⱼ c*ⱼ Y^(j).
+def form_linear_combination(candidate_arrays_list, coefficients, comm=None, assigned_sites=None):
+    """Form weighted sum of candidate MPS (numpy arrays).
 
-    This function combines the candidate MPS states with the given coefficients
-    to form the optimal state in the coarse space.
+    IMPORTANT: The coefficient for each candidate is applied to site 0 ONLY.
+    An MPS state |psi> = A[0] A[1] ... A[L-1], so multiplying c into every
+    site would give c^L amplitude instead of c.
 
     Parameters
     ----------
-    candidate_mps_list : List[MPS]
-        List of candidate MPS states: [Y^(0), Y^(1), ..., Y^(d)]
-        All must have same length L and same physical dimension d_phys
+    candidate_arrays_list : List[List[ndarray]]
+        List of candidate MPS states as numpy array lists.
+        Each candidate is a list of ndarray in (chi_L, d, chi_R) format.
     coefficients : np.ndarray
         Coefficients c*, shape (d+1,)
-        Obtained from coarse eigenvalue problem solver
+        Obtained from coarse eigenvalue problem solver.
     comm : MPI.Comm, optional
-        MPI communicator (None for serial mode)
+        MPI communicator (None for serial mode).
     assigned_sites : List[int], optional
-        List of site indices assigned to this processor (for parallel mode)
-        Currently unused - all processors form the full combination
+        Currently unused - all processors form the full combination.
 
     Returns
     -------
-    combined_mps : MPS
-        Linear combination Ỹ = Σⱼ c*ⱼ Y^(j)
-        Has same length L but larger bond dimension
-
-    Notes
-    -----
-    Uses quimb's built-in MPS addition which automatically handles bond dimension
-    stacking. When adding two MPS with bond dimension χ, the result has bond
-    dimension at most 2χ. For d+1 states, bond dimension grows to at most (d+1)χ.
-
-    Later compression (Phase 4) reduces this back down via truncated SVD.
-
-    In parallel mode:
-    - Coefficients are broadcast from rank 0
-    - All processors form the same linear combination
-    - The assigned_sites parameter is for future optimization
-
-    Example
-    -------
-    Serial mode:
-    >>> combined_mps = form_linear_combination(candidate_list, coefficients)
-
-    Parallel mode:
-    >>> from a2dmrg.mpi_compat import MPI
-    >>> comm = MPI.COMM_WORLD
-    >>> my_sites = [2, 3, 4]
-    >>> combined_mps = form_linear_combination(
-    ...     candidate_list, coefficients, comm=comm, assigned_sites=my_sites
-    ... )
+    combined : List[ndarray]
+        Linear combination as list of numpy arrays in (chi_L, d, chi_R) format.
+        Bond dimensions are expanded (block-diagonal for middle sites).
     """
-    # Validate inputs
-    if len(candidate_mps_list) == 0:
-        raise ValueError("candidate_mps_list cannot be empty")
-
-    if len(coefficients) != len(candidate_mps_list):
+    if len(candidate_arrays_list) == 0:
+        raise ValueError("candidate_arrays_list cannot be empty")
+    if len(coefficients) != len(candidate_arrays_list):
         raise ValueError(
             f"coefficients length ({len(coefficients)}) must match "
-            f"candidate_mps_list length ({len(candidate_mps_list)})"
+            f"candidate_arrays_list length ({len(candidate_arrays_list)})"
         )
 
     # Broadcast coefficients in parallel mode
     if comm is not None:
-        # Ensure all processors have the same coefficients
         coefficients = comm.bcast(coefficients, root=0)
 
-    # Form linear combination using quimb's MPS arithmetic
-    # Handle case where some coefficients might be zero or very small
-    # Find first non-zero coefficient to initialize
-    init_idx = None
-    for i in range(len(candidate_mps_list)):
-        if abs(coefficients[i]) > 1e-14:  # Skip near-zero coefficients
-            init_idx = i
-            break
+    n_cands = len(candidate_arrays_list)
+    L = len(candidate_arrays_list[0])
 
-    if init_idx is None:
-        raise ValueError("All coefficients are zero - cannot form linear combination")
+    # Filter near-zero coefficients
+    active = [(j, coefficients[j]) for j in range(n_cands) if abs(coefficients[j]) > 1e-14]
+    if not active:
+        raise ValueError("All coefficients are zero")
 
-    # Start with the first non-zero term
-    combined_mps = coefficients[init_idx] * candidate_mps_list[init_idx]
+    combined = []
+    for i in range(L):
+        if i == 0:
+            # First site: (1, d, chi_R) -- apply coeff and concatenate along chi_R
+            tensors = [c * candidate_arrays_list[j][i] for j, c in active]
+            combined.append(np.concatenate(tensors, axis=2))
+        elif i == L - 1:
+            # Last site: (chi_L, d, 1) -- concatenate along chi_L
+            tensors = [candidate_arrays_list[j][i] for j, c in active]
+            combined.append(np.concatenate(tensors, axis=0))
+        else:
+            # Middle: block-diagonal (chi_L*n, d, chi_R*n)
+            tensors = [candidate_arrays_list[j][i] for j, c in active]
+            total_L = sum(t.shape[0] for t in tensors)
+            d = tensors[0].shape[1]
+            total_R = sum(t.shape[2] for t in tensors)
+            block = np.zeros((total_L, d, total_R), dtype=tensors[0].dtype)
+            row, col = 0, 0
+            for t in tensors:
+                block[row:row+t.shape[0], :, col:col+t.shape[2]] = t
+                row += t.shape[0]
+                col += t.shape[2]
+            combined.append(block)
 
-    # Add remaining non-zero terms
-    for i in range(len(candidate_mps_list)):
-        if i != init_idx and abs(coefficients[i]) > 1e-14:
-            combined_mps = combined_mps + coefficients[i] * candidate_mps_list[i]
-
-    return combined_mps
+    return combined
 
 
 def verify_linear_combination_energy(
