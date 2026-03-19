@@ -665,23 +665,10 @@ def a2dmrg_main(
                 print(f"\n=== Finalization Phase: {finalize_sweeps} standard DMRG sweeps ===", flush=True)
             
             from quimb.tensor import DMRG2
-            # Create DMRG2 with the current MPS as the ket
-            # NOTE: DMRG2 expects specific index naming. We need to ensure
-            # our MPS uses compatible indices before passing to DMRG2.
-            
-            # Ensure MPS is properly canonicalized before finalization
-            mps.canonize(0)  # Right-canonical
-            
-            # Create DMRG2 and directly replace its ket with our MPS
-            # The proper way is to initialize DMRG2 and then replace _k entirely
-            dmrg_finalize = DMRG2(mpo, bond_dims=bond_dim)
-            
-            # Copy our MPS with proper index relabeling to match DMRG2's expectations
-            # DMRG2 uses site indices 'k0', 'k1', etc. which our MPS should already have
-            dmrg_finalize._k = mps.copy()
-            dmrg_finalize._b = mps.H.copy()  # Conjugate bra
-            
-            # Run finalization sweeps with tight tolerance
+            # Use p0 parameter to pass our MPS as the initial state.
+            # This ensures proper index alignment between MPS and MPO
+            # (replaces the broken _k/_b replacement approach).
+            dmrg_finalize = DMRG2(mpo, bond_dims=bond_dim, p0=mps)
             dmrg_finalize.solve(max_sweeps=finalize_sweeps, tol=1e-12, verbosity=1 if verbose else 0)
             
             mps = dmrg_finalize._k.copy()

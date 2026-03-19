@@ -62,6 +62,9 @@ def extract_mpo_arrays(mpo):
 def arrays_to_quimb_mps(arrays, dtype=None):
     """Convert list of numpy arrays back to quimb MPS.
 
+    Uses quimb's built-in MatrixProductState constructor which generates
+    proper UUID-based index names compatible with quimb's DMRG2 solver.
+
     Parameters
     ----------
     arrays : list of ndarray
@@ -74,23 +77,19 @@ def arrays_to_quimb_mps(arrays, dtype=None):
     quimb.tensor.MatrixProductState
     """
     L = len(arrays)
-    tensors = []
+    # Convert from our (chi_L, d, chi_R) convention to quimb's expected format:
+    # - Site 0: 2D (d, chi_R)
+    # - Middle sites: 3D (chi_L, d, chi_R) — same as ours
+    # - Site L-1: 2D (chi_L, d)
+    quimb_arrays = []
     for i in range(L):
         a = arrays[i]
         if dtype is not None:
             a = a.astype(dtype)
         if i == 0:
-            data = a[0, :, :]  # (d, chi_R)
-            inds = (f'k{i}', f'b{i}-{i+1}')
+            quimb_arrays.append(a[0, :, :])  # (d, chi_R)
         elif i == L - 1:
-            data = a[:, :, 0]  # (chi_L, d)
-            inds = (f'b{i-1}-{i}', f'k{i}')
+            quimb_arrays.append(a[:, :, 0])  # (chi_L, d)
         else:
-            data = a  # (chi_L, d, chi_R)
-            inds = (f'b{i-1}-{i}', f'k{i}', f'b{i}-{i+1}')
-        tensors.append(qtn.Tensor(data=data, inds=inds, tags={f'I{i}'}))
-
-    tn = qtn.TensorNetwork(tensors)
-    return qtn.MatrixProductState.from_TN(
-        tn, site_tag_id='I{}', site_ind_id='k{}', cyclic=False, L=L
-    )
+            quimb_arrays.append(a)  # (chi_L, d, chi_R)
+    return qtn.MatrixProductState(quimb_arrays, shape='lpr')
