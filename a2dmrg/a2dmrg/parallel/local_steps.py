@@ -8,218 +8,122 @@ Key features:
 - Embarrassingly parallel: no MPI communication during local updates
 - Each processor updates its assigned sites independently
 - Works with both one-site and two-site DMRG micro-steps
+- O(L) environment building (replicated on all ranks) instead of O(L²) per site
 """
 
 import numpy as np
-import quimb.tensor as qtn
 from typing import List, Dict, Tuple, Optional
 
-from ..numerics.local_microstep import local_microstep_1site, local_microstep_2site
 from .distribute import distribute_sites
 
 
 def parallel_local_microsteps(
-    mps: qtn.MatrixProductState,
+    mps,
     mpo,
     comm,
-    microstep_type: str = "one_site",
-    max_bond: Optional[int] = None,
-    cutoff: float = 1e-10,
-    tol: float = 1e-10,
-) -> Dict[int, Tuple[qtn.MatrixProductState, float]]:
-    """
-    Execute parallel local DMRG micro-steps on assigned sites.
+    microstep_type="two_site",
+    max_bond=None,
+    cutoff=0.0,
+    tol=1e-10,
+):
+    """Phase 2: parallel local micro-steps with O(L) environment caching.
 
-    This function implements Phase 2 of the A2DMRG algorithm:
-    - Each processor updates its assigned sites INDEPENDENTLY
-    - NO MPI communication during this phase (embarrassingly parallel)
-    - Returns dictionary of updated MPS for each site
-
-    Algorithm:
-    1. Get processor rank and total number of processors
-    2. Record original bond dimensions of the input MPS (once)
-    3. Distribute sites across processors using distribute_sites()
-    4. For each assigned site (streaming, one at a time):
-       a. Copy the MPS and move the orthogonality center to that site
-       b. Perform local micro-step on the temporary copy
-       c. Discard the copy immediately to bound peak memory at O(chi^2)
-    5. Return dictionary {site_idx: (updated_mps, energy)}
+    All ranks build environments from the same MPS (replicated, O(L) work).
+    Each rank then solves its assigned sites using cached environments.
+    No MPS copies, no per-site canonicalization.
 
     Parameters
     ----------
     mps : quimb.tensor.MatrixProductState
-        Input MPS (should be broadcast to all processors beforehand)
+        Input MPS (broadcast to all processors beforehand).
     mpo : quimb MPO
-        Matrix Product Operator (Hamiltonian)
-    comm : mpi4py.MPI.Comm
-        MPI communicator (typically MPI.COMM_WORLD)
-    microstep_type : str, optional
-        Type of micro-step: "one_site" or "two_site" (default: "one_site")
-    max_bond : int, optional
-        Maximum bond dimension for two-site updates (default: None)
-    cutoff : float, optional
-        SVD truncation tolerance for two-site updates (default: 1e-10)
-    tol : float, optional
-        Eigensolver tolerance (default: 1e-10)
+        Matrix Product Operator (Hamiltonian).
+    comm : MPI communicator
+    microstep_type : str
+        "one_site" or "two_site"
+    max_bond : int or None
+    cutoff : float
+    tol : float
 
     Returns
     -------
-    Dict[int, Tuple[qtn.MatrixProductState, float]]
-        Dictionary mapping site index to (updated_mps, energy) tuple.
-        For one-site: one entry per assigned site
-        For two-site: one entry per assigned bond (site, site+1)
-
-    Notes
-    -----
-    This function does NOT perform any MPI communication (no Allreduce, Bcast, etc).
-    Each processor works completely independently. Communication happens later in
-    the coarse-space minimization phase (Phase 3).
-
-    CRITICAL: This function streams i-orthogonal decompositions one site at a time
-    (only for each rank's assigned sites). Peak memory per rank is O(chi^2).
-    Environments are built once by rank 0 and broadcast to all ranks (O(L) total
-    work instead of O(n_procs * L)).
-
-    References
-    ----------
-    Grigori & Hassan (2025), Section 3.2: Parallel Local DMRG Micro-Steps
+    Dict[int, Tuple[list[ndarray], float]]
+        Dictionary mapping site index to (candidate_arrays, energy).
+        candidate_arrays is a list of numpy arrays in (chi_L, d, chi_R) format.
     """
-    # Get MPI rank and size
+    from a2dmrg.numerics.numpy_utils import extract_mps_arrays, extract_mpo_arrays
+    from a2dmrg.environments.environment import build_environments_incremental
+    from a2dmrg.numerics.local_microstep import fast_microstep_1site, fast_microstep_2site
+
     rank = comm.Get_rank()
     n_procs = comm.Get_size()
+    L = mps.L
 
-    L = mps.L  # Number of sites
+    # Extract to numpy (all ranks do this — MPS is already broadcast)
+    mps_arrays = extract_mps_arrays(mps)
+    mpo_arrays = extract_mpo_arrays(mpo)
 
-    # Distribute sites across processors.
+    # Build all environments in O(L) — all ranks, replicated
+    L_envs, R_envs, canon_arrays = build_environments_incremental(mps_arrays, mpo_arrays)
+
+    # Distribute sites
     my_sites = distribute_sites(L, n_procs, rank)
 
-    # Dictionary to store results
     results = {}
-
-    # NOTE: Each local micro-step now internally transforms the MPS to
-    # i-orthogonal form and rebuilds environments from the canonicalized
-    # MPS. Pre-built environments from the non-canonical MPS would be
-    # inconsistent with the gauge transformation (Definition 6, page 6
-    # of Grigori & Hassan 2025). Therefore we do NOT pre-build or
-    # broadcast environments here.
 
     if microstep_type == "one_site":
         for site in my_sites:
-            updated_mps, energy = local_microstep_1site(
-                mps, mpo, site, tol=tol,
+            opt_tensor, eigval = fast_microstep_1site(
+                canon_arrays[site], mpo_arrays[site],
+                L_envs[site], R_envs[site + 1],
+                site, L, tol=tol,
             )
-            results[site] = (updated_mps, energy)
+            # Build candidate: use canonicalized arrays (not original mps_arrays!)
+            candidate_arrays = [a.copy() for a in canon_arrays]
+            candidate_arrays[site] = opt_tensor
+            results[site] = (candidate_arrays, eigval)
 
     elif microstep_type == "two_site":
         for site in my_sites:
-            if site < L - 1:  # Can only do two-site update if not last site
-                updated_mps, energy = local_microstep_2site(
-                    mps, mpo, site,
-                    max_bond=max_bond,
-                    cutoff=cutoff,
-                    tol=tol,
-                )
-                results[site] = (updated_mps, energy)
-
+            if site >= L - 1:
+                continue
+            U, SVh, eigval = fast_microstep_2site(
+                canon_arrays[site], canon_arrays[site + 1],
+                mpo_arrays[site], mpo_arrays[site + 1],
+                L_envs[site], R_envs[site + 2],
+                site, L, max_bond=max_bond, cutoff=cutoff, tol=tol,
+            )
+            # Use canon_arrays as base (gauge consistency)
+            candidate_arrays = [a.copy() for a in canon_arrays]
+            candidate_arrays[site] = U
+            candidate_arrays[site + 1] = SVh
+            results[site] = (candidate_arrays, eigval)
     else:
-        raise ValueError(f"Unknown microstep_type: {microstep_type}. "
-                        f"Must be 'one_site' or 'two_site'")
+        raise ValueError(f"Unknown microstep_type: {microstep_type}")
 
-    # IMPORTANT: No MPI communication here!
-    # Each processor returns its local results independently
     return results
 
 
-def verify_no_communication(func):
-    """
-    Decorator to verify that a function does not perform MPI communication.
-
-    This is used for testing to ensure that parallel_local_microsteps is
-    truly embarrassingly parallel.
-
-    Implementation note: This is a conceptual decorator. In practice, we
-    verify no communication by checking that the function completes without
-    any MPI calls (Allreduce, Bcast, etc).
-    """
-    def wrapper(*args, **kwargs):
-        # In a real implementation, we could track MPI calls here
-        # For now, this is a placeholder
-        return func(*args, **kwargs)
-    return wrapper
-
-
-def gather_local_results(
-    local_results: Dict[int, Tuple[qtn.MatrixProductState, float]],
-    comm,
-) -> Dict[int, Tuple[qtn.MatrixProductState, float]]:
-    """
-    Gather local micro-step results from all processors.
-
-    This function is called AFTER parallel_local_microsteps to collect
-    all updated MPS from all processors.
-
-    Parameters
-    ----------
-    local_results : Dict[int, Tuple[qtn.MatrixProductState, float]]
-        Results from this processor's local micro-steps
-    comm : mpi4py.MPI.Comm
-        MPI communicator
-
-    Returns
-    -------
-    Dict[int, Tuple[qtn.MatrixProductState, float]]
-        All results from all processors (on all ranks)
-
-    Notes
-    -----
-    This function DOES perform MPI communication (MPI.Allgather or similar).
-    It's called after Phase 2 is complete, as part of preparing for Phase 3.
-    """
-    # Gather all results to all processors
+def gather_local_results(local_results, comm):
+    """Gather results from all ranks. Results are (numpy_arrays, energy) tuples."""
     all_results_list = comm.allgather(local_results)
-
-    # Merge dictionaries from all processors
     all_results = {}
     for results_from_rank in all_results_list:
         all_results.update(results_from_rank)
-
     return all_results
 
 
-def prepare_candidate_mps_list(
-    original_mps: qtn.MatrixProductState,
-    all_local_results: Dict[int, Tuple[qtn.MatrixProductState, float]],
-) -> List[qtn.MatrixProductState]:
+def prepare_candidate_mps_list(mps, all_local_results):
+    """Prepare candidate list as numpy array lists.
+
+    Returns list of list[ndarray] where first is the original.
     """
-    Prepare list of candidate MPS for coarse-space minimization.
+    from a2dmrg.numerics.numpy_utils import extract_mps_arrays
+    original_arrays = extract_mps_arrays(mps)
+    candidates = [original_arrays]
 
-    Creates the Y^(0), Y^(1), ..., Y^(d) candidates:
-    - Y^(0) = original MPS (no updates)
-    - Y^(j) = MPS updated at site j
-
-    Parameters
-    ----------
-    original_mps : qtn.MatrixProductState
-        Original MPS before local updates
-    all_local_results : Dict[int, Tuple[qtn.MatrixProductState, float]]
-        All local micro-step results from all processors
-
-    Returns
-    -------
-    List[qtn.MatrixProductState]
-        List of candidate MPS [Y^(0), Y^(1), ..., Y^(d)]
-
-    Notes
-    -----
-    This prepares the input for Phase 3 (Coarse-Space Minimization).
-    """
-    # Start with original MPS as Y^(0)
-    candidates = [original_mps.copy()]
-
-    # Add updated MPS from each site
-    # Sort by site index to ensure consistent ordering
     for site_idx in sorted(all_local_results.keys()):
-        updated_mps, _ = all_local_results[site_idx]
-        candidates.append(updated_mps)
+        candidate_arrays, _ = all_local_results[site_idx]
+        candidates.append(candidate_arrays)
 
     return candidates
