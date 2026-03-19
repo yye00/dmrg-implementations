@@ -276,5 +276,110 @@ def compute_overlap(
     
     # Final trace to get overlap
     overlap = np.trace(T)
-    
+
     return complex(overlap)
+
+
+def compute_energy_numpy(mps_arrays, mpo_arrays, normalize=True):
+    """Compute <psi|H|psi> from pre-extracted numpy arrays.
+
+    Same contraction pattern as compute_energy() but operates on raw arrays
+    instead of quimb MPS/MPO objects.
+
+    Parameters
+    ----------
+    mps_arrays : list of numpy.ndarray
+        MPS tensors in (chi_L, d, chi_R) format, from extract_mps_arrays.
+    mpo_arrays : list of numpy.ndarray
+        MPO tensors in (D_L, D_R, d_up, d_down) format, from extract_mpo_arrays.
+    normalize : bool, optional
+        If True, divides by <psi|psi> (default: True).
+
+    Returns
+    -------
+    float
+        The energy expectation value.
+    """
+    L = len(mps_arrays)
+    dtype = mps_arrays[0].dtype
+    L_env = np.ones((1, 1, 1), dtype=dtype)
+
+    for i in range(L):
+        A = mps_arrays[i]
+        W = mpo_arrays[i]
+        A_conj = A.conj()
+        X = np.tensordot(L_env, A, axes=(2, 0))
+        Y = np.tensordot(X, W, axes=([1, 2], [0, 2]))
+        L_env = np.tensordot(Y, A_conj, axes=([0, 3], [0, 1]))
+        L_env = L_env.transpose(2, 1, 0)
+
+    energy = float(np.real(np.trace(L_env[:, 0, :])))
+    if normalize:
+        norm_sq = compute_overlap_numpy(mps_arrays, mps_arrays)
+        energy /= abs(norm_sq)
+    return energy
+
+
+def compute_cross_energy_numpy(bra_arrays, mpo_arrays, ket_arrays):
+    """Compute <bra|H|ket> from pre-extracted numpy arrays (unnormalized).
+
+    Same contraction pattern as compute_cross_energy() but operates on raw arrays.
+
+    Parameters
+    ----------
+    bra_arrays : list of numpy.ndarray
+        Bra MPS tensors in (chi_L, d, chi_R) format.
+    mpo_arrays : list of numpy.ndarray
+        MPO tensors in (D_L, D_R, d_up, d_down) format.
+    ket_arrays : list of numpy.ndarray
+        Ket MPS tensors in (chi_L, d, chi_R) format.
+
+    Returns
+    -------
+    complex
+        The matrix element <bra|H|ket>.
+    """
+    L = len(bra_arrays)
+    dtype = np.result_type(bra_arrays[0].dtype, ket_arrays[0].dtype)
+    L_env = np.ones((1, 1, 1), dtype=dtype)
+
+    for i in range(L):
+        A_ket = ket_arrays[i]
+        A_bra_conj = bra_arrays[i].conj()
+        W = mpo_arrays[i]
+        X = np.tensordot(L_env, A_ket, axes=(2, 0))
+        Y = np.tensordot(X, W, axes=([1, 2], [0, 2]))
+        L_env = np.tensordot(Y, A_bra_conj, axes=([0, 3], [0, 1]))
+        L_env = L_env.transpose(2, 1, 0)
+
+    return complex(np.trace(L_env[:, 0, :]))
+
+
+def compute_overlap_numpy(bra_arrays, ket_arrays):
+    """Compute <bra|ket> from pre-extracted numpy arrays.
+
+    Same contraction pattern as compute_overlap() but operates on raw arrays.
+
+    Parameters
+    ----------
+    bra_arrays : list of numpy.ndarray
+        Bra MPS tensors in (chi_L, d, chi_R) format.
+    ket_arrays : list of numpy.ndarray
+        Ket MPS tensors in (chi_L, d, chi_R) format.
+
+    Returns
+    -------
+    complex
+        The overlap <bra|ket>.
+    """
+    L = len(bra_arrays)
+    dtype = np.result_type(bra_arrays[0].dtype, ket_arrays[0].dtype)
+    T = np.ones((1, 1), dtype=dtype)
+
+    for i in range(L):
+        A_bra_conj = bra_arrays[i].conj()
+        A_ket = ket_arrays[i]
+        X = np.tensordot(T, A_bra_conj, axes=(0, 0))
+        T = np.tensordot(X, A_ket, axes=([0, 1], [0, 1]))
+
+    return complex(np.trace(T))
