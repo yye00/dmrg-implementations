@@ -396,15 +396,15 @@ def run_gpu_dmrg(L, chi, sweeps, model='heisenberg', nmax=2):
     cmd = f'{DG_BIN} {L} {chi} {sweeps} --gpu-svd {extra}'
     out, wall, ok = run_cmd(cmd)
     energy = extract(out, r'Final energy:\s*([-\d.eE+]+)')
-    solve_time = extract(out, r'Solve time:\s*([\d.]+)')
+    wtime = extract(out, r'Total wall time:\s*([\d.]+)')
 
     result = {
         'impl': 'dmrg-gpu',
         'model': model,
         'L': L, 'chi': chi, 'sweeps': sweeps,
         'energy': float(energy) if energy else None,
-        'solve_time': float(solve_time) if solve_time else None,
-        'wall_time': wall,
+        'solve_time': float(wtime) if wtime else None,
+        'wall_time': float(wtime) if wtime else wall,
         'success': ok and energy is not None,
         'raw_output': out[:2000] if not ok else '',
     }
@@ -427,15 +427,15 @@ def run_gpu_dmrg2(L, chi, sweeps, model='heisenberg', nmax=2):
     cmd = f'{D2G_BIN} {L} {chi} {sweeps} {extra}'
     out, wall, ok = run_cmd(cmd)
     energy = extract(out, r'Final energy:\s*([-\d.eE+]+)')
-    solve_time = extract(out, r'Solve time:\s*([\d.]+)')
+    wtime = extract(out, r'Total wall time:\s*([\d.]+)')
 
     result = {
         'impl': 'dmrg2-gpu',
         'model': model,
         'L': L, 'chi': chi, 'sweeps': sweeps,
         'energy': float(energy) if energy else None,
-        'solve_time': float(solve_time) if solve_time else None,
-        'wall_time': wall,
+        'solve_time': float(wtime) if wtime else None,
+        'wall_time': float(wtime) if wtime else wall,
         'success': ok and energy is not None,
         'raw_output': out[:2000] if not ok else '',
     }
