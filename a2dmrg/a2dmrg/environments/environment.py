@@ -34,8 +34,14 @@ def build_environments_incremental(mps_arrays, mpo_arrays):
     R_envs : list of ndarray, length L+1
         R_envs[i] has shape (chi_bra, D, chi_ket) for bond i.
     canon_arrays : list of ndarray
-        MPS tensors after canonicalization. canon_arrays[i] is the center tensor
-        when the MPS is in i-orthogonal form.
+        canon_arrays[i] is the center tensor at site i in i-orthogonal form.
+    left_canonical : list of ndarray
+        left_canonical[i] is the left-canonical tensor at site i (from QR in left sweep).
+        Use left_canonical[0..i-1] + canon_arrays[i] + right_canonical[i+1..L-1]
+        to build a consistent candidate MPS at site i.
+    right_canonical : list of ndarray
+        right_canonical[i] is the right-canonical tensor at site i (from step 1).
+        The full list forms a consistent right-canonical MPS.
     """
     L = len(mps_arrays)
     dtype = mps_arrays[0].dtype
@@ -57,11 +63,15 @@ def build_environments_incremental(mps_arrays, mpo_arrays):
     # Build R_envs[0] from site 0
     R_envs[0] = _update_right_env_numpy(R_envs[1], arrays[0], mpo_arrays[0])
 
+    # Save the right-canonical MPS (consistent bond dims, from step 1)
+    right_canonical = [a.copy() for a in arrays]
+
     # --- Step 2: Left-sweep, build L_envs ---
     L_envs = [None] * (L + 1)
     L_envs[0] = np.ones((1, 1, 1), dtype=dtype)
 
     canon_arrays = [None] * L
+    left_canonical = [None] * L
 
     for i in range(L):
         canon_arrays[i] = arrays[i].copy()
@@ -72,13 +82,16 @@ def build_environments_incremental(mps_arrays, mpo_arrays):
             Q, R = np.linalg.qr(mat)
             new_chi = Q.shape[1]
             arrays[i] = Q.reshape(chi_L, d, new_chi)
+            left_canonical[i] = arrays[i].copy()
             arrays[i + 1] = np.tensordot(R, arrays[i + 1], axes=(1, 0))
             L_envs[i + 1] = _update_left_env_numpy(L_envs[i], arrays[i], mpo_arrays[i])
+        else:
+            left_canonical[i] = arrays[i].copy()
 
     # Build L_envs[L] from the last site (for completeness / symmetry with R_envs)
     L_envs[L] = _update_left_env_numpy(L_envs[L - 1], arrays[L - 1], mpo_arrays[L - 1])
 
-    return L_envs, R_envs, canon_arrays
+    return L_envs, R_envs, canon_arrays, left_canonical, right_canonical
 
 
 def _update_left_env_numpy(L_env, A, W):

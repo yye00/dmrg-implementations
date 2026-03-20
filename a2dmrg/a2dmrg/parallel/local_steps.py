@@ -64,10 +64,28 @@ def parallel_local_microsteps(
     mpo_arrays = extract_mpo_arrays(mpo)
 
     # Build all environments in O(L) — all ranks, replicated
-    L_envs, R_envs, canon_arrays = build_environments_incremental(mps_arrays, mpo_arrays)
+    L_envs, R_envs, canon_arrays, lc, rc = build_environments_incremental(mps_arrays, mpo_arrays)
 
     # Distribute sites
     my_sites = distribute_sites(L, n_procs, rank)
+
+    def _build_candidate(site, *center_tensors):
+        """Build candidate MPS: left-canonical[0..site-1] + center + right-canonical[site+k..L-1].
+
+        Bond dimensions are guaranteed consistent because:
+        - lc[i] for i < site comes from the left sweep QR (consistent left bonds)
+        - center tensor(s) are produced in i-orthogonal form (matching left/right bonds)
+        - rc[j] for j > site+k-1 comes from step 1 right-canon (consistent right bonds)
+        """
+        n_center = len(center_tensors)
+        candidate = [None] * L
+        for i in range(site):
+            candidate[i] = lc[i].copy()
+        for k, ct in enumerate(center_tensors):
+            candidate[site + k] = ct
+        for i in range(site + n_center, L):
+            candidate[i] = rc[i].copy()
+        return candidate
 
     results = {}
 
@@ -78,25 +96,22 @@ def parallel_local_microsteps(
                 L_envs[site], R_envs[site + 1],
                 site, L, tol=tol,
             )
-            # Build candidate: use canonicalized arrays (not original mps_arrays!)
-            candidate_arrays = [a.copy() for a in canon_arrays]
-            candidate_arrays[site] = opt_tensor
+            candidate_arrays = _build_candidate(site, opt_tensor)
             results[site] = (candidate_arrays, eigval)
 
     elif microstep_type == "two_site":
         for site in my_sites:
             if site >= L - 1:
                 continue
+            # In i-orthogonal form: canon_arrays[site] is center,
+            # rc[site+1] is right-canonical neighbor.
             U, SVh, eigval = fast_microstep_2site(
-                canon_arrays[site], canon_arrays[site + 1],
+                canon_arrays[site], rc[site + 1],
                 mpo_arrays[site], mpo_arrays[site + 1],
                 L_envs[site], R_envs[site + 2],
                 site, L, max_bond=max_bond, cutoff=cutoff, tol=tol,
             )
-            # Use canon_arrays as base (gauge consistency)
-            candidate_arrays = [a.copy() for a in canon_arrays]
-            candidate_arrays[site] = U
-            candidate_arrays[site + 1] = SVh
+            candidate_arrays = _build_candidate(site, U, SVh)
             results[site] = (candidate_arrays, eigval)
     else:
         raise ValueError(f"Unknown microstep_type: {microstep_type}")

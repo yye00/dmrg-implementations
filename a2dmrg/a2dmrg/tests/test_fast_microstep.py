@@ -22,7 +22,7 @@ def test_fast_microstep_1site_energy():
     E_before = compute_energy(mps, mpo)
     mps_arrays = extract_mps_arrays(mps)
     mpo_arrays = extract_mpo_arrays(mpo)
-    L_envs, R_envs, canon_arrays = build_environments_incremental(mps_arrays, mpo_arrays)
+    L_envs, R_envs, canon_arrays, lc, rc = build_environments_incremental(mps_arrays, mpo_arrays)
 
     # Optimize site 4
     site = 4
@@ -52,11 +52,11 @@ def test_fast_microstep_2site_energy():
     E_before = compute_energy(mps, mpo)
     mps_arrays = extract_mps_arrays(mps)
     mpo_arrays = extract_mpo_arrays(mpo)
-    L_envs, R_envs, canon_arrays = build_environments_incremental(mps_arrays, mpo_arrays)
+    L_envs, R_envs, canon_arrays, lc, rc = build_environments_incremental(mps_arrays, mpo_arrays)
 
     site = 3
     U, SVh, eigval = fast_microstep_2site(
-        canon_arrays[site], canon_arrays[site + 1],
+        canon_arrays[site], rc[site + 1],
         mpo_arrays[site], mpo_arrays[site + 1],
         L_envs[site], R_envs[site + 2],
         site, L, max_bond=20,

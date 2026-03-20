@@ -41,7 +41,7 @@ def test_incremental_envs_match_full_energy():
     mps_arrays = extract_mps_arrays(mps)
     mpo_arrays = extract_mpo_arrays(mpo)
 
-    L_envs, R_envs, canon_arrays = build_environments_incremental(mps_arrays, mpo_arrays)
+    L_envs, R_envs, canon_arrays, lc, rc = build_environments_incremental(mps_arrays, mpo_arrays)
 
     for i in range(L):
         E_site = _brute_force_energy_at_site(
@@ -62,7 +62,7 @@ def test_incremental_envs_boundary_shapes():
     mps_arrays = extract_mps_arrays(mps)
     mpo_arrays = extract_mpo_arrays(mpo)
 
-    L_envs, R_envs, _ = build_environments_incremental(mps_arrays, mpo_arrays)
+    L_envs, R_envs, *_ = build_environments_incremental(mps_arrays, mpo_arrays)
 
     assert L_envs[0].shape == (1, 1, 1)
     assert R_envs[L].shape == (1, 1, 1)
@@ -81,7 +81,7 @@ def test_incremental_envs_complex():
     mps_arrays = extract_mps_arrays(mps)
     mpo_arrays = extract_mpo_arrays(mpo)
 
-    L_envs, R_envs, canon_arrays = build_environments_incremental(mps_arrays, mpo_arrays)
+    L_envs, R_envs, canon_arrays, lc, rc = build_environments_incremental(mps_arrays, mpo_arrays)
 
     for i in range(L + 1):
         assert L_envs[i].dtype == np.complex128
