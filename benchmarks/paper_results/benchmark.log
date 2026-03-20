@@ -224,3 +224,50 @@
   [saved 562 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-20 23:53:27]   quimb-dmrg2 tfim L=64 chi=128 threads=1
 [2026-03-20 23:54:06]     E=-81.125980122849  t=37.9s  OK
+  [saved 563 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:54:06]   [git push: results saved to GitHub]
+[2026-03-20 23:54:06]   quimb-dmrg2 tfim L=64 chi=128 threads=2
+[2026-03-20 23:54:33]     E=-81.125980122854  t=25.8s  OK
+  [saved 564 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:54:33]   quimb-dmrg2 tfim L=64 chi=128 threads=4
+[2026-03-20 23:54:59]     E=-81.125980122848  t=25.9s  OK
+  [saved 565 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:54:59]   quimb-dmrg2 tfim L=100 chi=50 threads=1
+[2026-03-20 23:55:09]     E=-126.961876739157  t=9.3s  OK
+  [saved 566 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:55:09]   quimb-dmrg2 tfim L=100 chi=50 threads=2
+[2026-03-20 23:55:19]     E=-126.961876739156  t=8.6s  OK
+  [saved 567 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:55:19]   quimb-dmrg2 tfim L=100 chi=50 threads=4
+[2026-03-20 23:55:28]     E=-126.961876739174  t=8.6s  OK
+  [saved 568 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:55:28]   quimb-dmrg2 tfim L=100 chi=128 threads=1
+[2026-03-20 23:56:33]     E=-126.961876739164  t=64.4s  OK
+  [saved 569 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:56:33]   quimb-dmrg2 tfim L=100 chi=128 threads=2
+[2026-03-20 23:57:33]     E=-126.961876739160  t=58.4s  OK
+  [saved 570 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:57:33]   quimb-dmrg2 tfim L=100 chi=128 threads=4
+[2026-03-20 23:58:28]     E=-126.961876739166  t=54.4s  OK
+  [saved 571 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:28] ================================================================================
+[2026-03-20 23:58:28] PHASE 2: MPI parallel DMRG (pdmrg + pdmrg2)
+[2026-03-20 23:58:28] ================================================================================
+[2026-03-20 23:58:28]   SKIP pdmrg heisenberg L=32 chi=20 np=2 (timeout)
+[2026-03-20 23:58:28]   SKIP pdmrg heisenberg L=32 chi=20 np=4 (timeout)
+[2026-03-20 23:58:28]   SKIP pdmrg heisenberg L=32 chi=20 np=8 (timeout)
+[2026-03-20 23:58:28]   SKIP pdmrg josephson L=48 chi=50 np=8 (timeout)
+[2026-03-20 23:58:28]   SKIP pdmrg josephson L=48 chi=128 np=2 (timeout)
+[2026-03-20 23:58:28]   SKIP pdmrg josephson L=48 chi=128 np=4 (timeout)
+[2026-03-20 23:58:28]   SKIP pdmrg josephson L=48 chi=128 np=8 (timeout)
+[2026-03-20 23:58:28]   SKIP pdmrg josephson L=64 chi=50 np=2 (timeout)
+[2026-03-20 23:58:28]   SKIP pdmrg josephson L=64 chi=50 np=4 (timeout)
+[2026-03-20 23:58:28]   SKIP pdmrg josephson L=64 chi=50 np=8 (timeout)
+[2026-03-20 23:58:28]   SKIP pdmrg josephson L=64 chi=128 np=2 (timeout)
+[2026-03-20 23:58:28]   SKIP pdmrg josephson L=64 chi=128 np=4 (timeout)
+[2026-03-20 23:58:28]   SKIP pdmrg josephson L=64 chi=128 np=8 (timeout)
+[2026-03-20 23:58:28]   pdmrg tfim L=12 chi=20 np=2
+[2026-03-20 23:58:28]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 572 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:28]   pdmrg tfim L=12 chi=20 np=4
+[2026-03-20 23:58:28]     E=FAIL  t=0.0s  TIMEOUT/FAIL
