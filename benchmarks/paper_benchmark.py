@@ -2,10 +2,11 @@
 """
 Comprehensive DMRG benchmark suite for paper results.
 
-Runs all implementations across Heisenberg and Josephson Junction models
+Runs all implementations across Heisenberg, Josephson Junction, and TFIM models
 at multiple system sizes, bond dimensions, and parallelism levels.
 
 Results are saved as JSON for reproducibility and analysis.
+Periodic git push protects against data loss on ephemeral VMs.
 
 Usage (on MI300X remote host):
     tmux new-session -d -s paper_bench 'cd ~/dmrg-implementations && python3 benchmarks/paper_benchmark.py 2>&1 | tee benchmarks/paper_results/benchmark.log'
@@ -27,10 +28,17 @@ from pathlib import Path
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RESULTS_DIR = os.path.join(REPO, 'benchmarks', 'paper_results')
+
+# GPU binary paths
+DG_BIN = os.path.join(REPO, 'dmrg-gpu', 'build', 'dmrg_gpu')
+D2G_BIN = os.path.join(REPO, 'dmrg2-gpu', 'build', 'dmrg2_gpu')
 PG_BIN = os.path.join(REPO, 'pdmrg-gpu', 'build', 'pdmrg_gpu')
 P2G_BIN = os.path.join(REPO, 'pdmrg2-gpu', 'build', 'pdmrg2_gpu')
 
 TIMEOUT = 1800  # 30 minutes per run
+
+# Push results to GitHub every N results
+GIT_PUSH_INTERVAL = 10
 
 # Models and sizes
 HEISENBERG_SIZES = [
@@ -66,6 +74,23 @@ JOSEPHSON_SIZES = [
     (64, 128, 60, 2),
 ]
 
+TFIM_SIZES = [
+    # (L, chi, sweeps) — h/J = 1.0 (critical point)
+    (12, 20, 30),
+    (12, 50, 30),
+    (12, 128, 40),
+    (20, 20, 30),
+    (20, 50, 30),
+    (20, 128, 40),
+    (32, 20, 30),
+    (32, 50, 30),
+    (32, 128, 40),
+    (64, 50, 40),
+    (64, 128, 50),
+    (100, 50, 50),
+    (100, 128, 60),
+]
+
 # Parallelism sweeps
 # Note: OpenBLAS thread counts >4 cause severe anti-scaling for quimb,
 # especially with complex-valued Josephson (80-100x slowdown at 12 threads).
@@ -74,10 +99,13 @@ JOSEPHSON_SIZES = [
 QUIMB_THREADS = [1, 2, 4]
 MPI_NP = [2, 4, 8]
 GPU_SEGMENTS = [2, 4, 8, 16]
-MAX_CORES = 12
-# Hybrid MPI+threads combos: (np, threads) where np*threads <= MAX_CORES
-HYBRID_COMBOS = [(np_val, thr) for np_val in [2, 4, 8]
-                 for thr in [1, 2, 4] if np_val * thr <= MAX_CORES]
+
+# OOM detection patterns in stderr
+OOM_PATTERNS = [
+    'out of memory', 'OOM', 'MemoryError', 'std::bad_alloc',
+    'hipErrorOutOfMemory', 'HIP out of memory', 'cannot allocate memory',
+    'Killed',  # Linux OOM killer
+]
 
 
 # ============================================================================
@@ -125,12 +153,33 @@ def extract(text, pattern):
     return m.group(1) if m else None
 
 
+def is_oom(output):
+    """Detect out-of-memory errors in command output."""
+    lower = output.lower()
+    return any(pat.lower() in lower for pat in OOM_PATTERNS)
+
+
 def save_results(results, filename='results.json'):
     """Save results to JSON file."""
     path = os.path.join(RESULTS_DIR, filename)
     with open(path, 'w') as f:
         json.dump(results, f, indent=2, default=str)
     print(f"  [saved {len(results)} results to {path}]")
+
+
+def git_push_results():
+    """Commit and push results to GitHub for data safety."""
+    try:
+        subprocess.run(
+            'cd {} && git add benchmarks/paper_results/ && '
+            'git diff --cached --quiet || '
+            'git commit -m "auto: benchmark results update ({})" && '
+            'git push'.format(REPO, datetime.now().strftime('%Y-%m-%d %H:%M')),
+            shell=True, capture_output=True, timeout=60
+        )
+        log("  [git push: results saved to GitHub]")
+    except Exception as e:
+        log(f"  [git push failed: {e}]")
 
 
 def log(msg):
@@ -224,6 +273,44 @@ print(f"TIME={{t1-t0:.3f}}")
     }
 
 
+def run_quimb_tfim(L, chi, sweeps, threads, dmrg_type='DMRG2'):
+    """Run quimb DMRG1 or DMRG2 for transverse-field Ising model."""
+    env = {'OPENBLAS_NUM_THREADS': str(threads), 'OMP_NUM_THREADS': str(threads),
+           'MKL_NUM_THREADS': str(threads)}
+    script = f"""\
+import time
+import sys
+sys.path.insert(0, "{REPO}")
+from benchmarks.lib.models import build_tfim_mpo
+import quimb.tensor as qtn
+
+mpo = build_tfim_mpo({L}, J=1.0, h=1.0)
+dmrg = qtn.{dmrg_type}(mpo, bond_dims=[{chi}], cutoffs=[1e-12])
+t0 = time.time()
+dmrg.solve(max_sweeps={sweeps}, tol=1e-10, verbosity=0)
+t1 = time.time()
+e = dmrg.energy
+if hasattr(e, 'real'):
+    e = e.real
+print(f"ENERGY={{e:.15f}}")
+print(f"TIME={{t1-t0:.3f}}")
+"""
+    out, wall, ok = run_python_script(script, env_extra=env)
+    energy = extract(out, r'ENERGY=([-\d.eE+]+)')
+    solve_time = extract(out, r'TIME=([\d.]+)')
+    return {
+        'impl': f'quimb-{dmrg_type.lower()}',
+        'model': 'tfim',
+        'L': L, 'chi': chi, 'sweeps': sweeps,
+        'threads': threads,
+        'energy': float(energy) if energy else None,
+        'solve_time': float(solve_time) if solve_time else None,
+        'wall_time': wall,
+        'success': ok and energy is not None,
+        'raw_output': out[:2000] if not ok else '',
+    }
+
+
 # ============================================================================
 # MPI PDMRG / PDMRG2 runners
 # ============================================================================
@@ -239,12 +326,19 @@ def run_mpi_pdmrg(L, chi, sweeps, np_val, model='heisenberg', nmax=2, impl='pdmr
 from pdmrg.hamiltonians.heisenberg import build_heisenberg_mpo
 mpo = build_heisenberg_mpo({L})
 """
-    else:
+    elif model == 'josephson':
         mpo_setup = f"""\
 import sys
 sys.path.insert(0, "{REPO}")
 from benchmarks.lib.models import build_josephson_mpo
 mpo = build_josephson_mpo({L}, n_max={nmax})
+"""
+    else:  # tfim
+        mpo_setup = f"""\
+import sys
+sys.path.insert(0, "{REPO}")
+from benchmarks.lib.models import build_tfim_mpo
+mpo = build_tfim_mpo({L}, J=1.0, h=1.0)
 """
 
     script = f"""\
@@ -285,12 +379,83 @@ if MPI.COMM_WORLD.Get_rank() == 0:
 
 
 # ============================================================================
-# GPU PDMRG / PDMRG2 runners
+# Single-GPU DMRG runners (dmrg-gpu, dmrg2-gpu)
+# ============================================================================
+
+def run_gpu_dmrg(L, chi, sweeps, model='heisenberg', nmax=2):
+    """Run single-GPU dmrg-gpu (1-site DMRG).
+
+    Note: dmrg-gpu defaults to CPU SVD — must pass --gpu-svd explicitly.
+    """
+    if model == 'josephson':
+        extra = f'--josephson --nmax {nmax}'
+    elif model == 'tfim':
+        extra = '--tfim --hfield 1.0'
+    else:
+        extra = ''
+    cmd = f'{DG_BIN} {L} {chi} {sweeps} --gpu-svd {extra}'
+    out, wall, ok = run_cmd(cmd)
+    energy = extract(out, r'Final energy:\s*([-\d.eE+]+)')
+    solve_time = extract(out, r'Solve time:\s*([\d.]+)')
+
+    result = {
+        'impl': 'dmrg-gpu',
+        'model': model,
+        'L': L, 'chi': chi, 'sweeps': sweeps,
+        'energy': float(energy) if energy else None,
+        'solve_time': float(solve_time) if solve_time else None,
+        'wall_time': wall,
+        'success': ok and energy is not None,
+        'raw_output': out[:2000] if not ok else '',
+    }
+    if model == 'josephson':
+        result['nmax'] = nmax
+    return result
+
+
+def run_gpu_dmrg2(L, chi, sweeps, model='heisenberg', nmax=2):
+    """Run single-GPU dmrg2-gpu (2-site DMRG).
+
+    Note: dmrg2-gpu defaults to GPU SVD — no extra flag needed.
+    """
+    if model == 'josephson':
+        extra = f'--josephson --nmax {nmax}'
+    elif model == 'tfim':
+        extra = '--tfim --hfield 1.0'
+    else:
+        extra = ''
+    cmd = f'{D2G_BIN} {L} {chi} {sweeps} {extra}'
+    out, wall, ok = run_cmd(cmd)
+    energy = extract(out, r'Final energy:\s*([-\d.eE+]+)')
+    solve_time = extract(out, r'Solve time:\s*([\d.]+)')
+
+    result = {
+        'impl': 'dmrg2-gpu',
+        'model': model,
+        'L': L, 'chi': chi, 'sweeps': sweeps,
+        'energy': float(energy) if energy else None,
+        'solve_time': float(solve_time) if solve_time else None,
+        'wall_time': wall,
+        'success': ok and energy is not None,
+        'raw_output': out[:2000] if not ok else '',
+    }
+    if model == 'josephson':
+        result['nmax'] = nmax
+    return result
+
+
+# ============================================================================
+# GPU PDMRG / PDMRG2 runners (multi-segment parallel)
 # ============================================================================
 
 def run_gpu_pdmrg(L, chi, sweeps, segments, model='heisenberg', nmax=2):
-    """Run pdmrg-gpu."""
-    extra = f'--josephson --nmax {nmax}' if model == 'josephson' else ''
+    """Run pdmrg-gpu (multi-segment parallel, GPU SVD default)."""
+    if model == 'josephson':
+        extra = f'--josephson --nmax {nmax}'
+    elif model == 'tfim':
+        extra = '--tfim --hfield 1.0'
+    else:
+        extra = ''
     cmd = f'{PG_BIN} {L} {chi} {sweeps} --segments {segments} {extra}'
     out, wall, ok = run_cmd(cmd)
     energy = extract(out, r'Final energy:\s*([-\d.eE+]+)')
@@ -316,8 +481,13 @@ def run_gpu_pdmrg(L, chi, sweeps, segments, model='heisenberg', nmax=2):
 
 
 def run_gpu_pdmrg2(L, chi, sweeps, segments, model='heisenberg', nmax=2):
-    """Run pdmrg2-gpu."""
-    extra = f'--josephson --nmax {nmax}' if model == 'josephson' else ''
+    """Run pdmrg2-gpu (multi-segment parallel, GPU SVD default)."""
+    if model == 'josephson':
+        extra = f'--josephson --nmax {nmax}'
+    elif model == 'tfim':
+        extra = '--tfim --hfield 1.0'
+    else:
+        extra = ''
     cmd = f'{P2G_BIN} {L} {chi} {sweeps} --segments {segments} {extra}'
     out, wall, ok = run_cmd(cmd)
     energy = extract(out, r'Final energy:\s*([-\d.eE+]+)')
@@ -382,53 +552,61 @@ def run_all_benchmarks():
     completed = set(make_result_key(r) for r in all_results
                     if r['success'] or r.get('wall_time', 0) >= TIMEOUT * 0.9)
 
-    # Timeout tracking: aggressive skip logic (only real timeouts, not config errors)
-    timeout_at = {}  # legacy: (impl, model, chi, parallelism) -> smallest L
-    timeout_records = []  # new: list of ((impl, model), L, chi) for cross-parameter skipping
+    # Timeout/OOM tracking: aggressive skip logic
+    timeout_records = []  # list of ((impl, model), L, chi) for cross-parameter skipping
+    oom_records = []      # same format for OOM failures
     for r in all_results:
-        if not r['success'] and r.get('wall_time', 0) >= TIMEOUT * 0.9:
-            p = r.get('threads', r.get('np', r.get('segments', '')))
-            key = (r['impl'], r['model'], r['chi'], p)
-            prev = timeout_at.get(key, float('inf'))
-            timeout_at[key] = min(prev, r['L'])
-            timeout_records.append(((r['impl'], r['model']), r['L'], r['chi']))
+        if not r['success']:
+            if r.get('wall_time', 0) >= TIMEOUT * 0.9:
+                timeout_records.append(((r['impl'], r['model']), r['L'], r['chi']))
+            raw = r.get('raw_output', '')
+            if raw and is_oom(raw):
+                oom_records.append(((r['impl'], r['model']), r['L'], r['chi']))
 
     start_time = time.time()
+    results_since_push = 0
 
     def save():
         save_results(all_results)
 
-    def should_skip_timeout(impl, model, L, chi, parallelism):
-        """Aggressively skip if we can infer this will timeout.
+    def maybe_push():
+        nonlocal results_since_push
+        results_since_push += 1
+        if results_since_push >= GIT_PUSH_INTERVAL:
+            git_push_results()
+            results_since_push = 0
+
+    def should_skip(impl, model, L, chi, records):
+        """Skip if we can infer this will fail (timeout or OOM).
 
         Skip when ANY of these hold:
-        1. A smaller L timed out at same (impl, model, chi) with ANY parallelism
-        2. A smaller chi timed out at same (impl, model, L) with ANY parallelism
-        3. Same (impl, model, L, chi) timed out with ANY parallelism value
+        1. A smaller L failed at same (impl, model, chi) with ANY parallelism
+        2. A smaller chi failed at same (impl, model, L) with ANY parallelism
+        3. Same (impl, model, L, chi) failed with ANY parallelism value
         """
-        for key, tL, tchi in timeout_records:
+        for key, fL, fchi in records:
             if key[0] != impl or key[1] != model:
                 continue
-            # Same chi, smaller or equal L timed out → skip larger L
-            if tchi == chi and L >= tL:
+            if fchi == chi and L >= fL:
                 return True
-            # Same L, smaller or equal chi timed out → skip larger chi
-            if tL == L and chi >= tchi:
+            if fL == L and chi >= fchi:
                 return True
-            # Smaller L AND smaller chi timed out → definitely skip
-            if L >= tL and chi >= tchi:
+            if L >= fL and chi >= fchi:
                 return True
         return False
 
-    def record_timeout(impl, model, L, chi, parallelism, wall_time=0):
-        """Record that this config timed out for aggressive skip logic.
-        Only records real timeouts (>=90% of TIMEOUT), not config errors."""
-        if wall_time < TIMEOUT * 0.9:
-            return
-        timeout_records.append(((impl, model), L, chi))
-        key = (impl, model, chi, parallelism)
-        prev = timeout_at.get(key, float('inf'))
-        timeout_at[key] = min(prev, L)
+    def should_skip_timeout(impl, model, L, chi, parallelism):
+        return should_skip(impl, model, L, chi, timeout_records)
+
+    def should_skip_oom(impl, model, L, chi):
+        return should_skip(impl, model, L, chi, oom_records)
+
+    def record_failure(impl, model, L, chi, output, wall_time=0):
+        """Record timeout or OOM for aggressive skip logic."""
+        if wall_time >= TIMEOUT * 0.9:
+            timeout_records.append(((impl, model), L, chi))
+        if is_oom(output):
+            oom_records.append(((impl, model), L, chi))
 
     def is_completed(key):
         return key in completed
@@ -438,7 +616,73 @@ def run_all_benchmarks():
         t_str = f"{r['solve_time']:.1f}s" if r.get('solve_time') else (
             f"{r['wall_time']:.1f}s" if isinstance(r['wall_time'], (int, float)) else str(r['wall_time']))
         status = 'OK' if r['success'] else 'TIMEOUT/FAIL'
+        if not r['success'] and r.get('raw_output') and is_oom(r['raw_output']):
+            status = 'OOM'
         log(f"    E={e_str}  t={t_str}  {status}")
+
+    def run_phase_result(r, impl, model, L, chi, parallelism_key):
+        """Common handler: record result, check failures, save, maybe push."""
+        all_results.append(r)
+        completed.add(parallelism_key)
+        if not r['success']:
+            record_failure(impl, model, L, chi,
+                           r.get('raw_output', ''), r.get('wall_time', 0))
+        log_result(r)
+        save()
+        maybe_push()
+
+    # ------------------------------------------------------------------
+    # Phase 0: Single-GPU DMRG (dmrg-gpu + dmrg2-gpu) — paper core
+    # ------------------------------------------------------------------
+    log("=" * 80)
+    log("PHASE 0: Single-GPU DMRG (dmrg-gpu + dmrg2-gpu)")
+    log("=" * 80)
+
+    for gpu_runner, impl_name in [(run_gpu_dmrg, 'dmrg-gpu'), (run_gpu_dmrg2, 'dmrg2-gpu')]:
+        # Heisenberg
+        for L, chi, sweeps in HEISENBERG_SIZES:
+            key = f"{impl_name}|heisenberg|{L}|{chi}|"
+            if is_completed(key):
+                continue
+            if should_skip_timeout(impl_name, 'heisenberg', L, chi, ''):
+                log(f"  SKIP {impl_name} heisenberg L={L} chi={chi} (timeout)")
+                continue
+            if should_skip_oom(impl_name, 'heisenberg', L, chi):
+                log(f"  SKIP {impl_name} heisenberg L={L} chi={chi} (OOM)")
+                continue
+            log(f"  {impl_name} heisenberg L={L} chi={chi}")
+            r = gpu_runner(L, chi, sweeps, 'heisenberg')
+            run_phase_result(r, impl_name, 'heisenberg', L, chi, key)
+
+        # Josephson
+        for L, chi, sweeps, nmax in JOSEPHSON_SIZES:
+            key = f"{impl_name}|josephson|{L}|{chi}|"
+            if is_completed(key):
+                continue
+            if should_skip_timeout(impl_name, 'josephson', L, chi, ''):
+                log(f"  SKIP {impl_name} josephson L={L} chi={chi} (timeout)")
+                continue
+            if should_skip_oom(impl_name, 'josephson', L, chi):
+                log(f"  SKIP {impl_name} josephson L={L} chi={chi} (OOM)")
+                continue
+            log(f"  {impl_name} josephson L={L} chi={chi}")
+            r = gpu_runner(L, chi, sweeps, 'josephson', nmax)
+            run_phase_result(r, impl_name, 'josephson', L, chi, key)
+
+        # TFIM
+        for L, chi, sweeps in TFIM_SIZES:
+            key = f"{impl_name}|tfim|{L}|{chi}|"
+            if is_completed(key):
+                continue
+            if should_skip_timeout(impl_name, 'tfim', L, chi, ''):
+                log(f"  SKIP {impl_name} tfim L={L} chi={chi} (timeout)")
+                continue
+            if should_skip_oom(impl_name, 'tfim', L, chi):
+                log(f"  SKIP {impl_name} tfim L={L} chi={chi} (OOM)")
+                continue
+            log(f"  {impl_name} tfim L={L} chi={chi}")
+            r = gpu_runner(L, chi, sweeps, 'tfim')
+            run_phase_result(r, impl_name, 'tfim', L, chi, key)
 
     # ------------------------------------------------------------------
     # Phase 1: quimb reference (DMRG1 + DMRG2, all thread counts)
@@ -456,16 +700,11 @@ def run_all_benchmarks():
                 if is_completed(key):
                     continue
                 if should_skip_timeout(impl_name, 'heisenberg', L, chi, threads):
-                    log(f"  SKIP {impl_name} heisenberg L={L} chi={chi} threads={threads} (smaller L timed out)")
+                    log(f"  SKIP {impl_name} heisenberg L={L} chi={chi} threads={threads} (timeout)")
                     continue
                 log(f"  {impl_name} heisenberg L={L} chi={chi} threads={threads}")
                 r = run_quimb_heisenberg(L, chi, sweeps, threads, dmrg_type)
-                all_results.append(r)
-                completed.add(key)
-                if not r['success']:
-                    record_timeout(impl_name, 'heisenberg', L, chi, threads, r.get('wall_time', 0))
-                log_result(r)
-                save()
+                run_phase_result(r, impl_name, 'heisenberg', L, chi, key)
 
         # Josephson
         for L, chi, sweeps, nmax in JOSEPHSON_SIZES:
@@ -474,16 +713,24 @@ def run_all_benchmarks():
                 if is_completed(key):
                     continue
                 if should_skip_timeout(impl_name, 'josephson', L, chi, threads):
-                    log(f"  SKIP {impl_name} josephson L={L} chi={chi} threads={threads} (smaller L timed out)")
+                    log(f"  SKIP {impl_name} josephson L={L} chi={chi} threads={threads} (timeout)")
                     continue
                 log(f"  {impl_name} josephson L={L} chi={chi} threads={threads}")
                 r = run_quimb_josephson(L, chi, sweeps, nmax, threads, dmrg_type)
-                all_results.append(r)
-                completed.add(key)
-                if not r['success']:
-                    record_timeout(impl_name, 'josephson', L, chi, threads, r.get('wall_time', 0))
-                log_result(r)
-                save()
+                run_phase_result(r, impl_name, 'josephson', L, chi, key)
+
+        # TFIM
+        for L, chi, sweeps in TFIM_SIZES:
+            for threads in QUIMB_THREADS:
+                key = f"{impl_name}|tfim|{L}|{chi}|{threads}"
+                if is_completed(key):
+                    continue
+                if should_skip_timeout(impl_name, 'tfim', L, chi, threads):
+                    log(f"  SKIP {impl_name} tfim L={L} chi={chi} threads={threads} (timeout)")
+                    continue
+                log(f"  {impl_name} tfim L={L} chi={chi} threads={threads}")
+                r = run_quimb_tfim(L, chi, sweeps, threads, dmrg_type)
+                run_phase_result(r, impl_name, 'tfim', L, chi, key)
 
     # ------------------------------------------------------------------
     # Phase 2: MPI pdmrg + pdmrg2
@@ -502,16 +749,11 @@ def run_all_benchmarks():
                 if is_completed(key):
                     continue
                 if should_skip_timeout(impl, 'heisenberg', L, chi, np_val):
-                    log(f"  SKIP {impl} heisenberg L={L} chi={chi} np={np_val} (smaller L timed out)")
+                    log(f"  SKIP {impl} heisenberg L={L} chi={chi} np={np_val} (timeout)")
                     continue
                 log(f"  {impl} heisenberg L={L} chi={chi} np={np_val}")
                 r = run_mpi_pdmrg(L, chi, sweeps, np_val, 'heisenberg', impl=impl)
-                all_results.append(r)
-                completed.add(key)
-                if not r['success']:
-                    record_timeout(impl, 'heisenberg', L, chi, np_val, r.get('wall_time', 0))
-                log_result(r)
-                save()
+                run_phase_result(r, impl, 'heisenberg', L, chi, key)
 
         # Josephson
         for L, chi, sweeps, nmax in JOSEPHSON_SIZES:
@@ -522,67 +764,29 @@ def run_all_benchmarks():
                 if is_completed(key):
                     continue
                 if should_skip_timeout(impl, 'josephson', L, chi, np_val):
-                    log(f"  SKIP {impl} josephson L={L} chi={chi} np={np_val} (smaller L timed out)")
+                    log(f"  SKIP {impl} josephson L={L} chi={chi} np={np_val} (timeout)")
                     continue
                 log(f"  {impl} josephson L={L} chi={chi} np={np_val}")
                 r = run_mpi_pdmrg(L, chi, sweeps, np_val, 'josephson', nmax, impl=impl)
-                all_results.append(r)
-                completed.add(key)
-                if not r['success']:
-                    record_timeout(impl, 'josephson', L, chi, np_val, r.get('wall_time', 0))
-                log_result(r)
-                save()
+                run_phase_result(r, impl, 'josephson', L, chi, key)
 
-    # ------------------------------------------------------------------
-    # Phase 2b: Hybrid MPI+threads (pdmrg + pdmrg2)
-    # ------------------------------------------------------------------
-    log("=" * 80)
-    log("PHASE 2b: Hybrid MPI+threads (pdmrg + pdmrg2)")
-    log("=" * 80)
-
-    for impl in ['pdmrg', 'pdmrg2']:
-        # Heisenberg
-        for L, chi, sweeps in HEISENBERG_SIZES:
-            for np_val, threads in HYBRID_COMBOS:
+        # TFIM
+        for L, chi, sweeps in TFIM_SIZES:
+            for np_val in MPI_NP:
                 if np_val > L // 2:
                     continue
-                key = f"{impl}|heisenberg|{L}|{chi}|{np_val}x{threads}"
+                key = f"{impl}|tfim|{L}|{chi}|{np_val}"
                 if is_completed(key):
                     continue
-                if should_skip_timeout(impl, 'heisenberg', L, chi, np_val):
-                    log(f"  SKIP {impl} heisenberg L={L} chi={chi} np={np_val}x{threads} (smaller L timed out)")
+                if should_skip_timeout(impl, 'tfim', L, chi, np_val):
+                    log(f"  SKIP {impl} tfim L={L} chi={chi} np={np_val} (timeout)")
                     continue
-                log(f"  {impl} heisenberg L={L} chi={chi} np={np_val} threads={threads}")
-                r = run_mpi_pdmrg(L, chi, sweeps, np_val, 'heisenberg', impl=impl, threads=threads)
-                all_results.append(r)
-                completed.add(key)
-                if not r['success']:
-                    record_timeout(impl, 'heisenberg', L, chi, np_val, r.get('wall_time', 0))
-                log_result(r)
-                save()
-
-        # Josephson
-        for L, chi, sweeps, nmax in JOSEPHSON_SIZES:
-            for np_val, threads in HYBRID_COMBOS:
-                if np_val > L // 2:
-                    continue
-                key = f"{impl}|josephson|{L}|{chi}|{np_val}x{threads}"
-                if is_completed(key):
-                    continue
-                if should_skip_timeout(impl, 'josephson', L, chi, np_val):
-                    log(f"  SKIP {impl} josephson L={L} chi={chi} np={np_val}x{threads} (smaller L timed out)")
-                    continue
-                log(f"  {impl} josephson L={L} chi={chi} np={np_val} threads={threads}")
-                r = run_mpi_pdmrg(L, chi, sweeps, np_val, 'josephson', nmax, impl=impl, threads=threads)
-                all_results.append(r)
-                completed.add(key)
-                if not r['success']:
-                    record_timeout(impl, 'josephson', L, chi, np_val, r.get('wall_time', 0))
-                log_result(r)
-                save()
+                log(f"  {impl} tfim L={L} chi={chi} np={np_val}")
+                r = run_mpi_pdmrg(L, chi, sweeps, np_val, 'tfim', impl=impl)
+                run_phase_result(r, impl, 'tfim', L, chi, key)
 
     # ------------------------------------------------------------------
-    # Phase 3: GPU pdmrg-gpu + pdmrg2-gpu
+    # Phase 3: GPU pdmrg-gpu + pdmrg2-gpu (multi-segment parallel)
     # ------------------------------------------------------------------
     log("=" * 80)
     log("PHASE 3: GPU parallel DMRG (pdmrg-gpu + pdmrg2-gpu)")
@@ -599,16 +803,14 @@ def run_all_benchmarks():
                 if is_completed(key):
                     continue
                 if should_skip_timeout(impl_name, 'heisenberg', L, chi, seg):
-                    log(f"  SKIP {impl_name} heisenberg L={L} chi={chi} seg={seg} (smaller L timed out)")
+                    log(f"  SKIP {impl_name} heisenberg L={L} chi={chi} seg={seg} (timeout)")
+                    continue
+                if should_skip_oom(impl_name, 'heisenberg', L, chi):
+                    log(f"  SKIP {impl_name} heisenberg L={L} chi={chi} seg={seg} (OOM)")
                     continue
                 log(f"  {impl_name} heisenberg L={L} chi={chi} segments={seg}")
                 r = gpu_runner(L, chi, sweeps, seg, 'heisenberg')
-                all_results.append(r)
-                completed.add(key)
-                if not r['success']:
-                    record_timeout(impl_name, 'heisenberg', L, chi, seg, r.get('wall_time', 0))
-                log_result(r)
-                save()
+                run_phase_result(r, impl_name, 'heisenberg', L, chi, key)
 
         # Josephson
         for L, chi, sweeps, nmax in JOSEPHSON_SIZES:
@@ -620,16 +822,33 @@ def run_all_benchmarks():
                 if is_completed(key):
                     continue
                 if should_skip_timeout(impl_name, 'josephson', L, chi, seg):
-                    log(f"  SKIP {impl_name} josephson L={L} chi={chi} seg={seg} (smaller L timed out)")
+                    log(f"  SKIP {impl_name} josephson L={L} chi={chi} seg={seg} (timeout)")
+                    continue
+                if should_skip_oom(impl_name, 'josephson', L, chi):
+                    log(f"  SKIP {impl_name} josephson L={L} chi={chi} seg={seg} (OOM)")
                     continue
                 log(f"  {impl_name} josephson L={L} chi={chi} segments={seg}")
                 r = gpu_runner(L, chi, sweeps, seg, 'josephson', nmax)
-                all_results.append(r)
-                completed.add(key)
-                if not r['success']:
-                    record_timeout(impl_name, 'josephson', L, chi, seg, r.get('wall_time', 0))
-                log_result(r)
-                save()
+                run_phase_result(r, impl_name, 'josephson', L, chi, key)
+
+        # TFIM
+        for L, chi, sweeps in TFIM_SIZES:
+            for seg in GPU_SEGMENTS:
+                max_seg = max_segments_for_L(L)
+                if seg > max_seg:
+                    continue
+                key = f"{impl_name}|tfim|{L}|{chi}|{seg}"
+                if is_completed(key):
+                    continue
+                if should_skip_timeout(impl_name, 'tfim', L, chi, seg):
+                    log(f"  SKIP {impl_name} tfim L={L} chi={chi} seg={seg} (timeout)")
+                    continue
+                if should_skip_oom(impl_name, 'tfim', L, chi):
+                    log(f"  SKIP {impl_name} tfim L={L} chi={chi} seg={seg} (OOM)")
+                    continue
+                log(f"  {impl_name} tfim L={L} chi={chi} segments={seg}")
+                r = gpu_runner(L, chi, sweeps, seg, 'tfim')
+                run_phase_result(r, impl_name, 'tfim', L, chi, key)
 
     # ------------------------------------------------------------------
     # Summary
@@ -653,6 +872,8 @@ def run_all_benchmarks():
     log(f"Summary CSV: {csv_path}")
 
     save()
+    # Final push to GitHub
+    git_push_results()
     return all_results
 
 

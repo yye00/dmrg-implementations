@@ -47,3 +47,27 @@ def build_josephson_mpo(L, E_J=1.0, E_C=0.5, mu=0.0, n_max=2):
         builder.add_term(-mu, n_op)
 
     return builder.build_mpo(L)
+
+
+def build_tfim_mpo(L, J=1.0, h=1.0):
+    """Build transverse-field Ising model MPO.
+
+    H = -J Σ σᶻᵢ σᶻᵢ₊₁ - h Σ σˣᵢ
+
+    At h/J = 1.0 this is the quantum critical point (most entangled,
+    hardest case). Real-valued, d=2, D_mpo=3.
+
+    Args:
+        L: chain length
+        J: Ising coupling strength
+        h: transverse field strength
+
+    Returns:
+        quimb MatrixProductOperator
+    """
+    import quimb.tensor as qtn
+
+    builder = qtn.SpinHam1D(S=0.5)
+    builder.add_term(-J, 'Z', 'Z')
+    builder.add_term(-h, 'X')
+    return builder.build_mpo(L)

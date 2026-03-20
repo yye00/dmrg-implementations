@@ -69,6 +69,60 @@ void build_heisenberg_mpo(int L, int D_mpo, std::vector<double*>& h_mpo_tensors)
 }
 
 // ============================================================================
+// Transverse-Field Ising Model MPO (real, D=3, upper triangular)
+// ============================================================================
+// H = -J sum_i sigma^z_i sigma^z_{i+1} - h sum_i sigma^x_i
+//
+// Transfer matrix (D=3):
+//   Row 0: [I,    -J*Sz,   -h*Sx]
+//   Row 1: [0,     0,       Sz   ]
+//   Row 2: [0,     0,       I    ]
+//
+void build_tfim_mpo(int L, int D_mpo, double J, double h_field,
+                    std::vector<double*>& h_mpo_tensors) {
+    double Sx[4] = {0, 1, 1, 0};   // sigma_x (Pauli X)
+    double Sz[4] = {1, 0, 0, -1};  // sigma_z (Pauli Z)
+    double Id[4] = {1, 0, 0, 1};
+
+    for (int site = 0; site < L; site++) {
+        int d = 2;
+        int size = D_mpo * d * d * D_mpo;
+        h_mpo_tensors[site] = new double[size]();
+
+        if (site == 0) {
+            // Left boundary: only row 0 (D_L=0)
+            for (int s = 0; s < d; s++)
+                for (int sp = 0; sp < d; sp++) {
+                    int idx = sp*d + s;
+                    h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*d + 0*D_mpo*d*d] = Id[idx];
+                    h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*d + 1*D_mpo*d*d] = -J * Sz[idx];
+                    h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*d + 2*D_mpo*d*d] = -h_field * Sx[idx];
+                }
+        } else if (site == L - 1) {
+            // Right boundary: only column 2 (D_R=2)
+            for (int s = 0; s < d; s++)
+                for (int sp = 0; sp < d; sp++) {
+                    int idx = sp*d + s;
+                    h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*d + 2*D_mpo*d*d] = -h_field * Sx[idx];
+                    h_mpo_tensors[site][1 + s*D_mpo + sp*D_mpo*d + 2*D_mpo*d*d] = Sz[idx];
+                    h_mpo_tensors[site][2 + s*D_mpo + sp*D_mpo*d + 2*D_mpo*d*d] = Id[idx];
+                }
+        } else {
+            // Bulk: full transfer matrix
+            for (int s = 0; s < d; s++)
+                for (int sp = 0; sp < d; sp++) {
+                    int idx = sp*d + s;
+                    h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*d + 0*D_mpo*d*d] = Id[idx];
+                    h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*d + 1*D_mpo*d*d] = -J * Sz[idx];
+                    h_mpo_tensors[site][0 + s*D_mpo + sp*D_mpo*d + 2*D_mpo*d*d] = -h_field * Sx[idx];
+                    h_mpo_tensors[site][1 + s*D_mpo + sp*D_mpo*d + 2*D_mpo*d*d] = Sz[idx];
+                    h_mpo_tensors[site][2 + s*D_mpo + sp*D_mpo*d + 2*D_mpo*d*d] = Id[idx];
+                }
+        }
+    }
+}
+
+// ============================================================================
 // Josephson Junction MPO (complex128, D=4, UPPER triangular)
 // ============================================================================
 // H = E_C sum_i (n_i - n_g)^2 - (E_J/2) sum_<ij> [e^{i*phi_ext} phi+_i phi-_j + h.c.]
@@ -226,6 +280,42 @@ int test_heisenberg(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd = 
 }
 
 // ============================================================================
+// TFIM test (real)
+// ============================================================================
+int test_tfim(int L, int chi_max, int n_sweeps, bool gpu_svd, double J, double h_field,
+              bool rsvd = false) {
+    int d = 2;
+    int D_mpo = 3;
+
+    printf("======================================\n");
+    printf("TFIM DMRG-GPU Test (float64)\n");
+    printf("======================================\n");
+    printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
+    printf("  J=%.4f, h=%.4f\n", J, h_field);
+    printf("  SVD: %s%s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)",
+           rsvd ? " + randomized truncation" : "");
+    printf("======================================\n\n");
+
+    DMRGGPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    dmrg.set_cpu_svd(!gpu_svd);
+    dmrg.set_rsvd(rsvd);
+    dmrg.initialize_mps_random();
+
+    std::vector<double*> h_mpo_tensors(L);
+    build_tfim_mpo(L, D_mpo, J, h_field, h_mpo_tensors);
+    dmrg.set_mpo(h_mpo_tensors);
+
+    double energy = dmrg.run(n_sweeps);
+
+    printf("\n--- RESULT ---\n");
+    printf("Final energy: %.12f\n", energy);
+    printf("Energy per site: %.12f\n", energy / L);
+
+    for (auto ptr : h_mpo_tensors) delete[] ptr;
+    return 0;
+}
+
+// ============================================================================
 // Josephson Junction test (complex128)
 // ============================================================================
 int test_josephson(int L, int chi_max, int n_sweeps, bool gpu_svd,
@@ -293,14 +383,18 @@ int main(int argc, char** argv) {
     bool gpu_svd = false;
     bool rsvd = false;
     bool run_josephson = false;
+    bool run_tfim = false;
     int n_max = 1;
     double E_J = 1.0, E_C = 0.5, phi_ext = M_PI / 4;
+    double J_tfim = 1.0, h_field = 1.0;
 
     // Parse args
     for (int i = 1; i < argc; i++) {
         if (std::string(argv[i]) == "--gpu-svd") { gpu_svd = true; continue; }
         if (std::string(argv[i]) == "--rsvd") { rsvd = true; continue; }
         if (std::string(argv[i]) == "--josephson") { run_josephson = true; continue; }
+        if (std::string(argv[i]) == "--tfim") { run_tfim = true; continue; }
+        if (std::string(argv[i]) == "--hfield" && i+1 < argc) { h_field = std::atof(argv[++i]); continue; }
         if (std::string(argv[i]) == "--nmax" && i+1 < argc) { n_max = std::atoi(argv[++i]); continue; }
         if (std::string(argv[i]) == "--ej" && i+1 < argc) { E_J = std::atof(argv[++i]); continue; }
         if (std::string(argv[i]) == "--ec" && i+1 < argc) { E_C = std::atof(argv[++i]); continue; }
@@ -318,7 +412,8 @@ int main(int argc, char** argv) {
         for (int i = 1; i < argc; i++) {
             if (argv[i][0] == '-') {
                 if (std::string(argv[i]) == "--nmax" || std::string(argv[i]) == "--ej"
-                    || std::string(argv[i]) == "--ec" || std::string(argv[i]) == "--phi")
+                    || std::string(argv[i]) == "--ec" || std::string(argv[i]) == "--phi"
+                    || std::string(argv[i]) == "--hfield")
                     i++;  // skip value
                 continue;
             }
@@ -332,6 +427,8 @@ int main(int argc, char** argv) {
     try {
         if (run_josephson) {
             return test_josephson(L, chi_max, n_sweeps, gpu_svd, n_max, E_J, E_C, phi_ext, rsvd);
+        } else if (run_tfim) {
+            return test_tfim(L, chi_max, n_sweeps, gpu_svd, J_tfim, h_field, rsvd);
         } else {
             return test_heisenberg(L, chi_max, n_sweeps, gpu_svd, rsvd);
         }
