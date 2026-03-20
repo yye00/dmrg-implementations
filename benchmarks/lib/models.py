@@ -67,7 +67,11 @@ def build_tfim_mpo(L, J=1.0, h=1.0):
     """
     import quimb.tensor as qtn
 
+    # quimb SpinHam1D(S=0.5) uses spin-1/2 operators: Sz=σz/2, Sx=σx/2
+    # To get Pauli convention H = -J σz⊗σz - h σx:
+    #   -J σz⊗σz = -J (2Sz)⊗(2Sz) = -4J Sz⊗Sz
+    #   -h σx     = -h (2Sx)        = -2h Sx
     builder = qtn.SpinHam1D(S=0.5)
-    builder.add_term(-J, 'Z', 'Z')
-    builder.add_term(-h, 'X')
+    builder.add_term(-4 * J, 'Z', 'Z')
+    builder.add_term(-2 * h, 'X')
     return builder.build_mpo(L)
