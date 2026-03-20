@@ -37,6 +37,7 @@ slurm-*.out
 # Test outputs
 *.json
 !benchmarks/*.json
+!benchmarks/**/*.json
 
 # Virtual environments in subdirectories
 pdmrg/venv/
