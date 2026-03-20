@@ -162,3 +162,34 @@
   [saved 542 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-20 23:52:25]   quimb-dmrg2 tfim L=20 chi=20 threads=2
 [2026-03-20 23:52:26]     E=-25.107797111585  t=0.4s  OK
+  [saved 543 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:52:27]   [git push: results saved to GitHub]
+[2026-03-20 23:52:27]   quimb-dmrg2 tfim L=20 chi=20 threads=4
+[2026-03-20 23:52:28]     E=-25.107797111585  t=0.4s  OK
+  [saved 544 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:52:28]   quimb-dmrg2 tfim L=20 chi=50 threads=1
+[2026-03-20 23:52:29]     E=-25.107797111585  t=0.5s  OK
+  [saved 545 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:52:29]   quimb-dmrg2 tfim L=20 chi=50 threads=2
+[2026-03-20 23:52:30]     E=-25.107797111585  t=0.6s  OK
+  [saved 546 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:52:30]   quimb-dmrg2 tfim L=20 chi=50 threads=4
+[2026-03-20 23:52:31]     E=-25.107797111585  t=0.5s  OK
+  [saved 547 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:52:31]   quimb-dmrg2 tfim L=20 chi=128 threads=1
+[2026-03-20 23:52:34]     E=-25.107797111585  t=1.4s  OK
+  [saved 548 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:52:34]   quimb-dmrg2 tfim L=20 chi=128 threads=2
+[2026-03-20 23:52:36]     E=-25.107797111585  t=1.7s  OK
+  [saved 549 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:52:36]   quimb-dmrg2 tfim L=20 chi=128 threads=4
+[2026-03-20 23:52:38]     E=-25.107797111585  t=1.2s  OK
+  [saved 550 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:52:38]   quimb-dmrg2 tfim L=32 chi=20 threads=1
+[2026-03-20 23:52:39]     E=-40.384313161104  t=0.7s  OK
+  [saved 551 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:52:39]   quimb-dmrg2 tfim L=32 chi=20 threads=2
+[2026-03-20 23:52:41]     E=-40.384313161104  t=0.7s  OK
+  [saved 552 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:52:41]   quimb-dmrg2 tfim L=32 chi=20 threads=4
+[2026-03-20 23:52:42]     E=-40.384313161098  t=0.6s  OK
