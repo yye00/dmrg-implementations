@@ -440,3 +440,34 @@
   [saved 612 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-20 23:58:30]   pdmrg2 tfim L=12 chi=128 np=4
 [2026-03-20 23:58:30]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 613 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:31]   [git push: results saved to GitHub]
+[2026-03-20 23:58:31]   pdmrg2 tfim L=20 chi=20 np=2
+[2026-03-20 23:58:31]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 614 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:31]   pdmrg2 tfim L=20 chi=20 np=4
+[2026-03-20 23:58:31]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 615 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:31]   pdmrg2 tfim L=20 chi=20 np=8
+[2026-03-20 23:58:31]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 616 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:31]   pdmrg2 tfim L=20 chi=50 np=2
+[2026-03-20 23:58:31]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 617 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:31]   pdmrg2 tfim L=20 chi=50 np=4
+[2026-03-20 23:58:31]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 618 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:31]   pdmrg2 tfim L=20 chi=50 np=8
+[2026-03-20 23:58:31]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 619 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:31]   pdmrg2 tfim L=20 chi=128 np=2
+[2026-03-20 23:58:31]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 620 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:31]   pdmrg2 tfim L=20 chi=128 np=4
+[2026-03-20 23:58:31]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 621 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:31]   pdmrg2 tfim L=20 chi=128 np=8
+[2026-03-20 23:58:31]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 622 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:31]   pdmrg2 tfim L=32 chi=20 np=2
+[2026-03-20 23:58:31]     E=FAIL  t=0.0s  TIMEOUT/FAIL
