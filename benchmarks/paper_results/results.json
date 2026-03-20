@@ -7165,5 +7165,31 @@
     "wall_time": 42.93011450767517,
     "success": true,
     "raw_output": ""
+  },
+  {
+    "impl": "quimb-dmrg1",
+    "model": "tfim",
+    "L": 100,
+    "chi": 128,
+    "sweeps": 60,
+    "threads": 4,
+    "energy": -126.96187673965858,
+    "solve_time": 40.015,
+    "wall_time": 40.8091242313385,
+    "success": true,
+    "raw_output": ""
+  },
+  {
+    "impl": "quimb-dmrg2",
+    "model": "tfim",
+    "L": 12,
+    "chi": 20,
+    "sweeps": 30,
+    "threads": 1,
+    "energy": -14.925971109896437,
+    "solve_time": 0.145,
+    "wall_time": 0.7952954769134521,
+    "success": true,
+    "raw_output": ""
   }
 ]
