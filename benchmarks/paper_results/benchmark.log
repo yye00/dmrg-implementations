@@ -364,3 +364,79 @@
   [saved 602 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-20 23:58:30]   pdmrg tfim L=100 chi=50 np=4
 [2026-03-20 23:58:30]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 603 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:30]   [git push: results saved to GitHub]
+[2026-03-20 23:58:30]   pdmrg tfim L=100 chi=50 np=8
+[2026-03-20 23:58:30]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 604 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:30]   pdmrg tfim L=100 chi=128 np=2
+[2026-03-20 23:58:30]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 605 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:30]   pdmrg tfim L=100 chi=128 np=4
+[2026-03-20 23:58:30]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 606 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:30]   pdmrg tfim L=100 chi=128 np=8
+[2026-03-20 23:58:30]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 607 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=20 chi=20 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=20 chi=20 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=20 chi=50 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=20 chi=50 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=20 chi=50 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=20 chi=128 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=20 chi=128 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=20 chi=128 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=32 chi=20 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=32 chi=20 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=32 chi=20 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=32 chi=50 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=32 chi=50 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=32 chi=50 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=32 chi=128 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=32 chi=128 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=32 chi=128 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=64 chi=50 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=64 chi=50 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=64 chi=50 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=64 chi=128 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=64 chi=128 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=64 chi=128 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=100 chi=50 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=100 chi=50 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=100 chi=50 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=100 chi=128 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=100 chi=128 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 heisenberg L=100 chi=128 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=16 chi=128 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=16 chi=128 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=32 chi=128 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=32 chi=128 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=32 chi=128 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=48 chi=50 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=48 chi=50 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=48 chi=128 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=48 chi=128 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=48 chi=128 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=64 chi=50 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=64 chi=50 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=64 chi=50 np=8 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=64 chi=128 np=2 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=64 chi=128 np=4 (timeout)
+[2026-03-20 23:58:30]   SKIP pdmrg2 josephson L=64 chi=128 np=8 (timeout)
+[2026-03-20 23:58:30]   pdmrg2 tfim L=12 chi=20 np=2
+[2026-03-20 23:58:30]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 608 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:30]   pdmrg2 tfim L=12 chi=20 np=4
+[2026-03-20 23:58:30]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 609 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:30]   pdmrg2 tfim L=12 chi=50 np=2
+[2026-03-20 23:58:30]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 610 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:30]   pdmrg2 tfim L=12 chi=50 np=4
+[2026-03-20 23:58:30]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 611 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:30]   pdmrg2 tfim L=12 chi=128 np=2
+[2026-03-20 23:58:30]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 612 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:30]   pdmrg2 tfim L=12 chi=128 np=4
+[2026-03-20 23:58:30]     E=FAIL  t=0.0s  TIMEOUT/FAIL
