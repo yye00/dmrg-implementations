@@ -463,6 +463,151 @@ gains.
 
 ---
 
+## 8. Application Regimes: Where Each Approach Works
+
+### 8.1 The Paper's Regime: Small-d Quantum Chemistry
+
+The Grigori-Hassan paper targets **ab initio quantum chemistry** — computing ground state
+energies of small molecules using second-quantized electronic Hamiltonians in a
+spin-orbital basis.
+
+**Characteristics of this regime:**
+
+| Property | Quantum Chemistry |
+|----------|------------------|
+| Sites (d) | 12–24 (spin orbitals, scales with basis set) |
+| Physical dim | 2 (occupation number: empty/filled) |
+| Bond dim (r) | 16–512 (grows with correlation strength) |
+| MPO structure | Dense, long-range (all-to-all two-electron integrals) |
+| MPO bond dim (D) | Grows with d (D ~ d for molecular Hamiltonians) |
+| Hamiltonians | Real-valued (electronic structure in real basis) |
+| Accuracy target | ~10⁻⁶ relative (chemical accuracy ~1 mHa) |
+| Processor count | d−1 (one per bond, 11–23 processors) |
+
+**Why A2DMRG works here:**
+- Small d means few candidates (≤24), so compression ratio ≤24:1
+- Rank growth from small initial values avoids early compression loss
+- Dense MPO couples all sites, so coarse-space correction propagates information globally
+- 10⁻⁶ tolerance is easily reachable
+- d−1 processors is feasible (12–23 cores on one node)
+
+**Limitations the paper doesn't face:**
+- d never exceeds 24, so compression ratio stays manageable
+- Never tests complex-valued Hamiltonians
+- Never tests sparse/local MPO structure (like Heisenberg D=5)
+- Measures FLOP speedup, not wall-clock — avoids MPI overhead question
+
+### 8.2 Our Target Regime: Quantum Computing Applications
+
+Our target is **quantum computing simulation** — computing ground states, simulating
+circuits, and benchmarking quantum algorithms using tensor network methods.
+
+**Key applications:**
+- **Variational Quantum Eigensolver (VQE)**: Classical optimizer needs ground state
+  energy repeatedly for different Hamiltonian parameters. Parallel evaluation across
+  parameter space is natural, but each evaluation needs accurate MPS ground state.
+- **Quantum Approximate Optimization (QAOA)**: Simulating QAOA circuits on classical
+  hardware to benchmark quantum advantage claims. Involves L=50–200 qubits.
+- **Quantum error correction**: Simulating stabilizer codes and noise channels. Surface
+  codes have L = O(d²) physical qubits with local stabilizer Hamiltonians.
+- **Entanglement studies**: Computing entanglement entropy, mutual information, and
+  other correlation measures for quantum many-body systems relevant to quantum hardware.
+
+**Characteristics of this regime:**
+
+| Property | Quantum Computing |
+|----------|-------------------|
+| Sites (L) | 50–200+ (qubits, scales with quantum hardware) |
+| Physical dim | 2 (qubit) or 4+ (qudit, bosonic codes) |
+| Bond dim (χ) | 32–256 (limited by classical resources) |
+| MPO structure | Sparse, local (nearest-neighbor or few-body) |
+| MPO bond dim (D) | O(1) for local Hamiltonians (D=5 for Heisenberg) |
+| Hamiltonians | Real AND complex (quantum circuits, Floquet, etc.) |
+| Accuracy target | 10⁻⁸ to 10⁻¹² (quantum simulation fidelity) |
+| Processor count | Limited by available GPUs (1–8 typical, 64+ on clusters) |
+
+**Where A2DMRG struggles here (and why):**
+
+1. **Large L / moderate χ = catastrophic compression ratio.** For L=100 χ=64, the
+   compression ratio is 99:1 — the linear combination MPS has bond dim 6336 before
+   TT-SVD compresses it to 64. This destroys most of the coarse-space gain every sweep.
+
+2. **Sparse MPOs don't help the coarse space.** With D=5 (Heisenberg), the coarse-space
+   correction can only propagate information locally. The paper's dense MPOs (D ~ d)
+   couple all sites, making the coarse space more effective.
+
+3. **Complex Hamiltonians.** Quantum circuits and Floquet Hamiltonians produce complex
+   amplitudes. Our Bose-Hubbard tests (complex128) failed catastrophically. The paper
+   never tests this.
+
+4. **High accuracy needed.** Quantum simulation fidelity requires 10⁻⁸ or better for
+   meaningful benchmarks. The paper's 10⁻⁶ tolerance is insufficient for our applications.
+
+5. **Few processors available.** GPU clusters typically have 4–8 GPUs per node. A2DMRG
+   needs P ≈ L processors to achieve its theoretical speedup. With P=4 on L=100, each
+   rank handles 25 bonds — the algorithm degenerates to a slower version of serial DMRG.
+
+### 8.3 Where Our Implementation Shines
+
+Despite the A2DMRG algorithm's limitations for quantum computing at scale, our
+implementation work produced valuable components:
+
+**1. GPU-native DMRG (dmrg-gpu, dmrg2-gpu)**
+These are the real workhorses for quantum computing simulation:
+- L=32 χ=64 in 1.3s (single-site) / 2.1s (two-site) on MI300X
+- 3–5× faster than quimb at χ≥128
+- Templates for both real and complex (hipDoubleComplex)
+- All contractions via rocBLAS — no CPU loops in hot path
+
+**2. The DMRG warmup + parallel polish pattern**
+Even though the A2DMRG phase adds little value, the pattern of "serial DMRG warmup
+followed by parallel refinement" is sound. The warmup sweep data shows:
+
+| Approach | L=32 χ=20 accuracy | Time |
+|----------|-------------------|------|
+| DMRG2 alone (20 sweeps) | machine precision | 0.4s |
+| wu=2 + A2DMRG (np=4) | 3.1×10⁻⁷ | 0.3s |
+| wu=5 + A2DMRG (np=4) | 3.7×10⁻¹³ | 0.4s |
+
+The parallel phase doesn't buy much here, but for larger χ on GPUs, distributing local
+updates across multiple GPUs could hide latency in the eigensolver.
+
+**3. O(L) environment caching**
+Incremental environment building is essential for any DMRG implementation and is reusable
+across serial and parallel algorithms.
+
+**4. Pure numpy tensor pipeline**
+The extract → numpy → solve → reconstruct pipeline eliminates quimb overhead and is
+directly portable to GPU (replace np.tensordot with rocBLAS dgemm).
+
+### 8.4 Recommended Path for Quantum Computing
+
+Given our findings, the recommended strategy for quantum computing DMRG is:
+
+1. **Single-GPU DMRG2** for L ≤ 100, χ ≤ 256: Our dmrg2-gpu already handles this
+   regime well. One MI300X can do L=32 χ=64 in 2.1s. Scaling to L=100 χ=128 is
+   straightforward with existing code.
+
+2. **Multi-GPU parallelism within contractions** for χ > 256: Distribute the large
+   matrix operations (GEMM, SVD) across GPUs. This is the Block2/Menczer approach and
+   scales naturally with χ.
+
+3. **Pipeline parallelism** (Stoudenmire-White) for multiple parameter points: Run
+   staggered sweeps on different GPUs for Hamiltonian parameter scans (VQE optimization,
+   phase diagrams). This exploits the embarrassing parallelism of parameter sweeps.
+
+4. **A2DMRG only for d ≤ 30** with large χ: The algorithm genuinely helps when the
+   number of sites is small relative to bond dim — exactly the quantum chemistry regime.
+   For quantum computing problems that happen to have small effective system size (e.g.,
+   reduced models, effective Hamiltonians), A2DMRG with rank growth could be competitive.
+
+**A2DMRG is not the path to parallel quantum computing simulation.** The compression
+bottleneck at large L/χ is fundamental, not fixable with more warmup or engineering. The
+established approaches (parallelize within contractions, pipeline sweeps) are better
+suited to the L=50–200 χ=32–256 regime of quantum computing.
+
+---
+
 ## Appendix: Key Differences Summary
 
 | Aspect | Grigori-Hassan Paper | Our Implementation |
