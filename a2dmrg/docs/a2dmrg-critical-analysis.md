@@ -463,9 +463,80 @@ gains.
 
 ---
 
-## 8. Application Regimes: Where Each Approach Works
+## 8. Application Regimes and the Case Against A2DMRG for Quantum Computing
 
-### 8.1 The Paper's Regime: Small-d Quantum Chemistry
+This section presents the quantitative evidence for why A2DMRG is unsuitable for our
+target application domain (quantum computing simulation) despite being a correct and
+functional algorithm for the domain it was designed for (small-molecule quantum chemistry).
+
+### 8.1 The Compression Bottleneck: A Quantitative Analysis
+
+The central issue in A2DMRG is the **TT-SVD compression** after the linear combination
+phase. Understanding this quantitatively is essential for evaluating the algorithm's
+applicability to any regime.
+
+**The mechanism.** In each A2DMRG iteration:
+
+1. L−1 local two-site micro-steps produce L−1 candidate MPS states, each at bond
+   dimension χ.
+2. The coarse-space solver computes optimal coefficients c₀, c₁, …, c_{L−1} over these
+   candidates plus the original state (d+1 total candidates for d = L−1 bonds).
+3. The linear combination Ỹ = Σⱼ cⱼ Y⁽ʲ⁾ is formed as a block-diagonal MPS with bond
+   dimension up to (L−1)·χ at interior bonds (site 0 concatenates along the right bond,
+   interior sites are block-diagonal, site L−1 concatenates along the left bond).
+4. TT-SVD compresses this inflated MPS back to bond dimension χ.
+
+The **compression ratio** R = (L−1)·χ / χ = L−1 determines how much information is
+discarded. The singular values below rank χ in the TT-SVD are truncated, and the
+corresponding entanglement information is lost.
+
+**Measured compression loss.** We quantify this as E_compressed − E_coarse, the energy
+difference between the coarse-space prediction (before compression) and the actual energy
+after TT-SVD:
+
+| System | L | χ | Candidates | R (ratio) | Compression loss per sweep |
+|--------|---|---|------------|-----------|---------------------------|
+| H6 (qchem) | 12 | 48 | 12 | 11:1 | < 10⁻⁵ (negligible) |
+| H6 (qchem) | 12 | 32 | 12 | 11:1 | < 10⁻⁴ (negligible) |
+| Heisenberg | 8 | 20 | 8 | 7:1 | < 10⁻¹⁰ (negligible) |
+| Heisenberg | 16 | 20 | 16 | 15:1 | ~10⁻² |
+| Heisenberg | 32 | 20 | 32 | 31:1 | ~1.6 (catastrophic) |
+
+The transition from negligible to catastrophic compression loss occurs around R ≈ 15–20.
+Below this threshold, the TT-SVD preserves the coarse-space energy gain. Above it, the
+compression destroys more energy than the coarse-space correction gains, and the algorithm
+either converges extremely slowly or oscillates.
+
+**Interaction with rank growth.** The paper's approach — starting from "very small rank
+parameters" — mitigates this in early iterations. If the initial rank is r₀ = 2, then
+the first linear combination has bond dim (L−1)·2 = 2L−2. For H6 (L=12), that is 22,
+which fits inside the target r = 48 with no truncation. Ranks grow gradually over several
+iterations, and the full compression pressure of R = L−1 is only reached after the MPS
+has converged enough that truncation error is small.
+
+Our implementation starts at full bond dimension (Néel state padded to χ), so the
+compression ratio is maximal from sweep 1. This is the primary reason our warmup=0
+results degrade at large L: the algorithm never gets the gentle early-iteration
+convergence that the paper's rank-growth trajectory provides.
+
+**The fundamental scaling law.** For a system of L sites at target bond dimension χ, the
+per-sweep compression ratio is R = L−1. The truncation error ε_trunc in TT-SVD scales
+roughly as:
+
+    ε_trunc ~ σ_{χ+1} / σ_1
+
+where σ_i are the singular values of the reshaped MPS at each bond. For the linear
+combination of L nearly-orthogonal candidates, the singular value spectrum is broad (many
+comparable singular values), making ε_trunc large when R >> 1. This is in contrast to a
+nearly-converged MPS being compressed, where the spectrum decays rapidly and truncation
+error is small.
+
+The compression ratio R = L−1 is **intrinsic to the algorithm** — it cannot be reduced
+without reducing the number of candidates, which reduces the subspace dimension and slows
+convergence. This creates an inescapable tradeoff: more candidates → better coarse-space
+energy → worse compression loss.
+
+### 8.2 The Paper's Regime: Small-Molecule Quantum Chemistry
 
 The Grigori-Hassan paper targets **ab initio quantum chemistry** — computing ground state
 energies of small molecules using second-quantized electronic Hamiltonians in a
@@ -473,138 +544,391 @@ spin-orbital basis.
 
 **Characteristics of this regime:**
 
-| Property | Quantum Chemistry |
-|----------|------------------|
-| Sites (d) | 12–24 (spin orbitals, scales with basis set) |
-| Physical dim | 2 (occupation number: empty/filled) |
-| Bond dim (r) | 16–512 (grows with correlation strength) |
+| Property | Quantum Chemistry (paper) |
+|----------|--------------------------|
+| Sites (d) | 12–24 (spin orbitals, scales with basis set size) |
+| Physical dim | 2 (occupation: empty or filled) |
+| Bond dim (r) | 16–512 (grows with electron correlation strength) |
 | MPO structure | Dense, long-range (all-to-all two-electron integrals) |
-| MPO bond dim (D) | Grows with d (D ~ d for molecular Hamiltonians) |
-| Hamiltonians | Real-valued (electronic structure in real basis) |
-| Accuracy target | ~10⁻⁶ relative (chemical accuracy ~1 mHa) |
-| Processor count | d−1 (one per bond, 11–23 processors) |
+| MPO bond dim (D) | Grows with d: D = O(d) for molecular Hamiltonians |
+| Hamiltonians | Real-valued (electronic structure in real orbital basis) |
+| Accuracy target | 10⁻⁶ relative energy difference between iterations |
+| Entanglement | Area-law with logarithmic corrections (molecular orbitals) |
+| Processor count | d−1 (one per bond: 11–23 processors for d=12–24) |
+| Initialization | Random MPS with very small initial rank |
+| Rank trajectory | Grows from r₀ << r toward target r over several iterations |
 
-**Why A2DMRG works here:**
-- Small d means few candidates (≤24), so compression ratio ≤24:1
-- Rank growth from small initial values avoids early compression loss
-- Dense MPO couples all sites, so coarse-space correction propagates information globally
-- 10⁻⁶ tolerance is easily reachable
-- d−1 processors is feasible (12–23 cores on one node)
+**Why A2DMRG is well-suited here:**
 
-**Limitations the paper doesn't face:**
-- d never exceeds 24, so compression ratio stays manageable
-- Never tests complex-valued Hamiltonians
-- Never tests sparse/local MPO structure (like Heisenberg D=5)
-- Measures FLOP speedup, not wall-clock — avoids MPI overhead question
+1. **Manageable compression ratio.** With d ≤ 24, the compression ratio R = d−1 ≤ 23.
+   Our benchmarks show this range produces negligible to moderate compression loss,
+   especially when combined with the rank-growth initialization.
 
-### 8.2 Our Target Regime: Quantum Computing Applications
+2. **Dense MPO structure aids the coarse space.** The molecular Hamiltonian has all-to-all
+   two-body interactions (Coulomb integrals) encoded in the MPO. The MPO bond dimension
+   D grows with d, coupling distant sites through the operator. This means the coarse-space
+   matrix H_coarse[i,j] = ⟨Y⁽ⁱ⁾|H|Y⁽ʲ⁾⟩ captures genuine long-range correlations
+   between candidates updated at distant bonds. In contrast, for a nearest-neighbor
+   Hamiltonian (D = O(1)), candidates updated at distant bonds contribute almost
+   independently to H_coarse, reducing the coarse space's effectiveness.
 
-Our target is **quantum computing simulation** — computing ground states, simulating
-circuits, and benchmarking quantum algorithms using tensor network methods.
+3. **Favorable ratio r/d.** The paper tests bond dimensions r = 16–512 for d = 12–24,
+   giving r/d ratios from 1.3 to 21. High r/d means the MPS has much more representational
+   capacity than the number of sites, so TT-SVD truncation preserves most information.
 
-**Key applications:**
-- **Variational Quantum Eigensolver (VQE)**: Classical optimizer needs ground state
-  energy repeatedly for different Hamiltonian parameters. Parallel evaluation across
-  parameter space is natural, but each evaluation needs accurate MPS ground state.
-- **Quantum Approximate Optimization (QAOA)**: Simulating QAOA circuits on classical
-  hardware to benchmark quantum advantage claims. Involves L=50–200 qubits.
-- **Quantum error correction**: Simulating stabilizer codes and noise channels. Surface
-  codes have L = O(d²) physical qubits with local stabilizer Hamiltonians.
-- **Entanglement studies**: Computing entanglement entropy, mutual information, and
-  other correlation measures for quantum many-body systems relevant to quantum hardware.
+4. **Gentle accuracy requirement.** Chemical accuracy (1 mHa ≈ 10⁻³ Hartree) corresponds
+   to relative errors of 10⁻⁴ to 10⁻⁵. The paper's 10⁻⁶ convergence threshold is
+   comfortably achievable.
+
+5. **P = d−1 is natural.** With d = 12–24, using 11–23 CPU cores is trivial on modern
+   hardware. Each processor handles exactly one bond — the algorithm's ideal operating
+   point.
+
+**Our H6 reproduction confirms this.** At r = 32 and r = 48, A2DMRG matches DMRG2 to the
+bond-dimension limit. The algorithm produces correct ground state energies in the regime
+it was designed for.
+
+### 8.3 Our Target Regime: Quantum Computing Simulation
+
+Our primary application is **classical simulation of quantum computing systems** — using
+tensor network methods to compute ground states, simulate quantum circuits, and benchmark
+quantum algorithms on classical hardware. This includes:
+
+- **Variational Quantum Eigensolver (VQE)**: The classical optimizer in a VQE loop
+  requires repeated evaluation of expectation values ⟨ψ(θ)|H|ψ(θ)⟩ for parameterized
+  quantum circuits. When the circuit is deep and the system is large, MPS-based DMRG on
+  the target Hamiltonian provides the classical benchmark energy. High accuracy (10⁻⁸+)
+  is needed to distinguish quantum advantage claims from classical approximation error.
+
+- **Quantum Approximate Optimization Algorithm (QAOA)**: Simulating QAOA circuits of
+  depth p on L = 50–200 qubits requires applying unitary layers to an MPS. Each layer
+  introduces entanglement, growing bond dimension. DMRG provides the reference ground
+  state energy that QAOA aims to approach.
+
+- **Quantum error correction**: Surface codes and other topological codes define
+  stabilizer Hamiltonians on 2D lattice structures. Mapped to 1D via snake ordering,
+  these become L = O(d²) site chains with local interactions but non-trivial long-range
+  entanglement from the 2D structure. Typical sizes: L = 50–200 for distance-5 to
+  distance-15 surface codes.
+
+- **Noise channel simulation**: Simulating open quantum system dynamics (Lindblad master
+  equations, random circuits with noise) on MPS. This requires complex-valued tensors
+  and often involves non-Hermitian effective Hamiltonians.
+
+- **Entanglement characterization**: Computing entanglement entropy, mutual information,
+  and topological entanglement entropy for quantum states relevant to quantum hardware
+  design. These quantities require high-fidelity MPS ground states.
 
 **Characteristics of this regime:**
 
 | Property | Quantum Computing |
 |----------|-------------------|
-| Sites (L) | 50–200+ (qubits, scales with quantum hardware) |
-| Physical dim | 2 (qubit) or 4+ (qudit, bosonic codes) |
-| Bond dim (χ) | 32–256 (limited by classical resources) |
-| MPO structure | Sparse, local (nearest-neighbor or few-body) |
-| MPO bond dim (D) | O(1) for local Hamiltonians (D=5 for Heisenberg) |
-| Hamiltonians | Real AND complex (quantum circuits, Floquet, etc.) |
-| Accuracy target | 10⁻⁸ to 10⁻¹² (quantum simulation fidelity) |
-| Processor count | Limited by available GPUs (1–8 typical, 64+ on clusters) |
+| Sites (L) | 50–200+ (qubits, scaling with quantum hardware generation) |
+| Physical dim | 2 (qubit), 4+ (qudit, bosonic codes) |
+| Bond dim (χ) | 32–256 (limited by classical memory and time) |
+| MPO structure | Sparse, local (nearest-neighbor, few-body, or mapped 2D) |
+| MPO bond dim (D) | O(1) for local Hamiltonians: D=5 (Heisenberg), D=3 (transverse Ising) |
+| Hamiltonians | Real AND complex (quantum circuits, Floquet drives, noise channels) |
+| Accuracy target | 10⁻⁸ to 10⁻¹² (must exceed quantum hardware fidelity to serve as benchmark) |
+| Entanglement | Area-law to volume-law (depending on circuit depth and noise) |
+| Processor count | 1–8 GPUs per node (typical), up to 64 on large clusters |
 
-**Where A2DMRG struggles here (and why):**
+### 8.4 Why A2DMRG Fails for Quantum Computing: Five Structural Barriers
 
-1. **Large L / moderate χ = catastrophic compression ratio.** For L=100 χ=64, the
-   compression ratio is 99:1 — the linear combination MPS has bond dim 6336 before
-   TT-SVD compresses it to 64. This destroys most of the coarse-space gain every sweep.
+Each of the following barriers is documented with quantitative evidence from our
+benchmarks. Taken together, they constitute a definitive case against A2DMRG for
+quantum computing applications.
 
-2. **Sparse MPOs don't help the coarse space.** With D=5 (Heisenberg), the coarse-space
-   correction can only propagate information locally. The paper's dense MPOs (D ~ d)
-   couple all sites, making the coarse space more effective.
+#### Barrier 1: Catastrophic Compression Ratio
 
-3. **Complex Hamiltonians.** Quantum circuits and Floquet Hamiltonians produce complex
-   amplitudes. Our Bose-Hubbard tests (complex128) failed catastrophically. The paper
-   never tests this.
+For L = 100 qubits at χ = 64 (a modest quantum computing benchmark), the A2DMRG linear
+combination produces bond dimension (L−1)·χ = 99 × 64 = 6,336. TT-SVD must compress this
+to χ = 64 — a 99:1 ratio.
 
-4. **High accuracy needed.** Quantum simulation fidelity requires 10⁻⁸ or better for
-   meaningful benchmarks. The paper's 10⁻⁶ tolerance is insufficient for our applications.
+Our benchmarks measure the concrete impact of this ratio:
 
-5. **Few processors available.** GPU clusters typically have 4–8 GPUs per node. A2DMRG
-   needs P ≈ L processors to achieve its theoretical speedup. With P=4 on L=100, each
-   rank handles 25 bonds — the algorithm degenerates to a slower version of serial DMRG.
+| L | χ | Ratio R | Energy after 20 sweeps (wu=0) | Rel error vs DMRG2 |
+|---|---|---------|-------------------------------|-------------------|
+| 8 | 20 | 7:1 | −3.3749 | ~10⁻¹⁵ (converged) |
+| 16 | 20 | 15:1 | −6.9056 | 8.8×10⁻⁴ (marginal) |
+| 32 | 20 | 31:1 | −12.6983 | 9.3×10⁻² (not converged) |
 
-### 8.3 Where Our Implementation Shines
+Extrapolating: at L = 100 with R = 99:1, the per-sweep compression loss would vastly
+exceed the coarse-space energy gain, making convergence impossible from a cold start
+within any reasonable number of iterations.
 
-Despite the A2DMRG algorithm's limitations for quantum computing at scale, our
-implementation work produced valuable components:
+Even with warmup, the compression ratio bounds the achievable accuracy. Our warmup sweep
+study at L=32 shows:
+
+| Warmup | Rel error | A2DMRG sweeps to converge |
+|--------|-----------|--------------------------|
+| 0 | 9.1×10⁻² | >20 (not converged) |
+| 1 | 4.1×10⁻⁴ | 1–2 |
+| 2 | 3.1×10⁻⁷ | 1 |
+| 5 | 3.7×10⁻¹³ | 1 |
+
+The A2DMRG phase converges in 1–2 sweeps regardless of warmup (for wu ≥ 1), but the
+achievable accuracy is entirely determined by the warmup quality. The parallel phase
+contributes negligible refinement beyond what the serial warmup already achieved. At
+L = 100, even more warmup would be needed, further marginalizing A2DMRG's contribution.
+
+#### Barrier 2: Sparse MPO Structure Weakens the Coarse Space
+
+The coarse-space correction works by solving a generalized eigenvalue problem over d+1
+candidate states. The Hamiltonian matrix H_coarse[i,j] = ⟨Y⁽ⁱ⁾|H|Y⁽ʲ⁾⟩ encodes how
+each candidate "sees" the others through the Hamiltonian.
+
+For dense MPOs (quantum chemistry, D ~ d), every bond's update affects the expectation
+value at every other bond, making H_coarse a rich matrix with significant off-diagonal
+structure. The coarse-space eigenvector captures globally optimal mixing.
+
+For sparse MPOs (local Hamiltonians, D = O(1)), candidate Y⁽ⁱ⁾ (updated at bond i) and
+candidate Y⁽ʲ⁾ (updated at bond j) interact through H_coarse only via the nearest-neighbor
+terms between bonds i and j. When |i−j| >> 1, the off-diagonal element H_coarse[i,j] is
+dominated by the common (non-updated) portions of the MPS, and the contribution from the
+local updates at bonds i and j is exponentially suppressed in |i−j|.
+
+This means the coarse-space correction for local Hamiltonians degenerates into a nearly
+block-diagonal structure — the corrections at distant bonds don't communicate. The
+algorithm loses its "two-level" advantage and becomes closer to a simple average of
+independent local updates, which is strictly worse than the sequential propagation of
+standard DMRG sweeps.
+
+Our empirical data supports this: the Heisenberg chain (D = 5, nearest-neighbor) shows
+rapid accuracy degradation with L, while H6 quantum chemistry (D grows with d, all-to-all
+couplings) converges cleanly.
+
+#### Barrier 3: Complex Hamiltonians
+
+Quantum computing applications inherently involve complex-valued Hamiltonians:
+- Quantum circuit unitaries: U = exp(−iθ G) where G is a generator
+- Floquet Hamiltonians: periodic drives produce complex quasi-energies
+- Non-Hermitian effective Hamiltonians: arise from open quantum system dynamics
+- Jordan-Wigner transformed fermionic models: complex hopping phases
+- Trotterized time evolution: each Trotter step is a complex unitary
+
+Our tests with complex Hamiltonians (Bose-Hubbard with complex hopping t = 1 + 0.5i)
+showed catastrophic failure: |ΔE| ~ 10³, energy diverging rather than converging.
+
+The Grigori-Hassan paper tests only real-valued quantum chemistry Hamiltonians. Complex
+support is never discussed, and the coarse-space eigenvalue solver's behavior with complex
+overlap matrices S_coarse is not analyzed. Our coarse-space solver handles complex
+arithmetic correctly (verified on unit tests), so the failure likely arises from the
+interaction between complex-valued TT-SVD compression and the coarse-space energy
+prediction — the compression error may have a different structure for complex MPS.
+
+**This is a hard blocker for quantum computing applications**, where complex Hamiltonians
+are the norm, not the exception.
+
+#### Barrier 4: Accuracy Requirements Exceed A2DMRG's Sweet Spot
+
+Quantum computing simulation requires high accuracy to serve as a meaningful classical
+benchmark:
+
+- **VQE benchmark**: The quantum device's energy must be compared to the exact (or
+  high-accuracy classical) ground state. If the classical simulation has error 10⁻⁴, it
+  cannot distinguish a quantum device achieving 10⁻⁵ accuracy from one achieving 10⁻³.
+  Target: 10⁻⁸ or better.
+
+- **Quantum advantage claims**: Demonstrating quantum advantage requires showing the
+  quantum device outperforms the best classical simulation. The classical simulation's
+  error must be negligible. Target: 10⁻¹⁰ or better.
+
+- **Entanglement measures**: Entanglement entropy S = −Tr(ρ log ρ) is sensitive to small
+  errors in the reduced density matrix. Meaningful entanglement characterization requires
+  10⁻⁸ accuracy in the ground state energy as a proxy for state fidelity.
+
+The paper's 10⁻⁶ relative tolerance is a factor of 100–10⁶ too loose for these
+applications. Our warmup sweep study shows that achieving 10⁻⁸ at L=32 requires wu ≥ 3,
+and 10⁻¹² requires wu ≥ 5. At these warmup levels, DMRG2 alone achieves the same
+accuracy in the same time — A2DMRG adds no value.
+
+#### Barrier 5: Processor Count Mismatch
+
+A2DMRG achieves its theoretical speedup when P = d−1 processors each handle one bond.
+The paper's quantum chemistry systems need 11–23 processors — easily available on a
+single multi-core node.
+
+Quantum computing simulation at L = 100 would need P = 99 processors for the algorithm's
+ideal operating point. In practice:
+
+- **GPU clusters**: Typically 4–8 GPUs per node. With P = 4 on L = 100, each rank handles
+  25 bonds sequentially. The "parallel" phase is actually 96% sequential, with the
+  coarse-space overhead added on top.
+
+- **CPU clusters**: Could provide P = 99 MPI ranks, but each rank's eigensolver is too
+  slow without GPU acceleration. The per-bond micro-step cost (Lanczos + SVD) at χ = 128
+  is ~100 ms on CPU vs ~1 ms on GPU.
+
+- **Multi-node GPU**: Could provide P = 64 on 8 nodes × 8 GPUs, but MPI communication
+  latency for the coarse-space Allreduce (broadcasting L² matrix elements) dominates at
+  this scale. The coarse-space matrix alone is 100 × 100 = 10,000 elements, each
+  requiring a full MPS contraction.
+
+The algorithm's parallelism model — one bond per processor, all-to-all communication for
+coarse-space matrices — is a poor fit for GPU clusters where the natural parallelism is
+within tensor contractions (GEMM, SVD), not across bonds.
+
+### 8.5 The Warmup Paradox
+
+Our warmup sweep study (Section 2.6) reveals a fundamental paradox that disqualifies
+A2DMRG for any application where accuracy matters:
+
+**More warmup fixes A2DMRG's accuracy, but also makes A2DMRG redundant.**
+
+At L=32 χ=20 (Heisenberg, np=4):
+
+| Warmup | A2DMRG rel error | A2DMRG sweeps | Total time | DMRG2-only time for same accuracy |
+|--------|-----------------|---------------|------------|----------------------------------|
+| 0 | 9.1×10⁻² | 20 (not converged) | 74.8s | N/A (0.4s for machine precision) |
+| 1 | 4.1×10⁻⁴ | 1–2 | 0.2s | ~0.1s |
+| 2 | 3.1×10⁻⁷ | 1 | 0.3s | ~0.15s |
+| 3 | 1.1×10⁻⁹ | 1 | 0.3s | ~0.2s |
+| 5 | 3.7×10⁻¹³ | 1 | 0.4s | ~0.3s |
+| 10 | 2.1×10⁻¹⁴ | 1 | 0.4s | ~0.4s |
+
+The last column shows the time for serial DMRG2 to achieve the same accuracy as the
+warmup alone (without A2DMRG). In every case, DMRG2 alone is faster or comparable. The
+A2DMRG phase contributes at most 1 sweep of negligible refinement after the warmup has
+done the real work.
+
+This is not a bug — it is a mathematical consequence of the algorithm structure:
+
+1. The warmup (serial DMRG2) brings the MPS close to the ground state. The residual
+   error is small.
+2. A2DMRG's local micro-steps produce candidates that are small perturbations of the
+   nearly-converged MPS. The candidates have high mutual overlap (> 0.99).
+3. The coarse-space correction can mix these nearly-identical candidates, but the optimal
+   mixing is close to the identity (keep the original, tiny corrections from each site).
+4. After compression back to χ, the improvement is negligible — the serial warmup already
+   found the best rank-χ approximation.
+
+For A2DMRG to add significant value, the state must be far from converged (many low-energy
+directions to explore) AND compression must preserve the coarse-space gain (R not too
+large). These conditions are contradictory at large L: being far from converged means the
+candidates are diverse (bad for compression), and being close to converged means A2DMRG
+has nothing to add.
+
+### 8.6 Where Our Work Shines: GPU-Accelerated DMRG for Quantum Computing
+
+Despite A2DMRG's unsuitability for quantum computing, the implementation effort produced
+components that directly serve our target application:
 
 **1. GPU-native DMRG (dmrg-gpu, dmrg2-gpu)**
-These are the real workhorses for quantum computing simulation:
-- L=32 χ=64 in 1.3s (single-site) / 2.1s (two-site) on MI300X
-- 3–5× faster than quimb at χ≥128
-- Templates for both real and complex (hipDoubleComplex)
-- All contractions via rocBLAS — no CPU loops in hot path
 
-**2. The DMRG warmup + parallel polish pattern**
-Even though the A2DMRG phase adds little value, the pattern of "serial DMRG warmup
-followed by parallel refinement" is sound. The warmup sweep data shows:
+These standalone GPU implementations are the primary deliverables for quantum computing
+simulation:
 
-| Approach | L=32 χ=20 accuracy | Time |
-|----------|-------------------|------|
-| DMRG2 alone (20 sweeps) | machine precision | 0.4s |
-| wu=2 + A2DMRG (np=4) | 3.1×10⁻⁷ | 0.3s |
-| wu=5 + A2DMRG (np=4) | 3.7×10⁻¹³ | 0.4s |
+| Benchmark | dmrg2-gpu (MI300X) | quimb DMRG2 (CPU) | Speedup |
+|-----------|-------------------|-------------------|---------|
+| Heisenberg L=32 χ=64 | 2.1s | ~10s | ~5× |
+| Heisenberg L=32 χ=128 | ~8s | ~45s | ~5× |
+| Josephson L=6 (complex) | 0.3s | ~2s | ~7× |
 
-The parallel phase doesn't buy much here, but for larger χ on GPUs, distributing local
-updates across multiple GPUs could hide latency in the eigensolver.
+Key features for quantum computing:
+- Full complex support via `DMRGGPU<hipDoubleComplex>` (HIP/ROCm templates)
+- All tensor contractions via rocBLAS dgemm/zgemm — no CPU fallback in hot path
+- Lanczos eigensolver entirely on GPU (no host-device data movement per iteration)
+- CPU SVD fallback (2–6× faster than GPU rocsolver for χ < 200)
+- Scales to χ = 512+ on MI300X's 192 GB HBM3
 
-**3. O(L) environment caching**
-Incremental environment building is essential for any DMRG implementation and is reusable
-across serial and parallel algorithms.
+**2. O(L) incremental environment caching**
 
-**4. Pure numpy tensor pipeline**
-The extract → numpy → solve → reconstruct pipeline eliminates quimb overhead and is
-directly portable to GPU (replace np.tensordot with rocBLAS dgemm).
+The incremental environment builder (two O(L) sweeps: right-canonicalize + build R_envs,
+then left-sweep + build L_envs) is a general-purpose component used by all DMRG
+variants. It eliminates the O(L²) bottleneck that would otherwise dominate at L > 50.
 
-### 8.4 Recommended Path for Quantum Computing
+**3. Pure numpy/BLAS tensor pipeline**
 
-Given our findings, the recommended strategy for quantum computing DMRG is:
+The `extract_mps_arrays → numpy operations → arrays_to_quimb_mps` pipeline provides a
+clean interface between quimb's high-level MPS representation and raw BLAS-level tensor
+operations. This pattern ports directly to GPU:
+- `np.tensordot` → `rocblas_dgemm` / `rocblas_zgemm`
+- `np.linalg.svd` → `rocsolver_dgesvd` / LAPACK fallback
+- `np.linalg.eigh` → Lanczos on GPU
 
-1. **Single-GPU DMRG2** for L ≤ 100, χ ≤ 256: Our dmrg2-gpu already handles this
-   regime well. One MI300X can do L=32 χ=64 in 2.1s. Scaling to L=100 χ=128 is
-   straightforward with existing code.
+**4. Coarse-space eigensolver with SVD regularization**
 
-2. **Multi-GPU parallelism within contractions** for χ > 256: Distribute the large
-   matrix operations (GEMM, SVD) across GPUs. This is the Block2/Menczer approach and
-   scales naturally with χ.
+The regularized generalized eigenvalue solver (Section 2 of `coarse_eigenvalue.py`) is a
+reusable component for any subspace expansion method. It handles ill-conditioned overlap
+matrices robustly via eigenvalue truncation of S, transformation to standard form, and
+S-normalized eigenvectors. This is applicable to:
+- Subspace expansion in DMRG (Hubig et al.)
+- Krylov-subspace methods for time evolution (TDVP)
+- Excited state targeting via state-averaged DMRG
 
-3. **Pipeline parallelism** (Stoudenmire-White) for multiple parameter points: Run
-   staggered sweeps on different GPUs for Hamiltonian parameter scans (VQE optimization,
-   phase diagrams). This exploits the embarrassing parallelism of parameter sweeps.
+### 8.7 Recommended Parallelization Strategy for Quantum Computing DMRG
 
-4. **A2DMRG only for d ≤ 30** with large χ: The algorithm genuinely helps when the
-   number of sites is small relative to bond dim — exactly the quantum chemistry regime.
-   For quantum computing problems that happen to have small effective system size (e.g.,
-   reduced models, effective Hamiltonians), A2DMRG with rank growth could be competitive.
+Based on our analysis, we recommend the following parallelization hierarchy for quantum
+computing simulation, ordered by expected impact:
 
-**A2DMRG is not the path to parallel quantum computing simulation.** The compression
-bottleneck at large L/χ is fundamental, not fixable with more warmup or engineering. The
-established approaches (parallelize within contractions, pipeline sweeps) are better
-suited to the L=50–200 χ=32–256 regime of quantum computing.
+**Tier 1: Intra-contraction GPU parallelism (single GPU)**
+
+Parallelize the tensor contractions (GEMM, SVD) within each DMRG micro-step across GPU
+threads. This is the approach of our dmrg-gpu/dmrg2-gpu implementations and the Menczer
+et al. quarter-petaFLOPS DMRG (2024). It provides:
+- 5–50× speedup over CPU for χ ≥ 64
+- No algorithmic changes — same convergence as serial DMRG
+- No communication overhead
+- Scales naturally with χ (larger matrices → better GPU utilization)
+
+**Tier 2: Multi-GPU distribution of large contractions (χ > 256)**
+
+When single-GPU memory is insufficient, distribute the large GEMM operations across
+multiple GPUs using NCCL or RCCL collective operations. This is the Block2/Zhai-Chan
+approach. The key operations to distribute:
+- `apply_heff` matvec: the dominant cost, O(χ³·D·d) per site
+- SVD of theta matrix: O(χ²·d) per bond
+- Environment updates: O(χ²·D) per site
+
+Communication: O(χ²) per site (broadcast theta, gather SVD results). At χ = 512 with
+4 GPUs, this is ~2 MB per communication — negligible compared to computation.
+
+**Tier 3: Pipeline parallelism for parameter scans (multiple independent problems)**
+
+For VQE optimization, phase diagram computation, or disorder averaging, many independent
+DMRG calculations are needed for different Hamiltonian parameters. These are embarrassingly
+parallel:
+- Assign different parameter points to different GPUs
+- No inter-GPU communication
+- Linear speedup with number of GPUs
+- Can combine with Tier 1 (each parameter point on one GPU with intra-contraction parallelism)
+
+**Tier 4: Stoudenmire-White pipeline parallelism (single large system)**
+
+For a single large system (L > 200) where even GPU DMRG is slow, stagger multiple sweeps
+so different GPUs work on different regions of the chain simultaneously. This provides
+moderate speedup (2–4×) with minimal communication, but requires careful implementation
+of the pipeline schedule and introduces a small convergence penalty from using stale
+environments.
+
+**Not recommended: A2DMRG (additive Schwarz across sites)**
+
+For the reasons detailed in Sections 8.4 and 8.5:
+- Compression ratio L−1 is too large for L > 30
+- Sparse MPOs weaken the coarse space
+- Complex Hamiltonians fail
+- Accuracy requirements exceed A2DMRG's capability without warmup that makes it redundant
+- Processor count model mismatches GPU cluster architectures
+
+### 8.8 Summary: Regime Comparison
+
+| Property | Paper's sweet spot | Our target | Gap |
+|----------|-------------------|------------|-----|
+| Sites | d = 12–24 | L = 50–200 | 2–8× more sites |
+| Compression ratio | R ≤ 23 | R = 49–199 | 2–9× worse |
+| MPO bond dim | D = O(d), dense | D = O(1), sparse | Coarse space weaker |
+| Hamiltonians | Real only | Complex required | Untested, failed in our tests |
+| Accuracy | 10⁻⁶ relative | 10⁻⁸ to 10⁻¹² | 100–10⁶× more stringent |
+| Processors | P = d−1 (11–23) | P = 4–8 GPUs | P << L by 10–50× |
+| Per-bond cost | ~1s (Julia CPU) | ~1ms (GPU) | GPU makes parallelism less necessary |
+| Warmup needed | None (rank growth) | wu ≥ 3 for 10⁻⁸ | Warmup makes A2DMRG redundant |
+
+The gap between the paper's sweet spot and our target regime is too large on every
+axis for A2DMRG to bridge. The algorithm was designed for a problem structure (small d,
+dense MPO, real-valued, P = d−1 CPUs, 10⁻⁶ tolerance) that is fundamentally different
+from quantum computing simulation (large L, sparse MPO, complex-valued, few GPUs,
+10⁻⁸+ accuracy).
 
 ---
 
