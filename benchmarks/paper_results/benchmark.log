@@ -342,3 +342,7 @@
 [2026-03-21 02:42:06]     E=4.359715959932  t=212.6s  OK
   [saved 660 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-21 02:42:07]   pdmrg-gpu josephson L=16 chi=128 segments=2
+[2026-03-21 03:01:34]     E=3.012448781974  t=1167.3s  OK
+  [saved 661 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 03:01:34]   pdmrg-gpu josephson L=16 chi=128 segments=4
+[2026-03-21 03:22:03]     E=3.081592085423  t=1228.1s  OK
