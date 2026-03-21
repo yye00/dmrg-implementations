@@ -296,3 +296,31 @@
   [saved 652 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-21 01:58:56]   [git push: results saved to GitHub]
 [2026-03-21 01:58:56]   pdmrg-gpu heisenberg L=32 chi=20 segments=8
+[2026-03-21 02:28:56]     E=FAIL  t=1800.0s  TIMEOUT/FAIL
+  [saved 653 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=32 chi=50 seg=2 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=32 chi=50 seg=4 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=32 chi=50 seg=8 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=32 chi=128 seg=2 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=32 chi=128 seg=4 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=32 chi=128 seg=8 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=64 chi=50 seg=2 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=64 chi=50 seg=4 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=64 chi=50 seg=8 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=64 chi=50 seg=16 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=64 chi=128 seg=2 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=64 chi=128 seg=4 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=64 chi=128 seg=8 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=64 chi=128 seg=16 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=100 chi=50 seg=2 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=100 chi=50 seg=4 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=100 chi=50 seg=8 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=100 chi=50 seg=16 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=100 chi=128 seg=2 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=100 chi=128 seg=4 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=100 chi=128 seg=8 (timeout)
+[2026-03-21 02:28:56]   SKIP pdmrg-gpu heisenberg L=100 chi=128 seg=16 (timeout)
+[2026-03-21 02:28:56]   pdmrg-gpu josephson L=8 chi=20 segments=2
+[2026-03-21 02:29:43]     E=2.078770747982  t=46.8s  OK
+  [saved 654 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 02:29:43]   pdmrg-gpu josephson L=8 chi=50 segments=2
