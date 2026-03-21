@@ -396,3 +396,27 @@
   [saved 671 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-21 04:13:06]   pdmrg-gpu tfim L=20 chi=20 segments=2
 [2026-03-21 04:13:21]     E=-18.406276999011  t=14.7s  OK
+  [saved 672 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:13:22]   [git push: results saved to GitHub]
+[2026-03-21 04:13:22]   pdmrg-gpu tfim L=20 chi=20 segments=4
+[2026-03-21 04:13:36]     E=-21.413033562227  t=14.4s  OK
+  [saved 673 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:13:36]   pdmrg-gpu tfim L=20 chi=50 segments=2
+[2026-03-21 04:14:04]     E=-26.915001871029  t=27.1s  OK
+  [saved 674 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:14:04]   pdmrg-gpu tfim L=20 chi=50 segments=4
+[2026-03-21 04:14:32]     E=-27.550166783400  t=28.2s  OK
+  [saved 675 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:14:32]   pdmrg-gpu tfim L=20 chi=128 segments=2
+[2026-03-21 04:15:59]     E=-81.749613631231  t=86.2s  OK
+  [saved 676 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:15:59]   pdmrg-gpu tfim L=20 chi=128 segments=4
+[2026-03-21 04:17:48]     E=-40.935211950361  t=108.9s  OK
+  [saved 677 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:17:48]   pdmrg-gpu tfim L=32 chi=20 segments=2
+[2026-03-21 04:18:20]     E=-25.654545649645  t=32.0s  OK
+  [saved 678 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:18:20]   pdmrg-gpu tfim L=32 chi=20 segments=4
+[2026-03-21 04:18:48]     E=-17.386971860795  t=27.2s  OK
+  [saved 679 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:18:48]   pdmrg-gpu tfim L=32 chi=20 segments=8
