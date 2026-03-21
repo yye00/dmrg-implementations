@@ -9209,5 +9209,47 @@
     "polish_sweeps": null,
     "success": true,
     "raw_output": ""
+  },
+  {
+    "impl": "pdmrg-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 20,
+    "sweeps": 30,
+    "segments": 8,
+    "energy": null,
+    "wall_time": 1800,
+    "outer_iters": null,
+    "polish_sweeps": null,
+    "success": false,
+    "raw_output": "TIMEOUT"
+  },
+  {
+    "impl": "pdmrg2-gpu",
+    "model": "heisenberg",
+    "L": 12,
+    "chi": 20,
+    "sweeps": 30,
+    "segments": 2,
+    "energy": -5.142090628178,
+    "wall_time": 1.172,
+    "outer_iters": 2,
+    "polish_sweeps": 2,
+    "success": true,
+    "raw_output": ""
+  },
+  {
+    "impl": "pdmrg2-gpu",
+    "model": "heisenberg",
+    "L": 12,
+    "chi": 20,
+    "sweeps": 30,
+    "segments": 4,
+    "energy": -5.142090628178,
+    "wall_time": 1.211,
+    "outer_iters": 2,
+    "polish_sweeps": 2,
+    "success": true,
+    "raw_output": ""
   }
 ]
