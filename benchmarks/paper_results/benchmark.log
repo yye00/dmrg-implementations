@@ -533,3 +533,36 @@
   [saved 642 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-20 23:58:32]   pdmrg2 tfim L=100 chi=128 np=8
 [2026-03-20 23:58:32]     E=FAIL  t=0.0s  TIMEOUT/FAIL
+  [saved 643 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:32]   [git push: results saved to GitHub]
+[2026-03-20 23:58:32] ================================================================================
+[2026-03-20 23:58:32] PHASE 3: GPU parallel DMRG (pdmrg-gpu + pdmrg2-gpu)
+[2026-03-20 23:58:32] ================================================================================
+[2026-03-20 23:58:32]   pdmrg-gpu heisenberg L=12 chi=20 segments=2
+[2026-03-20 23:58:39]     E=-6.804814488834  t=6.1s  OK
+  [saved 644 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:39]   pdmrg-gpu heisenberg L=12 chi=20 segments=4
+[2026-03-20 23:58:45]     E=-6.584250778726  t=6.5s  OK
+  [saved 645 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:45]   pdmrg-gpu heisenberg L=12 chi=50 segments=2
+[2026-03-20 23:58:47]     E=-5.142090632838  t=1.3s  OK
+  [saved 646 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:47]   pdmrg-gpu heisenberg L=12 chi=50 segments=4
+[2026-03-20 23:58:49]     E=-9.292612416545  t=2.2s  OK
+  [saved 647 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:49]   pdmrg-gpu heisenberg L=12 chi=128 segments=2
+[2026-03-20 23:58:51]     E=-5.142090632838  t=1.2s  OK
+  [saved 648 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:51]   pdmrg-gpu heisenberg L=12 chi=128 segments=4
+[2026-03-20 23:58:52]     E=-5.142090632841  t=1.2s  OK
+  [saved 649 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:58:52]   pdmrg-gpu heisenberg L=20 chi=20 segments=2
+[2026-03-20 23:59:08]     E=-7.107149894498  t=15.0s  OK
+  [saved 650 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:59:08]   pdmrg-gpu heisenberg L=20 chi=20 segments=4
+[2026-03-20 23:59:23]     E=-5.823005310841  t=14.8s  OK
+  [saved 651 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:59:23]   pdmrg-gpu heisenberg L=20 chi=50 segments=2
+[2026-03-20 23:59:48]     E=-10.309085186456  t=24.7s  OK
+  [saved 652 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-20 23:59:48]   pdmrg-gpu heisenberg L=20 chi=50 segments=4
