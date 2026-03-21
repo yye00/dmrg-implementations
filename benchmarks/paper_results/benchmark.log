@@ -585,3 +585,4 @@
 [2026-03-21 05:45:10]     E=-19.510974193900  t=124.1s  OK
   [saved 721 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-21 05:45:10]   pdmrg2-gpu josephson L=48 chi=50 segments=8
+[2026-03-21 06:15:10]     E=FAIL  t=1800.0s  TIMEOUT/FAIL

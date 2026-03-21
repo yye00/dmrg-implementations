@@ -9814,5 +9814,20 @@
     "success": true,
     "raw_output": "",
     "nmax": 2
+  },
+  {
+    "impl": "pdmrg2-gpu",
+    "model": "josephson",
+    "L": 48,
+    "chi": 50,
+    "sweeps": 50,
+    "segments": 8,
+    "energy": null,
+    "wall_time": 1800,
+    "outer_iters": null,
+    "polish_sweeps": null,
+    "success": false,
+    "raw_output": "TIMEOUT",
+    "nmax": 2
   }
 ]
