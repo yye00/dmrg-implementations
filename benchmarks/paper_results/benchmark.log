@@ -645,3 +645,31 @@
 [2026-03-21 06:17:03]     E=-40.384313161213  t=3.4s  OK
   [saved 736 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-21 06:17:03]   pdmrg2-gpu tfim L=32 chi=20 segments=8
+[2026-03-21 06:47:03]     E=FAIL  t=1800.0s  TIMEOUT/FAIL
+  [saved 737 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=32 chi=50 seg=2 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=32 chi=50 seg=4 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=32 chi=50 seg=8 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=32 chi=128 seg=2 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=32 chi=128 seg=4 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=32 chi=128 seg=8 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=64 chi=50 seg=2 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=64 chi=50 seg=4 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=64 chi=50 seg=8 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=64 chi=50 seg=16 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=64 chi=128 seg=2 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=64 chi=128 seg=4 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=64 chi=128 seg=8 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=64 chi=128 seg=16 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=100 chi=50 seg=2 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=100 chi=50 seg=4 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=100 chi=50 seg=8 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=100 chi=50 seg=16 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=100 chi=128 seg=2 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=100 chi=128 seg=4 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=100 chi=128 seg=8 (timeout)
+[2026-03-21 06:47:03]   SKIP pdmrg2-gpu tfim L=100 chi=128 seg=16 (timeout)
+[2026-03-21 06:47:03] ================================================================================
+[2026-03-21 06:47:03] BENCHMARK COMPLETE — 737 data points in 6.7 hours
+[2026-03-21 06:47:03] ================================================================================
+[2026-03-21 06:47:03] Summary CSV: /home/hotaisle/dmrg-implementations/benchmarks/paper_results/summary.csv

@@ -10025,5 +10025,19 @@
     "polish_sweeps": 3,
     "success": true,
     "raw_output": ""
+  },
+  {
+    "impl": "pdmrg2-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 20,
+    "sweeps": 30,
+    "segments": 8,
+    "energy": null,
+    "wall_time": 1800,
+    "outer_iters": null,
+    "polish_sweeps": null,
+    "success": false,
+    "raw_output": "TIMEOUT"
   }
 ]
