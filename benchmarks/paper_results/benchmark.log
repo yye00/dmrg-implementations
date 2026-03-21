@@ -355,3 +355,44 @@
 [2026-03-21 03:42:36]     E=9.172490746976  t=563.5s  OK
   [saved 664 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-21 03:42:36]   pdmrg-gpu josephson L=32 chi=50 segments=8
+[2026-03-21 04:12:36]     E=FAIL  t=1800.0s  TIMEOUT/FAIL
+  [saved 665 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=32 chi=128 seg=2 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=32 chi=128 seg=4 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=32 chi=128 seg=8 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=48 chi=50 seg=2 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=48 chi=50 seg=4 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=48 chi=50 seg=8 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=48 chi=50 seg=16 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=48 chi=128 seg=2 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=48 chi=128 seg=4 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=48 chi=128 seg=8 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=48 chi=128 seg=16 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=64 chi=50 seg=2 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=64 chi=50 seg=4 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=64 chi=50 seg=8 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=64 chi=50 seg=16 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=64 chi=128 seg=2 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=64 chi=128 seg=4 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=64 chi=128 seg=8 (timeout)
+[2026-03-21 04:12:36]   SKIP pdmrg-gpu josephson L=64 chi=128 seg=16 (timeout)
+[2026-03-21 04:12:36]   pdmrg-gpu tfim L=12 chi=20 segments=2
+[2026-03-21 04:12:50]     E=-19.197211507922  t=13.2s  OK
+  [saved 666 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:12:50]   pdmrg-gpu tfim L=12 chi=20 segments=4
+[2026-03-21 04:13:00]     E=-31.778333997881  t=9.6s  OK
+  [saved 667 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:13:00]   pdmrg-gpu tfim L=12 chi=50 segments=2
+[2026-03-21 04:13:01]     E=-14.925971109908  t=1.3s  OK
+  [saved 668 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:13:01]   pdmrg-gpu tfim L=12 chi=50 segments=4
+[2026-03-21 04:13:03]     E=-14.925971109909  t=1.4s  OK
+  [saved 669 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:13:03]   pdmrg-gpu tfim L=12 chi=128 segments=2
+[2026-03-21 04:13:05]     E=-14.925971109902  t=1.2s  OK
+  [saved 670 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:13:05]   pdmrg-gpu tfim L=12 chi=128 segments=4
+[2026-03-21 04:13:06]     E=-14.925971109908  t=1.4s  OK
+  [saved 671 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:13:06]   pdmrg-gpu tfim L=20 chi=20 segments=2
+[2026-03-21 04:13:21]     E=-18.406276999011  t=14.7s  OK
