@@ -85,3 +85,34 @@
   [saved 601 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-21 00:03:38]   pdmrg tfim L=32 chi=50 np=4
 [2026-03-21 00:03:42]     E=-40.384313161217  t=2.9s  OK
+  [saved 602 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 00:03:43]   [git push: results saved to GitHub]
+[2026-03-21 00:03:43]   pdmrg tfim L=32 chi=50 np=8
+[2026-03-21 00:03:47]     E=-40.384313161217  t=2.9s  OK
+  [saved 603 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 00:03:47]   pdmrg tfim L=32 chi=128 np=2
+[2026-03-21 00:03:57]     E=-40.384313161217  t=9.3s  OK
+  [saved 604 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 00:03:57]   pdmrg tfim L=32 chi=128 np=4
+[2026-03-21 00:04:10]     E=-40.384313161217  t=11.5s  OK
+  [saved 605 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 00:04:10]   pdmrg tfim L=32 chi=128 np=8
+[2026-03-21 00:04:27]     E=-40.384313161217  t=15.4s  OK
+  [saved 606 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 00:04:27]   pdmrg tfim L=64 chi=50 np=2
+[2026-03-21 00:04:40]     E=-81.125980123140  t=11.7s  OK
+  [saved 607 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 00:04:40]   pdmrg tfim L=64 chi=50 np=4
+[2026-03-21 00:04:50]     E=-81.125980123140  t=9.0s  OK
+  [saved 608 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 00:04:50]   pdmrg tfim L=64 chi=50 np=8
+[2026-03-21 00:04:58]     E=-81.125980123140  t=7.0s  OK
+  [saved 609 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 00:04:58]   pdmrg tfim L=64 chi=128 np=2
+[2026-03-21 00:05:51]     E=-81.125980123139  t=51.6s  OK
+  [saved 610 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 00:05:51]   pdmrg tfim L=64 chi=128 np=4
+[2026-03-21 00:06:51]     E=-81.125980123141  t=58.8s  OK
+  [saved 611 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 00:06:51]   pdmrg tfim L=64 chi=128 np=8
+[2026-03-21 00:07:42]     E=-81.125980123141  t=50.4s  OK
