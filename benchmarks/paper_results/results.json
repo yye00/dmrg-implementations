@@ -9531,5 +9531,19 @@
     "polish_sweeps": 4,
     "success": true,
     "raw_output": ""
+  },
+  {
+    "impl": "pdmrg2-gpu",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 50,
+    "sweeps": 40,
+    "segments": 4,
+    "energy": -28.175424537574,
+    "wall_time": 19.134,
+    "outer_iters": 2,
+    "polish_sweeps": 4,
+    "success": true,
+    "raw_output": ""
   }
 ]

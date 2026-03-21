@@ -511,3 +511,9 @@
   [saved 701 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-21 04:51:10]   pdmrg2-gpu heisenberg L=64 chi=50 segments=2
 [2026-03-21 04:51:31]     E=-28.175424537574  t=20.8s  OK
+  [saved 702 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:51:32]   [git push: results saved to GitHub]
+[2026-03-21 04:51:32]   pdmrg2-gpu heisenberg L=64 chi=50 segments=4
+[2026-03-21 04:51:51]     E=-28.175424537574  t=19.1s  OK
+  [saved 703 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 04:51:51]   pdmrg2-gpu heisenberg L=64 chi=50 segments=8
