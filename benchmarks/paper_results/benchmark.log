@@ -324,3 +324,21 @@
 [2026-03-21 02:29:43]     E=2.078770747982  t=46.8s  OK
   [saved 654 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-21 02:29:43]   pdmrg-gpu josephson L=8 chi=50 segments=2
+[2026-03-21 02:30:39]     E=1.206113081914  t=55.2s  OK
+  [saved 655 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 02:30:39]   pdmrg-gpu josephson L=8 chi=128 segments=2
+[2026-03-21 02:31:06]     E=-0.060557694450  t=26.5s  OK
+  [saved 656 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 02:31:06]   pdmrg-gpu josephson L=16 chi=20 segments=2
+[2026-03-21 02:33:12]     E=4.809737051640  t=125.7s  OK
+  [saved 657 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 02:33:12]   pdmrg-gpu josephson L=16 chi=20 segments=4
+[2026-03-21 02:34:54]     E=3.830447301659  t=102.2s  OK
+  [saved 658 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 02:34:54]   pdmrg-gpu josephson L=16 chi=50 segments=2
+[2026-03-21 02:38:34]     E=3.852384918402  t=219.2s  OK
+  [saved 659 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 02:38:34]   pdmrg-gpu josephson L=16 chi=50 segments=4
+[2026-03-21 02:42:06]     E=4.359715959932  t=212.6s  OK
+  [saved 660 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 02:42:07]   pdmrg-gpu josephson L=16 chi=128 segments=2
