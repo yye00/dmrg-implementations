@@ -9969,5 +9969,61 @@
     "polish_sweeps": 1,
     "success": true,
     "raw_output": ""
+  },
+  {
+    "impl": "pdmrg2-gpu",
+    "model": "tfim",
+    "L": 20,
+    "chi": 128,
+    "sweeps": 40,
+    "segments": 2,
+    "energy": -25.107797111624,
+    "wall_time": 62.852,
+    "outer_iters": null,
+    "polish_sweeps": 2,
+    "success": true,
+    "raw_output": ""
+  },
+  {
+    "impl": "pdmrg2-gpu",
+    "model": "tfim",
+    "L": 20,
+    "chi": 128,
+    "sweeps": 40,
+    "segments": 4,
+    "energy": -25.107797111592,
+    "wall_time": 18.378,
+    "outer_iters": 8,
+    "polish_sweeps": 1,
+    "success": true,
+    "raw_output": ""
+  },
+  {
+    "impl": "pdmrg2-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 20,
+    "sweeps": 30,
+    "segments": 2,
+    "energy": -40.384313161213,
+    "wall_time": 3.501,
+    "outer_iters": 2,
+    "polish_sweeps": 3,
+    "success": true,
+    "raw_output": ""
+  },
+  {
+    "impl": "pdmrg2-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 20,
+    "sweeps": 30,
+    "segments": 4,
+    "energy": -40.384313161213,
+    "wall_time": 3.403,
+    "outer_iters": 2,
+    "polish_sweeps": 3,
+    "success": true,
+    "raw_output": ""
   }
 ]
