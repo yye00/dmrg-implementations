@@ -8637,5 +8637,47 @@
     "wall_time": 44.46493744850159,
     "success": true,
     "raw_output": ""
+  },
+  {
+    "impl": "pdmrg2",
+    "model": "tfim",
+    "L": 32,
+    "chi": 128,
+    "sweeps": 40,
+    "np": 2,
+    "threads": 1,
+    "energy": -40.384313161216994,
+    "solve_time": 940.691,
+    "wall_time": 941.7692081928253,
+    "success": true,
+    "raw_output": ""
+  },
+  {
+    "impl": "pdmrg2",
+    "model": "tfim",
+    "L": 32,
+    "chi": 128,
+    "sweeps": 40,
+    "np": 4,
+    "threads": 1,
+    "energy": -40.38431316121717,
+    "solve_time": 533.104,
+    "wall_time": 534.2408194541931,
+    "success": true,
+    "raw_output": ""
+  },
+  {
+    "impl": "pdmrg2",
+    "model": "tfim",
+    "L": 32,
+    "chi": 128,
+    "sweeps": 40,
+    "np": 8,
+    "threads": 1,
+    "energy": -40.38431316121726,
+    "solve_time": 474.448,
+    "wall_time": 475.6652133464813,
+    "success": true,
+    "raw_output": ""
   }
 ]
