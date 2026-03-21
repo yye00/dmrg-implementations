@@ -8679,5 +8679,19 @@
     "wall_time": 475.6652133464813,
     "success": true,
     "raw_output": ""
+  },
+  {
+    "impl": "pdmrg2",
+    "model": "tfim",
+    "L": 64,
+    "chi": 50,
+    "sweeps": 40,
+    "np": 2,
+    "threads": 1,
+    "energy": -81.12598012313988,
+    "solve_time": 58.709,
+    "wall_time": 59.80429482460022,
+    "success": true,
+    "raw_output": ""
   }
 ]
