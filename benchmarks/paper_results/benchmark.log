@@ -349,3 +349,9 @@
   [saved 662 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-21 03:22:03]   [git push: results saved to GitHub]
 [2026-03-21 03:22:03]   pdmrg-gpu josephson L=32 chi=50 segments=2
+[2026-03-21 03:33:13]     E=9.110918842564  t=669.2s  OK
+  [saved 663 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 03:33:13]   pdmrg-gpu josephson L=32 chi=50 segments=4
+[2026-03-21 03:42:36]     E=9.172490746976  t=563.5s  OK
+  [saved 664 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 03:42:36]   pdmrg-gpu josephson L=32 chi=50 segments=8

@@ -8968,5 +8968,35 @@
     "success": true,
     "raw_output": "",
     "nmax": 2
+  },
+  {
+    "impl": "pdmrg-gpu",
+    "model": "josephson",
+    "L": 32,
+    "chi": 50,
+    "sweeps": 40,
+    "segments": 2,
+    "energy": 9.110918842564,
+    "wall_time": 669.174,
+    "outer_iters": null,
+    "polish_sweeps": null,
+    "success": true,
+    "raw_output": "",
+    "nmax": 2
+  },
+  {
+    "impl": "pdmrg-gpu",
+    "model": "josephson",
+    "L": 32,
+    "chi": 50,
+    "sweeps": 40,
+    "segments": 4,
+    "energy": 9.172490746976,
+    "wall_time": 563.513,
+    "outer_iters": null,
+    "polish_sweeps": null,
+    "success": true,
+    "raw_output": "",
+    "nmax": 2
   }
 ]
