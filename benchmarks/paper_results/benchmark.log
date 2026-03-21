@@ -266,3 +266,30 @@
 [2026-03-21 01:05:05]     E=-81.125980123140  t=124.1s  OK
   [saved 645 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-21 01:05:05]   pdmrg2 tfim L=64 chi=128 np=2
+[2026-03-21 01:35:05]     E=FAIL  t=1800.0s  TIMEOUT/FAIL
+  [saved 646 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 01:35:05]   SKIP pdmrg2 tfim L=64 chi=128 np=4 (timeout)
+[2026-03-21 01:35:05]   SKIP pdmrg2 tfim L=64 chi=128 np=8 (timeout)
+[2026-03-21 01:35:05]   pdmrg2 tfim L=100 chi=50 np=2
+[2026-03-21 01:43:14]     E=-126.961876739675  t=487.3s  OK
+  [saved 647 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 01:43:14]   pdmrg2 tfim L=100 chi=50 np=4
+[2026-03-21 01:51:10]     E=-126.961876739676  t=474.4s  OK
+  [saved 648 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 01:51:10]   pdmrg2 tfim L=100 chi=50 np=8
+[2026-03-21 01:56:06]     E=-126.961876739677  t=294.4s  OK
+  [saved 649 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 01:56:06]   SKIP pdmrg2 tfim L=100 chi=128 np=2 (timeout)
+[2026-03-21 01:56:06]   SKIP pdmrg2 tfim L=100 chi=128 np=4 (timeout)
+[2026-03-21 01:56:06]   SKIP pdmrg2 tfim L=100 chi=128 np=8 (timeout)
+[2026-03-21 01:56:06] ================================================================================
+[2026-03-21 01:56:06] PHASE 3: GPU parallel DMRG (pdmrg-gpu + pdmrg2-gpu)
+[2026-03-21 01:56:06] ================================================================================
+[2026-03-21 01:56:06]   pdmrg-gpu heisenberg L=20 chi=128 segments=4
+[2026-03-21 01:57:53]     E=-10.536667084159  t=106.8s  OK
+  [saved 650 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 01:57:53]   pdmrg-gpu heisenberg L=32 chi=20 segments=2
+[2026-03-21 01:58:27]     E=-7.577327128268  t=33.8s  TIMEOUT/FAIL
+  [saved 651 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 01:58:27]   pdmrg-gpu heisenberg L=32 chi=20 segments=4
+[2026-03-21 01:58:56]     E=-7.720190797980  t=28.5s  TIMEOUT/FAIL
