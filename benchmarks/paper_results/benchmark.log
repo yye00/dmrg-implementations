@@ -566,3 +566,4 @@
 [2026-03-20 23:59:48]     E=-10.309085186456  t=24.7s  OK
   [saved 652 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
 [2026-03-20 23:59:48]   pdmrg-gpu heisenberg L=20 chi=50 segments=4
+[2026-03-21 00:00:12]     E=-9.884430405995  t=24.4s  OK
