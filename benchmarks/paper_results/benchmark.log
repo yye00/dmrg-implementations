@@ -673,3 +673,5 @@
 [2026-03-21 06:47:03] BENCHMARK COMPLETE — 737 data points in 6.7 hours
 [2026-03-21 06:47:03] ================================================================================
 [2026-03-21 06:47:03] Summary CSV: /home/hotaisle/dmrg-implementations/benchmarks/paper_results/summary.csv
+  [saved 737 results to /home/hotaisle/dmrg-implementations/benchmarks/paper_results/results.json]
+[2026-03-21 06:47:03]   [git push: results saved to GitHub]
