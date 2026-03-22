@@ -9225,7 +9225,7 @@
     "raw_output": "TIMEOUT"
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 20,
@@ -9239,7 +9239,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 20,
@@ -9253,7 +9253,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 50,
@@ -9267,7 +9267,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 50,
@@ -9281,7 +9281,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 128,
@@ -9295,7 +9295,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 128,
@@ -9309,7 +9309,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 20,
     "chi": 20,
@@ -9323,7 +9323,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 20,
     "chi": 20,
@@ -9337,7 +9337,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 20,
     "chi": 50,
@@ -9351,7 +9351,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 20,
     "chi": 50,
@@ -9365,7 +9365,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 20,
     "chi": 128,
@@ -9379,7 +9379,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 20,
     "chi": 128,
@@ -9393,7 +9393,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 32,
     "chi": 20,
@@ -9407,7 +9407,7 @@
     "raw_output": "======================================\nPDMRG2-GPU Heisenberg Test (float64)\n======================================\n  L=32, d=2, chi_max=20, D_mpo=5\n  segments=2, outer=30, local=2, warmup=3\n  SVD: GPU (rocsolver)\n  Bond split: Newton-Schulz\n  Eigensolver: Lanczos\n======================================\n\n=== PDMRG2-GPU: Newton-Schulz + Block-Davidson (float64) ===\nL = 32, d = 2, chi_max = 20, D_mpo = 5, segments = 2\nDavidson block_size = 4, max_subspace = 32\nBond split: Newton-Schulz + eigendecomp\nWarmup sweeps: 3, local sweeps/iter: 2, outer sweeps: 30\n\n  Segment 0: sites [0, 15]\n  Segment 1: sites [16, 31]\n  Boundary 0: bond at site 15\n\nBuilding initial environments...\n  Environment build: 0.486 s\nRunning up to 3 warmup sweeps (full-chain dmrg2)...\n  Warmup 0: E = -13.995427606650, dE = 1.00e+30, time = 0.568 s\n  Warmup 1: E = -13.997308354723, dE = 1.88e-03, time = 0.391 s\n  Warmup 2: E = -13.997308348766, dE = 5.96e-09, time = 0.369 s\nWarmup: 1.814 s\n\nOuter   0: E = -13.997308846468, dE = 4.98e-07, time = 0.487 s  chi=[2,4,8,16,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,16,8,4,2]\nOuter   1: E = -13.997308846468, dE = 1.67e-13, time = 0.438 s  chi=[2,4,8,16,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,16,8,4,2]\nConverged after 2 outer iterations!\nTotal parallel time: 0.848 s, boundary time: 0.076 s\nPolish sweeps (full-chain dmrg2, max 10)...\n  Polish 0: E = -13.997305767530, dE = 3.08e-06, time = 0.407 s\n  Polish 1: E = -13.997308349893, dE = 2.58e-06, time = 0.373 s\n  Polish 2: E = -13.997308348756, dE = 1.14e-09, time = 0.383 s\n  Polish 3: E = -13.997308348754, dE = 1.99e-12, time = 0.394 s\n  Polish converged after 4 sweeps\n\nTotal wall time: 4.299 s\n\n--- RESULT ---\nFinal energy: -13.997308348754\nExact energy: -13.997315618007\nAbsolute error: 7.27e-06\nFAIL\n"
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 32,
     "chi": 20,
@@ -9421,7 +9421,7 @@
     "raw_output": "======================================\nPDMRG2-GPU Heisenberg Test (float64)\n======================================\n  L=32, d=2, chi_max=20, D_mpo=5\n  segments=4, outer=30, local=2, warmup=3\n  SVD: GPU (rocsolver)\n  Bond split: Newton-Schulz\n  Eigensolver: Lanczos\n======================================\n\n=== PDMRG2-GPU: Newton-Schulz + Block-Davidson (float64) ===\nL = 32, d = 2, chi_max = 20, D_mpo = 5, segments = 4\nDavidson block_size = 4, max_subspace = 32\nBond split: Newton-Schulz + eigendecomp\nWarmup sweeps: 3, local sweeps/iter: 2, outer sweeps: 30\n\n  Segment 0: sites [0, 7]\n  Segment 1: sites [8, 15]\n  Segment 2: sites [16, 23]\n  Segment 3: sites [24, 31]\n  Boundary 0: bond at site 7\n  Boundary 1: bond at site 15\n  Boundary 2: bond at site 23\n\nBuilding initial environments...\n  Environment build: 0.483 s\nRunning up to 3 warmup sweeps (full-chain dmrg2)...\n  Warmup 0: E = -13.995376270398, dE = 1.00e+30, time = 0.560 s\n  Warmup 1: E = -13.997308353827, dE = 1.93e-03, time = 0.386 s\n  Warmup 2: E = -13.997308348766, dE = 5.06e-09, time = 0.357 s\nWarmup: 1.786 s\n\nOuter   0: E = -13.997308846467, dE = 4.98e-07, time = 0.410 s  chi=[2,4,8,16,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,16,8,4,2]\nOuter   1: E = -13.997308846468, dE = 1.85e-12, time = 0.402 s  chi=[2,4,8,16,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,16,8,4,2]\nConverged after 2 outer iterations!\nTotal parallel time: 0.598 s, boundary time: 0.214 s\nPolish sweeps (full-chain dmrg2, max 10)...\n  Polish 0: E = -13.997305731609, dE = 3.11e-06, time = 0.399 s\n  Polish 1: E = -13.997308350195, dE = 2.62e-06, time = 0.362 s\n  Polish 2: E = -13.997308348758, dE = 1.44e-09, time = 0.369 s\n  Polish 3: E = -13.997308348754, dE = 3.69e-12, time = 0.381 s\n  Polish converged after 4 sweeps\n\nTotal wall time: 4.112 s\n\n--- RESULT ---\nFinal energy: -13.997308348754\nExact energy: -13.997315618007\nAbsolute error: 7.27e-06\nFAIL\n"
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 32,
     "chi": 20,
@@ -9435,7 +9435,7 @@
     "raw_output": "======================================\nPDMRG2-GPU Heisenberg Test (float64)\n======================================\n  L=32, d=2, chi_max=20, D_mpo=5\n  segments=8, outer=30, local=2, warmup=3\n  SVD: GPU (rocsolver)\n  Bond split: Newton-Schulz\n  Eigensolver: Lanczos\n======================================\n\n=== PDMRG2-GPU: Newton-Schulz + Block-Davidson (float64) ===\nL = 32, d = 2, chi_max = 20, D_mpo = 5, segments = 8\nDavidson block_size = 4, max_subspace = 32\nBond split: Newton-Schulz + eigendecomp\nWarmup sweeps: 3, local sweeps/iter: 2, outer sweeps: 30\n\n  Segment 0: sites [0, 3]\n  Segment 1: sites [4, 7]\n  Segment 2: sites [8, 11]\n  Segment 3: sites [12, 15]\n  Segment 4: sites [16, 19]\n  Segment 5: sites [20, 23]\n  Segment 6: sites [24, 27]\n  Segment 7: sites [28, 31]\n  Boundary 0: bond at site 3\n  Boundary 1: bond at site 7\n  Boundary 2: bond at site 11\n  Boundary 3: bond at site 15\n  Boundary 4: bond at site 19\n  Boundary 5: bond at site 23\n  Boundary 6: bond at site 27\n\nBuilding initial environments...\n  Environment build: 0.482 s\nRunning up to 3 warmup sweeps (full-chain dmrg2)...\n  Warmup 0: E = -13.994231678718, dE = 1.00e+30, time = 0.569 s\n  Warmup 1: E = -13.997308354024, dE = 3.08e-03, time = 0.384 s\n  Warmup 2: E = -13.997308348764, dE = 5.26e-09, time = 0.359 s\nWarmup: 1.794 s\n\nOuter   0: E = -13.997308463455, dE = 1.15e-07, time = 0.451 s  chi=[2,4,8,16,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,16,8,4,2]\nOuter   1: E = -13.997308463450, dE = 4.98e-12, time = 0.453 s  chi=[2,4,8,16,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,20,16,8,4,2]\nConverged after 2 outer iterations!\nTotal parallel time: 0.461 s, boundary time: 0.443 s\nPolish sweeps (full-chain dmrg2, max 10)...\n  Polish 0: E = -13.997304836171, dE = 3.63e-06, time = 0.424 s\n  Polish 1: E = -13.997308350122, dE = 3.51e-06, time = 0.371 s\n  Polish 2: E = -13.997308348756, dE = 1.37e-09, time = 0.378 s\n  Polish 3: E = -13.997308348754, dE = 2.57e-12, ti"
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 32,
     "chi": 50,
@@ -9449,7 +9449,7 @@
     "raw_output": "======================================\nPDMRG2-GPU Heisenberg Test (float64)\n======================================\n  L=32, d=2, chi_max=50, D_mpo=5\n  segments=2, outer=30, local=2, warmup=3\n  SVD: GPU (rocsolver)\n  Bond split: Newton-Schulz\n  Eigensolver: Lanczos\n======================================\n\n=== PDMRG2-GPU: Newton-Schulz + Block-Davidson (float64) ===\nL = 32, d = 2, chi_max = 50, D_mpo = 5, segments = 2\nDavidson block_size = 4, max_subspace = 32\nBond split: Newton-Schulz + eigendecomp\nWarmup sweeps: 3, local sweeps/iter: 2, outer sweeps: 30\n\n  Segment 0: sites [0, 15]\n  Segment 1: sites [16, 31]\n  Boundary 0: bond at site 15\n\nBuilding initial environments...\n  Environment build: 0.484 s\nRunning up to 3 warmup sweeps (full-chain dmrg2)...\n  Warmup 0: E = -13.997080448980, dE = 1.00e+30, time = 1.203 s\n  Warmup 1: E = -13.997315615465, dE = 2.35e-04, time = 0.798 s\n  Warmup 2: E = -13.997315615465, dE = 2.63e-13, time = 0.804 s\n  Warmup converged after 3 sweeps\nWarmup: 3.289 s\n\nOuter   0: E = -13.997315615770, dE = 3.05e-10, time = 0.977 s  chi=[2,4,8,16,32,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,32,16,8,4,2]\nOuter   1: E = -13.997315615770, dE = 1.60e-14, time = 0.897 s  chi=[2,4,8,16,32,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,32,16,8,4,2]\nConverged after 2 outer iterations!\nTotal parallel time: 1.689 s, boundary time: 0.186 s\nPolish sweeps (full-chain dmrg2, max 10)...\n  Polish 0: E = -13.997315349147, dE = 2.67e-07, time = 0.606 s\n  Polish 1: E = -13.997315615465, dE = 2.66e-07, time = 0.769 s\n  Polish 2: E = -13.997315615465, dE = 1.07e-14, time = 0.806 s\n  Polish converged after 3 sweeps\n\nTotal wall time: 7.347 s\n\n--- RESULT ---\nFinal energy: -13.997315615465\nExact energy: -13.997315618007\nAbsolute error: 2.54e-09\nFAIL\n"
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 32,
     "chi": 50,
@@ -9463,7 +9463,7 @@
     "raw_output": "======================================\nPDMRG2-GPU Heisenberg Test (float64)\n======================================\n  L=32, d=2, chi_max=50, D_mpo=5\n  segments=4, outer=30, local=2, warmup=3\n  SVD: GPU (rocsolver)\n  Bond split: Newton-Schulz\n  Eigensolver: Lanczos\n======================================\n\n=== PDMRG2-GPU: Newton-Schulz + Block-Davidson (float64) ===\nL = 32, d = 2, chi_max = 50, D_mpo = 5, segments = 4\nDavidson block_size = 4, max_subspace = 32\nBond split: Newton-Schulz + eigendecomp\nWarmup sweeps: 3, local sweeps/iter: 2, outer sweeps: 30\n\n  Segment 0: sites [0, 7]\n  Segment 1: sites [8, 15]\n  Segment 2: sites [16, 23]\n  Segment 3: sites [24, 31]\n  Boundary 0: bond at site 7\n  Boundary 1: bond at site 15\n  Boundary 2: bond at site 23\n\nBuilding initial environments...\n  Environment build: 0.482 s\nRunning up to 3 warmup sweeps (full-chain dmrg2)...\n  Warmup 0: E = -13.997125720248, dE = 1.00e+30, time = 1.198 s\n  Warmup 1: E = -13.997315615465, dE = 1.90e-04, time = 0.802 s\n  Warmup 2: E = -13.997315615465, dE = 2.65e-13, time = 0.806 s\n  Warmup converged after 3 sweeps\nWarmup: 3.289 s\n\nOuter   0: E = -13.997315615770, dE = 3.05e-10, time = 0.913 s  chi=[2,4,8,16,32,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,32,16,8,4,2]\nOuter   1: E = -13.997315615770, dE = 6.93e-14, time = 0.859 s  chi=[2,4,8,16,32,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,32,16,8,4,2]\nConverged after 2 outer iterations!\nTotal parallel time: 1.264 s, boundary time: 0.509 s\nPolish sweeps (full-chain dmrg2, max 10)...\n  Polish 0: E = -13.997315585606, dE = 3.02e-08, time = 0.618 s\n  Polish 1: E = -13.997315615465, dE = 2.99e-08, time = 0.767 s\n  Polish 2: E = -13.997315615465, dE = 1.76e-13, time = 0.809 s\n  Polish converged after 3 sweeps\n\nTotal wall time: 7.258 s\n\n--- RESULT ---\nFinal energy: -13.997315615465\nExact energy: -13.997315618007\nAbsolute error: 2.54e-09\nFAIL\n"
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 32,
     "chi": 50,
@@ -9477,7 +9477,7 @@
     "raw_output": "======================================\nPDMRG2-GPU Heisenberg Test (float64)\n======================================\n  L=32, d=2, chi_max=50, D_mpo=5\n  segments=8, outer=30, local=2, warmup=3\n  SVD: GPU (rocsolver)\n  Bond split: Newton-Schulz\n  Eigensolver: Lanczos\n======================================\n\n=== PDMRG2-GPU: Newton-Schulz + Block-Davidson (float64) ===\nL = 32, d = 2, chi_max = 50, D_mpo = 5, segments = 8\nDavidson block_size = 4, max_subspace = 32\nBond split: Newton-Schulz + eigendecomp\nWarmup sweeps: 3, local sweeps/iter: 2, outer sweeps: 30\n\n  Segment 0: sites [0, 3]\n  Segment 1: sites [4, 7]\n  Segment 2: sites [8, 11]\n  Segment 3: sites [12, 15]\n  Segment 4: sites [16, 19]\n  Segment 5: sites [20, 23]\n  Segment 6: sites [24, 27]\n  Segment 7: sites [28, 31]\n  Boundary 0: bond at site 3\n  Boundary 1: bond at site 7\n  Boundary 2: bond at site 11\n  Boundary 3: bond at site 15\n  Boundary 4: bond at site 19\n  Boundary 5: bond at site 23\n  Boundary 6: bond at site 27\n\nBuilding initial environments...\n  Environment build: 0.486 s\nRunning up to 3 warmup sweeps (full-chain dmrg2)...\n  Warmup 0: E = -13.997179352422, dE = 1.00e+30, time = 1.183 s\n  Warmup 1: E = -13.997315615465, dE = 1.36e-04, time = 0.805 s\n  Warmup 2: E = -13.997315615465, dE = 2.95e-13, time = 0.812 s\n  Warmup converged after 3 sweeps\nWarmup: 3.286 s\n\nOuter   0: E = -13.997315615482, dE = 1.70e-11, time = 0.990 s  chi=[2,4,8,16,32,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,32,16,8,4,2]\nOuter   1: E = -13.997315615482, dE = 3.55e-15, time = 0.952 s  chi=[2,4,8,16,32,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,32,16,8,4,2]\nConverged after 2 outer iterations!\nTotal parallel time: 1.008 s, boundary time: 0.933 s\nPolish sweeps (full-chain dmrg2, max 10)...\n  Polish 0: E = -13.997315380611, dE = 2.35e-07, time = 0.627 s\n  Polish 1: E = -13.997315615465, dE = 2.35e-07, time = 0.761 s\n  Polish 2: E = -13.997315615465, dE = 7.64e-14, time = 0.806 s\n  Polish converge"
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 32,
     "chi": 128,
@@ -9491,7 +9491,7 @@
     "raw_output": "======================================\nPDMRG2-GPU Heisenberg Test (float64)\n======================================\n  L=32, d=2, chi_max=128, D_mpo=5\n  segments=2, outer=40, local=2, warmup=3\n  SVD: GPU (rocsolver)\n  Bond split: Newton-Schulz\n  Eigensolver: Lanczos\n======================================\n\n=== PDMRG2-GPU: Newton-Schulz + Block-Davidson (float64) ===\nL = 32, d = 2, chi_max = 128, D_mpo = 5, segments = 2\nDavidson block_size = 4, max_subspace = 32\nBond split: Newton-Schulz + eigendecomp\nWarmup sweeps: 3, local sweeps/iter: 2, outer sweeps: 40\n\n  Segment 0: sites [0, 15]\n  Segment 1: sites [16, 31]\n  Boundary 0: bond at site 15\n\nBuilding initial environments...\n  Environment build: 0.483 s\nRunning up to 3 warmup sweeps (full-chain dmrg2)...\n  Warmup 0: E = -13.997315614585, dE = 1.00e+30, time = 4.769 s\n  Warmup 1: E = -13.997315618224, dE = 3.64e-09, time = 2.684 s\n  Warmup 2: E = -13.997315618224, dE = 6.39e-14, time = 2.648 s\n  Warmup converged after 3 sweeps\nWarmup: 10.584 s\n\nOuter   0: E = -13.997315618224, dE = 6.04e-14, time = 3.299 s  chi=[2,4,8,16,32,64,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,64,32,16,8,4,2]\nOuter   1: E = -13.997315618224, dE = 3.20e-14, time = 2.953 s  chi=[2,4,8,16,32,64,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,64,32,16,8,4,2]\nConverged after 2 outer iterations!\nTotal parallel time: 5.614 s, boundary time: 0.639 s\nPolish sweeps (full-chain dmrg2, max 10)...\n  Polish 0: E = -13.997315494859, dE = 1.23e-07, time = 1.273 s\n  Polish 1: E = -13.997315618224, dE = 1.23e-07, time = 1.826 s\n  Polish 2: E = -13.997315618224, dE = 1.42e-14, time = 2.629 s\n  Polish converged after 3 sweeps\n\nTotal wall time: 22.567 s\n\n--- RESULT ---\nFinal energy: -13.997315618224\nExact energy: -13.997315618007\nAbsolute error: 2.17e-10\nFAIL\n"
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 32,
     "chi": 128,
@@ -9505,7 +9505,7 @@
     "raw_output": "======================================\nPDMRG2-GPU Heisenberg Test (float64)\n======================================\n  L=32, d=2, chi_max=128, D_mpo=5\n  segments=4, outer=40, local=2, warmup=3\n  SVD: GPU (rocsolver)\n  Bond split: Newton-Schulz\n  Eigensolver: Lanczos\n======================================\n\n=== PDMRG2-GPU: Newton-Schulz + Block-Davidson (float64) ===\nL = 32, d = 2, chi_max = 128, D_mpo = 5, segments = 4\nDavidson block_size = 4, max_subspace = 32\nBond split: Newton-Schulz + eigendecomp\nWarmup sweeps: 3, local sweeps/iter: 2, outer sweeps: 40\n\n  Segment 0: sites [0, 7]\n  Segment 1: sites [8, 15]\n  Segment 2: sites [16, 23]\n  Segment 3: sites [24, 31]\n  Boundary 0: bond at site 7\n  Boundary 1: bond at site 15\n  Boundary 2: bond at site 23\n\nBuilding initial environments...\n  Environment build: 0.486 s\nRunning up to 3 warmup sweeps (full-chain dmrg2)...\n  Warmup 0: E = -13.997315616140, dE = 1.00e+30, time = 4.875 s\n  Warmup 1: E = -13.997315618224, dE = 2.08e-09, time = 2.721 s\n  Warmup 2: E = -13.997315618224, dE = 3.20e-14, time = 2.666 s\n  Warmup converged after 3 sweeps\nWarmup: 10.749 s\n\nOuter   0: E = -13.997315618224, dE = 5.68e-14, time = 3.627 s  chi=[2,4,8,16,32,64,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,64,32,16,8,4,2]\nOuter   1: E = -13.997315618224, dE = 7.11e-14, time = 3.508 s  chi=[2,4,8,16,32,64,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,64,32,16,8,4,2]\nConverged after 2 outer iterations!\nTotal parallel time: 5.011 s, boundary time: 2.123 s\nPolish sweeps (full-chain dmrg2, max 10)...\n  Polish 0: E = -13.997315585142, dE = 3.31e-08, time = 1.110 s\n  Polish 1: E = -13.997315618224, dE = 3.31e-08, time = 1.818 s\n  Polish 2: E = -13.997315618224, dE = 7.64e-14, time = 2.653 s\n  Polish converged after 3 sweeps\n\nTotal wall time: 23.468 s\n\n--- RESULT ---\nFinal energy: -13.997315618224\nExact energy: -13.997315618007\nAbsolute error: 2.17e-10\nFAIL\n"
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 32,
     "chi": 128,
@@ -9519,7 +9519,7 @@
     "raw_output": "======================================\nPDMRG2-GPU Heisenberg Test (float64)\n======================================\n  L=32, d=2, chi_max=128, D_mpo=5\n  segments=8, outer=40, local=2, warmup=3\n  SVD: GPU (rocsolver)\n  Bond split: Newton-Schulz\n  Eigensolver: Lanczos\n======================================\n\n=== PDMRG2-GPU: Newton-Schulz + Block-Davidson (float64) ===\nL = 32, d = 2, chi_max = 128, D_mpo = 5, segments = 8\nDavidson block_size = 4, max_subspace = 32\nBond split: Newton-Schulz + eigendecomp\nWarmup sweeps: 3, local sweeps/iter: 2, outer sweeps: 40\n\n  Segment 0: sites [0, 3]\n  Segment 1: sites [4, 7]\n  Segment 2: sites [8, 11]\n  Segment 3: sites [12, 15]\n  Segment 4: sites [16, 19]\n  Segment 5: sites [20, 23]\n  Segment 6: sites [24, 27]\n  Segment 7: sites [28, 31]\n  Boundary 0: bond at site 3\n  Boundary 1: bond at site 7\n  Boundary 2: bond at site 11\n  Boundary 3: bond at site 15\n  Boundary 4: bond at site 19\n  Boundary 5: bond at site 23\n  Boundary 6: bond at site 27\n\nBuilding initial environments...\n  Environment build: 0.481 s\nRunning up to 3 warmup sweeps (full-chain dmrg2)...\n  Warmup 0: E = -13.997315613583, dE = 1.00e+30, time = 4.827 s\n  Warmup 1: E = -13.997315618224, dE = 4.64e-09, time = 2.691 s\n  Warmup 2: E = -13.997315618224, dE = 4.80e-14, time = 2.633 s\n  Warmup converged after 3 sweeps\nWarmup: 10.633 s\n\nOuter   0: E = -13.997315618224, dE = 2.84e-14, time = 3.940 s  chi=[2,4,8,16,32,64,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,64,32,16,8,4,2]\nOuter   1: E = -13.997315618224, dE = 4.09e-14, time = 3.712 s  chi=[2,4,8,16,32,64,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,128,64,32,16,8,4,2]\nConverged after 2 outer iterations!\nTotal parallel time: 4.188 s, boundary time: 3.464 s\nPolish sweeps (full-chain dmrg2, max 10)...\n  Polish 0: E = -13.997315382891, dE = 2.35e-07, time = 0.769 s\n  Polish 1: E = -13.997315618223, dE = 2.35e-07, time = 1.819 s\n  Polish 2: E = -13.997315618224, dE = 9"
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 64,
     "chi": 50,
@@ -9533,7 +9533,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 64,
     "chi": 50,
@@ -9547,7 +9547,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "heisenberg",
     "L": 64,
     "chi": 50,
@@ -9561,7 +9561,7 @@
     "raw_output": "TIMEOUT"
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 8,
     "chi": 20,
@@ -9576,7 +9576,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 8,
     "chi": 50,
@@ -9591,7 +9591,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 8,
     "chi": 128,
@@ -9606,7 +9606,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 16,
     "chi": 20,
@@ -9621,7 +9621,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 16,
     "chi": 20,
@@ -9636,7 +9636,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 16,
     "chi": 50,
@@ -9651,7 +9651,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 16,
     "chi": 50,
@@ -9666,7 +9666,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 16,
     "chi": 128,
@@ -9681,7 +9681,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 16,
     "chi": 128,
@@ -9696,7 +9696,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 32,
     "chi": 50,
@@ -9711,7 +9711,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 32,
     "chi": 50,
@@ -9726,7 +9726,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 32,
     "chi": 50,
@@ -9741,7 +9741,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 32,
     "chi": 128,
@@ -9756,7 +9756,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 32,
     "chi": 128,
@@ -9771,7 +9771,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 32,
     "chi": 128,
@@ -9786,7 +9786,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 48,
     "chi": 50,
@@ -9801,7 +9801,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 48,
     "chi": 50,
@@ -9816,7 +9816,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "josephson",
     "L": 48,
     "chi": 50,
@@ -9831,7 +9831,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 12,
     "chi": 20,
@@ -9845,7 +9845,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 12,
     "chi": 20,
@@ -9859,7 +9859,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 12,
     "chi": 50,
@@ -9873,7 +9873,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 12,
     "chi": 50,
@@ -9887,7 +9887,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 12,
     "chi": 128,
@@ -9901,7 +9901,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 12,
     "chi": 128,
@@ -9915,7 +9915,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 20,
     "chi": 20,
@@ -9929,7 +9929,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 20,
     "chi": 20,
@@ -9943,7 +9943,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 20,
     "chi": 50,
@@ -9957,7 +9957,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 20,
     "chi": 50,
@@ -9971,7 +9971,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 20,
     "chi": 128,
@@ -9985,7 +9985,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 20,
     "chi": 128,
@@ -9999,7 +9999,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 32,
     "chi": 20,
@@ -10013,7 +10013,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 32,
     "chi": 20,
@@ -10027,7 +10027,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2-gpu",
+    "impl": "pdmrg-gpu-opt",
     "model": "tfim",
     "L": 32,
     "chi": 20,
