@@ -190,7 +190,7 @@ void build_josephson_mpo(int L, int d, int D_mpo,
 // ============================================================================
 // Heisenberg test (real)
 // ============================================================================
-int test_heisenberg(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd = false) {
+int test_heisenberg(int L, int chi_max, int n_sweeps) {
     int d = 2;
     int D_mpo = 5;
 
@@ -198,8 +198,6 @@ int test_heisenberg(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd = 
     printf("Two-Site Heisenberg DMRG-GPU Test (float64)\n");
     printf("======================================\n");
     printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
-    printf("  SVD: %s%s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)",
-           rsvd ? " + randomized truncation" : "");
     printf("======================================\n\n");
 
     std::map<int, double> exact_energies = {
@@ -208,8 +206,6 @@ int test_heisenberg(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd = 
     };
 
     DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
-    dmrg.set_cpu_svd(!gpu_svd);
-    dmrg.set_rsvd(rsvd);
     dmrg.initialize_mps_neel();
 
     std::vector<double*> h_mpo_tensors(L);
@@ -238,7 +234,7 @@ int test_heisenberg(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd = 
 // ============================================================================
 // TFIM test (real)
 // ============================================================================
-int test_tfim(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd,
+int test_tfim(int L, int chi_max, int n_sweeps,
               double J, double h_field) {
     int d = 2;
     int D_mpo = 3;
@@ -248,13 +244,9 @@ int test_tfim(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd,
     printf("======================================\n");
     printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
     printf("  J=%.4f, h=%.4f\n", J, h_field);
-    printf("  SVD: %s%s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)",
-           rsvd ? " + randomized truncation" : "");
     printf("======================================\n\n");
 
     DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
-    dmrg.set_cpu_svd(!gpu_svd);
-    dmrg.set_rsvd(rsvd);
     dmrg.initialize_mps_random();
 
     std::vector<double*> h_mpo_tensors(L);
@@ -274,7 +266,7 @@ int test_tfim(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd,
 // ============================================================================
 // Josephson Junction test (complex128)
 // ============================================================================
-int test_josephson(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd,
+int test_josephson(int L, int chi_max, int n_sweeps,
                    int n_max, double E_J, double E_C, double phi_ext) {
     int d = 2 * n_max + 1;
     int D_mpo = 4;
@@ -285,8 +277,6 @@ int test_josephson(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd,
     printf("  L=%d, d=%d (n_max=%d), chi_max=%d, D_mpo=%d, sweeps=%d\n",
            L, d, n_max, chi_max, D_mpo, n_sweeps);
     printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/%.1f\n", E_J, E_C, M_PI / phi_ext);
-    printf("  SVD: %s%s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)",
-           rsvd ? " + randomized truncation" : "");
     printf("======================================\n\n");
 
     std::map<int, double> exact_energies;
@@ -299,8 +289,6 @@ int test_josephson(int L, int chi_max, int n_sweeps, bool gpu_svd, bool rsvd,
     }
 
     DMRG2GPU<Complex> dmrg(L, d, chi_max, D_mpo, 1e-12);
-    dmrg.set_cpu_svd(!gpu_svd);
-    dmrg.set_rsvd(rsvd);
     dmrg.initialize_mps_random();
 
     std::vector<Complex*> h_mpo_tensors(L);
@@ -333,8 +321,6 @@ int main(int argc, char** argv) {
     int L = 8;
     int chi_max = 32;
     int n_sweeps = 30;
-    bool gpu_svd = true;
-    bool rsvd = false;
     bool run_josephson = false;
     bool run_tfim = false;
     int n_max = 1;
@@ -345,8 +331,6 @@ int main(int argc, char** argv) {
     {
         int pos = 0;
         for (int i = 1; i < argc; i++) {
-            if (std::string(argv[i]) == "--cpu-svd") { gpu_svd = false; continue; }
-            if (std::string(argv[i]) == "--rsvd") { rsvd = true; continue; }
             if (std::string(argv[i]) == "--josephson") { run_josephson = true; continue; }
             if (std::string(argv[i]) == "--tfim") { run_tfim = true; continue; }
             if (std::string(argv[i]) == "--hfield" && i+1 < argc) { h_field = std::atof(argv[++i]); continue; }
@@ -364,11 +348,11 @@ int main(int argc, char** argv) {
 
     try {
         if (run_josephson) {
-            return test_josephson(L, chi_max, n_sweeps, gpu_svd, rsvd, n_max, E_J, E_C, phi_ext);
+            return test_josephson(L, chi_max, n_sweeps, n_max, E_J, E_C, phi_ext);
         } else if (run_tfim) {
-            return test_tfim(L, chi_max, n_sweeps, gpu_svd, rsvd, J_tfim, h_field);
+            return test_tfim(L, chi_max, n_sweeps, J_tfim, h_field);
         } else {
-            return test_heisenberg(L, chi_max, n_sweeps, gpu_svd, rsvd);
+            return test_heisenberg(L, chi_max, n_sweeps);
         }
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << std::endl;

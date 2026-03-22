@@ -79,12 +79,7 @@ def run_benchmark(impl, L, chi, sweeps, model='heisenberg', nmax=1):
     else:
         extra = ''
 
-    # baseline dmrg-gpu uses --cpu-svd by default, use --gpu-svd for fair comparison
-    if impl == 'dmrg-gpu':
-        extra += ' --cpu-svd'
-    elif impl == 'dmrg2-gpu':
-        extra += ' --cpu-svd'
-
+    # baselines always use GPU SVD (rocsolver); opt versions use Newton-Schulz (GPU GEMMs)
     cmd = f'{binary} {L} {chi} {sweeps} {extra}'
 
     t0 = time.time()

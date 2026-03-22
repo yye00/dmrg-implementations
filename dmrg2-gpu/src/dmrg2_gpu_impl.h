@@ -123,79 +123,11 @@ DMRG2GPU<Scalar>::DMRG2GPU(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_svd_info_, sizeof(int)));
     HIP_CHECK(hipMalloc(&d_svd_work_, theta_size_max_ * sizeof(Scalar)));
 
-    // CPU SVD workspace
-    use_cpu_svd_ = false;
-    h_svd_A_.resize(theta_size_max_);
+    // CPU workspace (for receiving GPU SVD results and truncation/scaling)
     h_svd_U_.resize((size_t)svd_max_m * svd_max_k);
     h_svd_S_.resize(svd_max_k);
     h_svd_Vh_.resize((size_t)svd_max_k * svd_max_n);
     h_svd_tmp_.resize(std::max((size_t)svd_max_m * svd_max_k, (size_t)svd_max_k * svd_max_n));
-    h_svd_rwork_.resize(Traits::svd_rwork_size(svd_max_m, svd_max_n));
-
-    // Query optimal LAPACK workspace
-    {
-        int m = svd_max_m, n = svd_max_n;
-        int lwork_query = -1;
-        Scalar work_opt;
-        int info;
-        const char jobu = 'S', jobvt = 'S';
-        Traits::lapack_gesvd(&jobu, &jobvt, &m, &n, nullptr, &m, nullptr,
-                nullptr, &m, nullptr, &svd_max_k, &work_opt, &lwork_query,
-                h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
-        int opt_size;
-        if constexpr (Traits::is_complex) {
-            opt_size = (int)Traits::real_part(work_opt) + 1;
-        } else {
-            opt_size = (int)work_opt + 1;
-        }
-        h_svd_work_.resize(opt_size);
-    }
-
-    // Randomized truncated SVD workspace
-    use_rsvd_ = false;
-    rsvd_oversampling_ = 20;
-    d_rsvd_omega_ = nullptr;
-    d_rsvd_Y_ = nullptr;
-    d_rsvd_Q_ = nullptr;
-    d_rsvd_B_ = nullptr;
-    d_rsvd_ipiv_ = nullptr;
-    d_rsvd_U_full_ = nullptr;
-    {
-        int rsvd_r = chi_max_ + rsvd_oversampling_;  // target rank + oversampling
-        int rsvd_m = svd_max_m;  // chi*d
-        int rsvd_n = svd_max_n;  // d*chi
-        HIP_CHECK(hipMalloc(&d_rsvd_omega_, (size_t)rsvd_n * rsvd_r * sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&d_rsvd_Y_,    (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&d_rsvd_Q_,    (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&d_rsvd_B_,    (size_t)rsvd_r * rsvd_n * sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&d_rsvd_ipiv_, (size_t)rsvd_r * sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&d_rsvd_U_full_, (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
-        h_rsvd_B_.resize((size_t)rsvd_r * rsvd_n);
-        h_rsvd_U_small_.resize((size_t)rsvd_r * rsvd_r);
-
-        // Query SVD workspace for the smaller matrix (rsvd_r × rsvd_n)
-        {
-            int sm = rsvd_r, sn = rsvd_n;
-            int sk = std::min(sm, sn);
-            int svd_lwork_query = -1;
-            Scalar svd_work_opt;
-            int svd_info;
-            const char jobu = 'S', jobvt = 'S';
-            Traits::lapack_gesvd(&jobu, &jobvt, &sm, &sn, nullptr, &sm, nullptr,
-                    nullptr, &sm, nullptr, &sk, &svd_work_opt, &svd_lwork_query,
-                    h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &svd_info);
-            int svd_opt;
-            if constexpr (Traits::is_complex) {
-                svd_opt = (int)Traits::real_part(svd_work_opt) + 1;
-            } else {
-                svd_opt = (int)svd_work_opt + 1;
-            }
-            // Ensure h_svd_work_ is large enough for both full and reduced SVD
-            if ((int)h_svd_work_.size() < svd_opt) {
-                h_svd_work_.resize(svd_opt);
-            }
-        }
-    }
 }
 
 // ============================================================================
@@ -233,12 +165,6 @@ void DMRG2GPU<Scalar>::free_gpu_resources() {
     if (d_svd_E_) hipFree(d_svd_E_);
     if (d_svd_info_) hipFree(d_svd_info_);
     if (d_svd_work_) hipFree(d_svd_work_);
-    if (d_rsvd_omega_) hipFree(d_rsvd_omega_);
-    if (d_rsvd_Y_) hipFree(d_rsvd_Y_);
-    if (d_rsvd_Q_) hipFree(d_rsvd_Q_);
-    if (d_rsvd_B_) hipFree(d_rsvd_B_);
-    if (d_rsvd_ipiv_) hipFree(d_rsvd_ipiv_);
-    if (d_rsvd_U_full_) hipFree(d_rsvd_U_full_);
 
     rocblas_destroy_handle(rocblas_h_);
     hipStreamDestroy(stream_);
@@ -880,48 +806,27 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_);
 
-    Scalar* h_U_data;
-    RealType* h_S_data;
-    Scalar* h_Vh_data;
+    // GPU SVD via rocsolver gesvd
+    HIP_CHECK(hipMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice));
 
-    if (use_cpu_svd_) {
-        // === CPU SVD path ===
-        HIP_CHECK(hipMemcpy(h_svd_A_.data(), d_theta, m * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
+    Traits::rocsolver_gesvd(rocblas_h_,
+        rocblas_svect_singular, rocblas_svect_singular,
+        m, n_svd,
+        d_svd_A_, m,
+        d_svd_S_,
+        d_svd_U_, m,
+        d_svd_Vh_, full_k,
+        d_svd_E_,
+        rocblas_outofplace,
+        d_svd_info_);
 
-        int lwork = (int)h_svd_work_.size();
-        int info;
-        const char jobu = 'S', jobvt = 'S';
-        Traits::lapack_gesvd(&jobu, &jobvt, &m, &n_svd, h_svd_A_.data(), &m, h_svd_S_.data(),
-                h_svd_U_.data(), &m, h_svd_Vh_.data(), &full_k,
-                h_svd_work_.data(), &lwork,
-                h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
+    HIP_CHECK(hipMemcpy(h_svd_U_.data(), d_svd_U_, m * full_k * sizeof(Scalar), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_svd_S_.data(), d_svd_S_, full_k * sizeof(RealType), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(h_svd_Vh_.data(), d_svd_Vh_, full_k * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
 
-        h_U_data = h_svd_U_.data();
-        h_S_data = h_svd_S_.data();
-        h_Vh_data = h_svd_Vh_.data();
-    } else {
-        // === GPU SVD path ===
-        HIP_CHECK(hipMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice));
-
-        Traits::rocsolver_gesvd(rocblas_h_,
-            rocblas_svect_singular, rocblas_svect_singular,
-            m, n_svd,
-            d_svd_A_, m,
-            d_svd_S_,
-            d_svd_U_, m,
-            d_svd_Vh_, full_k,
-            d_svd_E_,
-            rocblas_outofplace,
-            d_svd_info_);
-
-        HIP_CHECK(hipMemcpy(h_svd_U_.data(), d_svd_U_, m * full_k * sizeof(Scalar), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(h_svd_S_.data(), d_svd_S_, full_k * sizeof(RealType), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(h_svd_Vh_.data(), d_svd_Vh_, full_k * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
-
-        h_U_data = h_svd_U_.data();
-        h_S_data = h_svd_S_.data();
-        h_Vh_data = h_svd_Vh_.data();
-    }
+    Scalar* h_U_data = h_svd_U_.data();
+    RealType* h_S_data = h_svd_S_.data();
+    Scalar* h_Vh_data = h_svd_Vh_.data();
 
     // Truncation (CPU, tiny loop)
     int new_k = k;
@@ -979,171 +884,6 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
 }
 
 // ============================================================================
-// Randomized truncated SVD split (Halko-Martinsson-Tropp)
-// ============================================================================
-
-template<typename Scalar>
-void DMRG2GPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction) {
-    int cL = chi_L(site);
-    int cR = chi_R(site + 1);
-    int m = cL * d_;
-    int n_svd = d_ * cR;
-    int full_k = std::min(m, n_svd);
-    int k = std::min(full_k, chi_max_);
-
-    // If matrix is small enough, fall back to full SVD (rSVD overhead not worth it)
-    if (full_k <= k + rsvd_oversampling_ || m <= 2 * k) {
-        svd_split(site, d_theta, direction);
-        return;
-    }
-
-    int r = k + rsvd_oversampling_;  // projection rank
-
-    // Step 1: Generate random Omega (n_svd × r) on CPU and upload
-    // Use a simple Gaussian random matrix
-    {
-        std::vector<Scalar> h_omega(n_svd * r);
-        for (int i = 0; i < n_svd * r; i++) {
-            h_omega[i] = Traits::random_val();
-        }
-        HIP_CHECK(hipMemcpy(d_rsvd_omega_, h_omega.data(),
-                            n_svd * r * sizeof(Scalar), hipMemcpyHostToDevice));
-    }
-
-    // Step 2: Y = theta @ Omega on GPU  (m × n_svd) @ (n_svd × r) → (m × r)
-    {
-        Scalar one = Traits::one(), zero_val = Traits::zero();
-        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-            rocblas_operation_none, rocblas_operation_none,
-            m, r, n_svd, &one,
-            d_theta, m,
-            d_rsvd_omega_, n_svd,
-            &zero_val,
-            d_rsvd_Y_, m));
-        HIP_CHECK(hipStreamSynchronize(stream_));
-    }
-
-    // Step 3: QR factorization of Y on GPU → Q (m × r) stays on device
-    //   Copy Y → Q buffer (geqrf overwrites input), then QR in-place
-    HIP_CHECK(hipMemcpy(d_rsvd_Q_, d_rsvd_Y_, (size_t)m * r * sizeof(Scalar), hipMemcpyDeviceToDevice));
-    ROCBLAS_CHECK(Traits::rocsolver_geqrf(rocblas_h_, m, r, d_rsvd_Q_, m, d_rsvd_ipiv_));
-    ROCBLAS_CHECK(Traits::rocsolver_orgqr(rocblas_h_, m, r, r, d_rsvd_Q_, m, d_rsvd_ipiv_));
-    HIP_CHECK(hipStreamSynchronize(stream_));
-
-    // Step 4: B = Q^H @ theta on GPU  (r × m) @ (m × n_svd) → (r × n_svd)
-    {
-        Scalar one = Traits::one(), zero_val = Traits::zero();
-        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-            Traits::op_h, rocblas_operation_none,
-            r, n_svd, m, &one,
-            d_rsvd_Q_, m,
-            d_theta, m,
-            &zero_val,
-            d_rsvd_B_, r));
-        HIP_CHECK(hipStreamSynchronize(stream_));
-    }
-
-    // Step 5: Copy B to host, compute SVD of B (r × n_svd) — much smaller than (m × n_svd)
-    HIP_CHECK(hipMemcpy(h_rsvd_B_.data(), d_rsvd_B_, r * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
-
-    int small_k = std::min(r, n_svd);
-    {
-        int lwork = (int)h_svd_work_.size();
-        int info;
-        const char jobu = 'S', jobvt = 'S';
-        // U_small: (r × small_k), S: (small_k), Vh: (small_k × n_svd)
-        Traits::lapack_gesvd(&jobu, &jobvt, &r, &n_svd, h_rsvd_B_.data(), &r, h_svd_S_.data(),
-                h_rsvd_U_small_.data(), &r, h_svd_Vh_.data(), &small_k,
-                h_svd_work_.data(), &lwork,
-                h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
-        if (info != 0) {
-            svd_split(site, d_theta, direction);
-            return;
-        }
-    }
-
-    // Step 6: Upload U_small to GPU, compute U_full = Q @ U_small on GPU
-    //   Q is (m × r) on device, U_small is (r × small_k) on host → U_full (m × small_k) on device
-    {
-        // Upload U_small to device (reuse d_rsvd_B_ as temp — it's no longer needed)
-        HIP_CHECK(hipMemcpy(d_rsvd_B_, h_rsvd_U_small_.data(),
-                            (size_t)r * small_k * sizeof(Scalar), hipMemcpyHostToDevice));
-        Scalar one = Traits::one(), zero_val = Traits::zero();
-        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-            rocblas_operation_none, rocblas_operation_none,
-            m, small_k, r, &one,
-            d_rsvd_Q_, m,
-            d_rsvd_B_, r,
-            &zero_val,
-            d_rsvd_U_full_, m));
-        HIP_CHECK(hipStreamSynchronize(stream_));
-    }
-
-    // Now: U_full (m × small_k) is on GPU at d_rsvd_U_full_
-    //      S (small_k) and Vh (small_k × n_svd) are on host
-    RealType* h_S_data = h_svd_S_.data();
-    Scalar* h_Vh_data = h_svd_Vh_.data();
-
-    // Truncation
-    int new_k = k;
-    for (int i = 0; i < new_k; i++) {
-        if (h_S_data[i] < 1e-14) { new_k = i; break; }
-    }
-    if (new_k == 0) new_k = 1;
-
-    if (direction == 'R') {
-        // MPS[site] = U_full[:, :new_k] — copy from GPU to GPU
-        allocate_mps_tensor(site, cL, new_k);
-        if (new_k == small_k) {
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_rsvd_U_full_,
-                                (size_t)m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice));
-        } else {
-            // Need to copy column subset — download, extract, re-upload
-            HIP_CHECK(hipMemcpy(h_svd_U_.data(), d_rsvd_U_full_,
-                                (size_t)m * small_k * sizeof(Scalar), hipMemcpyDeviceToHost));
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_svd_U_.data(),
-                                (size_t)m * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
-        }
-
-        // MPS[site+1] = diag(S[:new_k]) @ Vh[:new_k, :]
-        for (int j = 0; j < n_svd; j++)
-            for (int i = 0; i < new_k; i++)
-                h_svd_tmp_[i + j * new_k] = Traits::scale_by_real(h_S_data[i], h_Vh_data[i + j * small_k]);
-
-        allocate_mps_tensor(site + 1, new_k, cR);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_svd_tmp_.data(),
-                            (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
-    } else {
-        // MPS[site] = U_full[:, :new_k] @ diag(S[:new_k])
-        HIP_CHECK(hipMemcpy(h_svd_U_.data(), d_rsvd_U_full_,
-                            (size_t)m * small_k * sizeof(Scalar), hipMemcpyDeviceToHost));
-        Scalar* h_U_data = h_svd_U_.data();
-        for (int j = 0; j < new_k; j++)
-            for (int i = 0; i < m; i++)
-                h_svd_tmp_[i + j * m] = Traits::scale_by_real(h_S_data[j], h_U_data[i + j * m]);
-
-        allocate_mps_tensor(site, cL, new_k);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_svd_tmp_.data(),
-                            (size_t)m * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
-
-        // MPS[site+1] = Vh[:new_k, :]
-        allocate_mps_tensor(site + 1, new_k, cR);
-        if (new_k == small_k) {
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_Vh_data,
-                                (size_t)small_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
-        } else {
-            for (int j = 0; j < n_svd; j++)
-                for (int i = 0; i < new_k; i++)
-                    h_svd_tmp_[i + j * new_k] = h_Vh_data[i + j * small_k];
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_svd_tmp_.data(),
-                                (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
-        }
-    }
-
-    bond_dims_[site + 1] = new_k;
-}
-
-// ============================================================================
 // Bond optimization (two-site)
 // ============================================================================
 
@@ -1160,10 +900,7 @@ double DMRG2GPU<Scalar>::optimize_bond(int site, char direction) {
     double energy = lanczos_eigensolver(site, d_theta_, theta_size);
     HIP_CHECK(hipStreamSynchronize(stream_));
     auto t1 = std::chrono::high_resolution_clock::now();
-    if (use_rsvd_)
-        rsvd_split(site, d_theta_, direction);
-    else
-        svd_split(site, d_theta_, direction);
+    svd_split(site, d_theta_, direction);
     HIP_CHECK(hipStreamSynchronize(stream_));
     auto t2 = std::chrono::high_resolution_clock::now();
 
