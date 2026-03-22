@@ -1015,10 +1015,19 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
             allocate_mps_tensor(site, cL, new_k);
             scale_columns_by_real(ws.d_svd_U, m, ws.d_svd_S,
                                   d_mps_tensors_[site], m, m, new_k, streams_[si]);
-            // MPS[site+1] = Vh[:new_k, :]
+            // MPS[site+1] = Vh[:new_k, :] — extract rows with stride when truncated
             allocate_mps_tensor(site + 1, new_k, cR);
-            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], ws.d_svd_Vh,
-                        (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
+            if (new_k == full_k) {
+                HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], ws.d_svd_Vh,
+                            (size_t)full_k * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
+            } else {
+                // Vh is (full_k × n_svd) column-major with lda=full_k; extract first new_k rows
+                HIP_CHECK(hipMemcpy2DAsync(
+                    d_mps_tensors_[site + 1], new_k * sizeof(Scalar),      // dst, dpitch
+                    ws.d_svd_Vh,              full_k * sizeof(Scalar),      // src, spitch
+                    new_k * sizeof(Scalar),   n_svd,                        // width, height
+                    hipMemcpyDeviceToDevice, streams_[si]));
+            }
         }
     } else {
         // CPU SVD path: U, S, Vh on host. Upload S + raw factors, scale on GPU.
