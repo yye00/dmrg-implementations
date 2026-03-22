@@ -4,10 +4,10 @@ cmake_minimum_required(VERSION 3.21)
 set(CMAKE_C_COMPILER /opt/rocm/llvm/bin/clang)
 set(CMAKE_CXX_COMPILER /opt/rocm/llvm/bin/clang++)
 
-project(PDMRG2_GPU LANGUAGES CXX HIP)
+project(PDMRG_GPU_OPT LANGUAGES CXX HIP)
 
 # ==========================================
-# PDMRG2-GPU: Newton-Schulz + Block-Davidson
+# PDMRG-GPU-OPT: Newton-Schulz + Block-Davidson
 # ==========================================
 
 set(CMAKE_CXX_STANDARD 17)
@@ -46,25 +46,25 @@ include_directories(
 )
 
 # ==========================================
-# PDMRG2-GPU executable
+# PDMRG-GPU-OPT executable
 # ==========================================
-add_executable(pdmrg2_gpu
-    src/test_pdmrg2_gpu.cpp
-    src/pdmrg2_gpu.cpp
+add_executable(pdmrg_gpu_opt
+    src/test_pdmrg_gpu_opt.cpp
+    src/pdmrg_gpu_opt.cpp
 )
 
 set_source_files_properties(
-    src/test_pdmrg2_gpu.cpp
-    src/pdmrg2_gpu.cpp
+    src/test_pdmrg_gpu_opt.cpp
+    src/pdmrg_gpu_opt.cpp
     PROPERTIES LANGUAGE HIP
 )
 
-target_compile_options(pdmrg2_gpu PRIVATE
+target_compile_options(pdmrg_gpu_opt PRIVATE
     $<$<COMPILE_LANGUAGE:HIP>:--offload-arch=${GPU_TARGETS}>
     -O3
 )
 
-target_link_libraries(pdmrg2_gpu
+target_link_libraries(pdmrg_gpu_opt
     hip::device
     roc::rocblas
     roc::rocsolver
@@ -75,7 +75,7 @@ target_link_libraries(pdmrg2_gpu
 # Build info
 # ==========================================
 message(STATUS "==============================================")
-message(STATUS "PDMRG2-GPU: Newton-Schulz + Block-Davidson")
+message(STATUS "PDMRG-GPU-OPT: Newton-Schulz + Block-Davidson")
 message(STATUS "==============================================")
 message(STATUS "GPU targets: ${GPU_TARGETS}")
 message(STATUS "Backend: rocBLAS GEMM + Newton-Schulz + Block-Davidson")

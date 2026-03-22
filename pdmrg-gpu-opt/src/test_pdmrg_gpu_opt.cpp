@@ -1,4 +1,4 @@
-#include "pdmrg2_gpu.h"
+#include "pdmrg_gpu_opt.h"
 #include <iostream>
 #include <map>
 #include <cmath>
@@ -197,7 +197,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
     int D_mpo = 5;
 
     printf("======================================\n");
-    printf("PDMRG2-GPU Heisenberg Test (float64)\n");
+    printf("PDMRG-GPU-OPT Heisenberg Test (float64)\n");
     printf("======================================\n");
     printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d\n", L, d, chi_max, D_mpo);
     printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
@@ -214,7 +214,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
         {32, -13.997315618007},
     };
 
-    PDMRG2GPU<double> pdmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
+    PDMRGGPUOpt<double> pdmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
     pdmrg.set_cpu_svd(!gpu_svd);
     pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
@@ -254,7 +254,7 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
     int D_mpo = 3;
 
     printf("======================================\n");
-    printf("PDMRG2-GPU TFIM Test (float64)\n");
+    printf("PDMRG-GPU-OPT TFIM Test (float64)\n");
     printf("======================================\n");
     printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d\n", L, d, chi_max, D_mpo);
     printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
@@ -265,7 +265,7 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
     printf("  Eigensolver: %s\n", davidson ? "Block-Davidson" : "Lanczos");
     printf("======================================\n\n");
 
-    PDMRG2GPU<double> pdmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
+    PDMRGGPUOpt<double> pdmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
     pdmrg.set_cpu_svd(!gpu_svd);
     pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
@@ -296,7 +296,7 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
     int D_mpo = 4;
 
     printf("======================================\n");
-    printf("PDMRG2-GPU Josephson Test (complex128)\n");
+    printf("PDMRG-GPU-OPT Josephson Test (complex128)\n");
     printf("======================================\n");
     printf("  L=%d, d=%d (n_max=%d), chi_max=%d, D_mpo=%d\n",
            L, d, n_max, chi_max, D_mpo);
@@ -317,7 +317,7 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
         };
     }
 
-    PDMRG2GPU<Complex> pdmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
+    PDMRGGPUOpt<Complex> pdmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
     pdmrg.set_cpu_svd(!gpu_svd);
     pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);

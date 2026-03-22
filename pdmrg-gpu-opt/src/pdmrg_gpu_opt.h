@@ -1,5 +1,5 @@
-#ifndef PDMRG2_GPU_H
-#define PDMRG2_GPU_H
+#ifndef PDMRG_GPU_OPT_H
+#define PDMRG_GPU_OPT_H
 
 #include <hip/hip_runtime.h>
 #include <rocblas/rocblas.h>
@@ -8,7 +8,7 @@
 #include "scalar_traits.h"
 
 /**
- * PDMRG2-GPU: Stream-Parallel DMRG with Newton-Schulz + Block-Davidson
+ * PDMRG-GPU-OPT: Stream-Parallel DMRG with Newton-Schulz + Block-Davidson
  *
  * Key algorithmic changes from pdmrg-gpu:
  * 1. Newton-Schulz polar decomposition replaces QR/SVD for canonicalization
@@ -18,13 +18,13 @@
  * Templated on Scalar: double (real) or hipDoubleComplex (complex128).
  */
 template<typename Scalar>
-class PDMRG2GPU {
+class PDMRGGPUOpt {
     using Traits = ScalarTraits<Scalar>;
     using RealType = typename Traits::RealType;
 
 public:
-    PDMRG2GPU(int L, int d, int chi_max, int D_mpo, int n_segments, double tol = 1e-10);
-    ~PDMRG2GPU();
+    PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_segments, double tol = 1e-10);
+    ~PDMRGGPUOpt();
 
     // Setup
     void set_mpo(const std::vector<Scalar*>& h_mpo_tensors);
@@ -213,6 +213,6 @@ private:
     void free_gpu_resources();
 };
 
-#include "pdmrg2_gpu_impl.h"
+#include "pdmrg_gpu_opt_impl.h"
 
-#endif // PDMRG2_GPU_H
+#endif // PDMRG_GPU_OPT_H

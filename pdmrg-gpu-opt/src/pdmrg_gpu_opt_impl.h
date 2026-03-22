@@ -1,5 +1,5 @@
-#ifndef PDMRG2_GPU_IMPL_H
-#define PDMRG2_GPU_IMPL_H
+#ifndef PDMRG_GPU_OPT_IMPL_H
+#define PDMRG_GPU_OPT_IMPL_H
 
 #include <rocsolver/rocsolver.h>
 #include <iostream>
@@ -39,7 +39,7 @@
 // ============================================================================
 
 template<typename Scalar>
-PDMRG2GPU<Scalar>::PDMRG2GPU(int L, int d, int chi_max, int D_mpo, int n_segments, double tol)
+PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_segments, double tol)
     : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), tol_(tol), energy_(0.0),
       n_segments_(n_segments) {
 
@@ -117,7 +117,7 @@ PDMRG2GPU<Scalar>::PDMRG2GPU(int L, int d, int chi_max, int D_mpo, int n_segment
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::allocate_stream_workspaces() {
+void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
     int dd = d_ * d_;
     int t_max = D_mpo_ * dd * chi_max_ * chi_max_;
     int batch_max = D_mpo_ * dd;
@@ -274,12 +274,12 @@ void PDMRG2GPU<Scalar>::allocate_stream_workspaces() {
 // ============================================================================
 
 template<typename Scalar>
-PDMRG2GPU<Scalar>::~PDMRG2GPU() {
+PDMRGGPUOpt<Scalar>::~PDMRGGPUOpt() {
     free_gpu_resources();
 }
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::free_gpu_resources() {
+void PDMRGGPUOpt<Scalar>::free_gpu_resources() {
     for (auto ptr : d_mps_tensors_) if (ptr) hipFree(ptr);
     for (auto ptr : d_mpo_tensors_) if (ptr) hipFree(ptr);
     for (auto ptr : d_W_left_) if (ptr) hipFree(ptr);
@@ -347,13 +347,13 @@ void PDMRG2GPU<Scalar>::free_gpu_resources() {
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::allocate_mps_tensor(int site, int cL, int cR) {
+void PDMRGGPUOpt<Scalar>::allocate_mps_tensor(int site, int cL, int cR) {
     if (d_mps_tensors_[site]) HIP_CHECK(hipFree(d_mps_tensors_[site]));
     HIP_CHECK(hipMalloc(&d_mps_tensors_[site], cL * d_ * cR * sizeof(Scalar)));
 }
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::ensure_L_env_alloc(int idx, int chi) {
+void PDMRGGPUOpt<Scalar>::ensure_L_env_alloc(int idx, int chi) {
     if (chi > L_env_alloc_chi_[idx]) {
         if (d_L_envs_[idx]) HIP_CHECK(hipFree(d_L_envs_[idx]));
         int sz = chi * D_mpo_ * chi;
@@ -363,7 +363,7 @@ void PDMRG2GPU<Scalar>::ensure_L_env_alloc(int idx, int chi) {
 }
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::ensure_R_env_alloc(int idx, int chi) {
+void PDMRGGPUOpt<Scalar>::ensure_R_env_alloc(int idx, int chi) {
     if (chi > R_env_alloc_chi_[idx]) {
         if (d_R_envs_[idx]) HIP_CHECK(hipFree(d_R_envs_[idx]));
         int sz = chi * D_mpo_ * chi;
@@ -377,7 +377,7 @@ void PDMRG2GPU<Scalar>::ensure_R_env_alloc(int idx, int chi) {
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::partition_chain() {
+void PDMRGGPUOpt<Scalar>::partition_chain() {
     seg_first_.resize(n_segments_);
     seg_last_.resize(n_segments_);
     boundary_bonds_.resize(n_segments_ - 1);
@@ -403,7 +403,7 @@ void PDMRG2GPU<Scalar>::partition_chain() {
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::initialize_mps_random(double scale) {
+void PDMRGGPUOpt<Scalar>::initialize_mps_random(double scale) {
     for (int i = 0; i < L_; i++) {
         int size = chi_L(i) * d_ * chi_R(i);
         std::vector<Scalar> h_A(size);
@@ -420,7 +420,7 @@ void PDMRG2GPU<Scalar>::initialize_mps_random(double scale) {
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
+void PDMRGGPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
     int D = D_mpo_, d = d_;
     for (int i = 0; i < L_; i++) {
         int size = D * d * d * D;
@@ -451,7 +451,7 @@ void PDMRG2GPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
 }
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
+void PDMRGGPUOpt<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
     int D = D_mpo_, d = d_;
     int dd = d * d;
 
@@ -494,7 +494,7 @@ void PDMRG2GPU<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo_t
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::form_theta_two_site(int site, int si) {
+void PDMRGGPUOpt<Scalar>::form_theta_two_site(int site, int si) {
     int cL = chi_L(site);
     int chi_mid = bond_dims_[site + 1];
     int cR = chi_R(site + 1);
@@ -516,7 +516,7 @@ void PDMRG2GPU<Scalar>::form_theta_two_site(int site, int si) {
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
+void PDMRGGPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
                                              Scalar* d_result, int si) {
     int cL = chi_L(site);
     int cR = chi_R(site + 1);
@@ -596,7 +596,7 @@ void PDMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::update_left_env(int site, int si) {
+void PDMRGGPUOpt<Scalar>::update_left_env(int site, int si) {
     int chi_in = bond_dims_[site];
     int chi_out = bond_dims_[site + 1];
     int D = D_mpo_, d = d_;
@@ -666,7 +666,7 @@ void PDMRG2GPU<Scalar>::update_left_env(int site, int si) {
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::update_right_env(int site, int si) {
+void PDMRGGPUOpt<Scalar>::update_right_env(int site, int si) {
     int chi_in = bond_dims_[site + 1];
     int chi_out = bond_dims_[site];
     int D = D_mpo_, d = d_;
@@ -732,7 +732,7 @@ void PDMRG2GPU<Scalar>::update_right_env(int site, int si) {
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::build_initial_environments() {
+void PDMRGGPUOpt<Scalar>::build_initial_environments() {
     {
         std::vector<Scalar> h_L(D_mpo_, Traits::zero());
         h_L[0] = Traits::one();
@@ -763,7 +763,7 @@ void PDMRG2GPU<Scalar>::build_initial_environments() {
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::newton_schulz_left(
+void PDMRGGPUOpt<Scalar>::newton_schulz_left(
     Scalar* d_A, int m, int n,
     Scalar* d_U, Scalar* d_P,
     int si, double tol, int* out_iters) {
@@ -857,7 +857,7 @@ void PDMRG2GPU<Scalar>::newton_schulz_left(
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::newton_schulz_right(
+void PDMRGGPUOpt<Scalar>::newton_schulz_right(
     Scalar* d_A, int m, int n,
     Scalar* d_L, Scalar* d_Q,
     int si, double tol, int* out_iters) {
@@ -948,7 +948,7 @@ void PDMRG2GPU<Scalar>::newton_schulz_right(
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::ns_split(int site, Scalar* d_theta, char direction, int si) {
+void PDMRGGPUOpt<Scalar>::ns_split(int site, Scalar* d_theta, char direction, int si) {
     int cL = chi_L(site);
     int cR = chi_R(site + 1);
     auto& ws = workspaces_[si];
@@ -1161,7 +1161,7 @@ void PDMRG2GPU<Scalar>::ns_split(int site, Scalar* d_theta, char direction, int 
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction, int si) {
+void PDMRGGPUOpt<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction, int si) {
     int cL = chi_L(site);
     int cR = chi_R(site + 1);
     auto& ws = workspaces_[si];
@@ -1317,7 +1317,7 @@ void PDMRG2GPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction, in
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int si) {
+void PDMRGGPUOpt<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int si) {
     int cL = chi_L(site);
     int cR = chi_R(site + 1);
     auto& ws = workspaces_[si];
@@ -1452,7 +1452,7 @@ void PDMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int
 // ============================================================================
 
 template<typename Scalar>
-double PDMRG2GPU<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta, int theta_size, int si) {
+double PDMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta, int theta_size, int si) {
     int dim = theta_size;
     int b = std::min(davidson_b_, dim);
     int max_sub = std::min(davidson_max_sub_, dim);
@@ -1783,7 +1783,7 @@ double PDMRG2GPU<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta, 
 // ============================================================================
 
 template<typename Scalar>
-double PDMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int theta_size, int si) {
+double PDMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int theta_size, int si) {
     int n = theta_size;
     int max_iter = std::min(max_lanczos_iter_, n);
     double tol_lanczos = 1e-12;
@@ -1960,7 +1960,7 @@ double PDMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int the
 // ============================================================================
 
 template<typename Scalar>
-double PDMRG2GPU<Scalar>::optimize_bond(int site, char direction, int si) {
+double PDMRGGPUOpt<Scalar>::optimize_bond(int site, char direction, int si) {
     int cL = chi_L(site);
     int cR = chi_R(site + 1);
     int theta_size = cL * d_ * d_ * cR;
@@ -1993,7 +1993,7 @@ double PDMRG2GPU<Scalar>::optimize_bond(int site, char direction, int si) {
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::left_canonize_site(int site, int si) {
+void PDMRGGPUOpt<Scalar>::left_canonize_site(int site, int si) {
     // MPS[site] has shape (chi_L, d, chi_R) stored as (chi_L*d, chi_R) in column-major
     int cL = chi_L(site);
     int cR = chi_R(site);
@@ -2031,7 +2031,7 @@ void PDMRG2GPU<Scalar>::left_canonize_site(int site, int si) {
 }
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::right_canonize_site(int site, int si) {
+void PDMRGGPUOpt<Scalar>::right_canonize_site(int site, int si) {
     // MPS[site] has shape (chi_L, d, chi_R) stored as (chi_L, d*chi_R) in column-major
     int cL = chi_L(site);
     int cR = chi_R(site);
@@ -2070,7 +2070,7 @@ void PDMRG2GPU<Scalar>::right_canonize_site(int site, int si) {
 }
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::canonize_segment_right(int seg_idx) {
+void PDMRGGPUOpt<Scalar>::canonize_segment_right(int seg_idx) {
     int first = seg_first_[seg_idx];
     int last = seg_last_[seg_idx];
     int si = seg_idx;
@@ -2083,7 +2083,7 @@ void PDMRG2GPU<Scalar>::canonize_segment_right(int seg_idx) {
 }
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::canonize_segment_left(int seg_idx) {
+void PDMRGGPUOpt<Scalar>::canonize_segment_left(int seg_idx) {
     int first = seg_first_[seg_idx];
     int last = seg_last_[seg_idx];
     int si = seg_idx;
@@ -2100,7 +2100,7 @@ void PDMRG2GPU<Scalar>::canonize_segment_left(int seg_idx) {
 // ============================================================================
 
 template<typename Scalar>
-double PDMRG2GPU<Scalar>::sweep_LR_full() {
+double PDMRGGPUOpt<Scalar>::sweep_LR_full() {
     double energy = 0.0;
     for (int site = 0; site < L_ - 1; site++) {
         energy = optimize_bond(site, 'R', 0);
@@ -2110,7 +2110,7 @@ double PDMRG2GPU<Scalar>::sweep_LR_full() {
 }
 
 template<typename Scalar>
-double PDMRG2GPU<Scalar>::sweep_RL_full() {
+double PDMRGGPUOpt<Scalar>::sweep_RL_full() {
     double energy = 0.0;
     for (int site = L_ - 2; site >= 0; site--) {
         energy = optimize_bond(site, 'L', 0);
@@ -2124,7 +2124,7 @@ double PDMRG2GPU<Scalar>::sweep_RL_full() {
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::segment_sweep_LR(int seg_idx) {
+void PDMRGGPUOpt<Scalar>::segment_sweep_LR(int seg_idx) {
     int first = seg_first_[seg_idx];
     int last = seg_last_[seg_idx];
     int si = seg_idx;
@@ -2139,7 +2139,7 @@ void PDMRG2GPU<Scalar>::segment_sweep_LR(int seg_idx) {
 }
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::segment_sweep_RL(int seg_idx) {
+void PDMRGGPUOpt<Scalar>::segment_sweep_RL(int seg_idx) {
     int first = seg_first_[seg_idx];
     int last = seg_last_[seg_idx];
     int si = seg_idx;
@@ -2161,7 +2161,7 @@ void PDMRG2GPU<Scalar>::segment_sweep_RL(int seg_idx) {
 // ============================================================================
 
 template<typename Scalar>
-double PDMRG2GPU<Scalar>::merge_and_optimize_boundaries(int parity) {
+double PDMRGGPUOpt<Scalar>::merge_and_optimize_boundaries(int parity) {
     double energy = 0.0;
     int si = 0;
 
@@ -2192,9 +2192,9 @@ double PDMRG2GPU<Scalar>::merge_and_optimize_boundaries(int parity) {
 // ============================================================================
 
 template<typename Scalar>
-double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup) {
+double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup) {
     const char* type_name = Traits::is_complex ? "complex128" : "float64";
-    std::cout << "=== PDMRG2-GPU: Newton-Schulz + Block-Davidson (" << type_name << ") ===" << std::endl;
+    std::cout << "=== PDMRG-GPU-OPT: Newton-Schulz + Block-Davidson (" << type_name << ") ===" << std::endl;
     std::cout << "L = " << L_ << ", d = " << d_ << ", chi_max = " << chi_max_
               << ", D_mpo = " << D_mpo_ << ", segments = " << n_segments_ << std::endl;
     std::cout << "Davidson block_size = " << davidson_b_ << ", max_subspace = " << davidson_max_sub_ << std::endl;
@@ -2257,7 +2257,7 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
     double total_boundary_time = 0.0;
 
     // Parallel sweep launcher with GPU sync
-    // pdmrg2-gpu segment sweeps already sync their streams internally
+    // pdmrg-gpu-opt segment sweeps already sync their streams internally
     // (hipStreamSynchronize at end of canonize_segment), but we add
     // hipDeviceSynchronize for safety before boundary coupling on stream 0
     auto parallel_sweep = [this](auto sweep_fn) {
@@ -2277,7 +2277,7 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
         for (int local_sw = 0; local_sw < n_local_sweeps; local_sw++) {
             // Half-sweep 1: even segments LR, odd segments RL
             auto t_par_start = std::chrono::high_resolution_clock::now();
-            parallel_sweep([](PDMRG2GPU* self, int k) {
+            parallel_sweep([](PDMRGGPUOpt* self, int k) {
                 if (k % 2 == 0) self->segment_sweep_LR(k);
                 else             self->segment_sweep_RL(k);
             });
@@ -2294,7 +2294,7 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
 
             // Half-sweep 2: even segments RL, odd segments LR
             t_par_start = std::chrono::high_resolution_clock::now();
-            parallel_sweep([](PDMRG2GPU* self, int k) {
+            parallel_sweep([](PDMRGGPUOpt* self, int k) {
                 if (k % 2 == 0) self->segment_sweep_RL(k);
                 else             self->segment_sweep_LR(k);
             });
@@ -2373,7 +2373,7 @@ double PDMRG2GPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warm
 // ============================================================================
 
 template<typename Scalar>
-void PDMRG2GPU<Scalar>::get_mps(std::vector<std::vector<Scalar>>& h_mps) const {
+void PDMRGGPUOpt<Scalar>::get_mps(std::vector<std::vector<Scalar>>& h_mps) const {
     h_mps.resize(L_);
     for (int i = 0; i < L_; i++) {
         int size = chi_L(i) * d_ * chi_R(i);
@@ -2383,4 +2383,4 @@ void PDMRG2GPU<Scalar>::get_mps(std::vector<std::vector<Scalar>>& h_mps) const {
     }
 }
 
-#endif // PDMRG2_GPU_IMPL_H
+#endif // PDMRG_GPU_OPT_IMPL_H
