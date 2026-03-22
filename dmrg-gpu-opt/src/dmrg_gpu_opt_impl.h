@@ -1,5 +1,5 @@
-#ifndef DMRG2_GPU_OPT_IMPL_H
-#define DMRG2_GPU_OPT_IMPL_H
+#ifndef DMRG_GPU_OPT_IMPL_H
+#define DMRG_GPU_OPT_IMPL_H
 
 #include <rocsolver/rocsolver.h>
 #include <iostream>
@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstring>
 #include <chrono>
-
 
 #define HIP_CHECK(call) \
     do { \
@@ -39,10 +38,10 @@ static int prof_heff_calls = 0;
 // ============================================================================
 
 template<typename Scalar>
-DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
+DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), tol_(tol), energy_(0.0) {
 
-    // Bond dimensions (same as single-site: min-cut formula capped at chi_max)
+    // Bond dimensions
     bond_dims_.resize(L + 1);
     bond_dims_[0] = 1;
     bond_dims_[L] = 1;
@@ -56,10 +55,8 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
     ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
 
-    int dd = d_ * d_;  // d^2 for two-site
-
-    // Contraction intermediates: D*d^2*chi_max^2
-    int t_max = D_mpo_ * dd * chi_max_ * chi_max_;
+    // Contraction intermediates
+    int t_max = D_mpo_ * d_ * chi_max_ * chi_max_;
     HIP_CHECK(hipMalloc(&d_T1_, t_max * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_T2_, t_max * sizeof(Scalar)));
 
@@ -72,12 +69,9 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     // MPO tensors
     d_mpo_tensors_.resize(L, nullptr);
 
-    // W matrices for single-site env updates (allocated in set_mpo)
+    // W matrices (allocated in set_mpo)
     d_W_left_.resize(L, nullptr);
     d_W_right_.resize(L, nullptr);
-
-    // Fused two-site MPO (allocated in set_mpo)
-    d_WW_.resize(L - 1, nullptr);
 
     // Environments
     d_L_envs_.resize(L + 1, nullptr);
@@ -96,70 +90,79 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
         R_env_alloc_chi_[i] = chi_alloc;
     }
 
-    // Lanczos workspace (fallback): theta is d^2 times larger than single-site
-    theta_size_max_ = chi_max_ * dd * chi_max_;
+    // Lanczos workspace (fallback)
+    theta_size_max_ = chi_max_ * d_ * chi_max_;
     max_lanczos_iter_ = std::min(100, theta_size_max_);
     HIP_CHECK(hipMalloc(&d_theta_, theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_heff_result_, theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_lanczos_v_, (size_t)max_lanczos_iter_ * theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_ritz_coeffs_, max_lanczos_iter_ * sizeof(Scalar)));
 
-    // Batched GEMM pointer arrays: D*d^2 batches for two-site
-    int batch_max = D_mpo_ * dd;
+    // Batched GEMM pointer arrays
+    int batch_max = D_mpo_ * d_;
     HIP_CHECK(hipMalloc(&d_batch_A_, batch_max * sizeof(Scalar*)));
     HIP_CHECK(hipMalloc(&d_batch_B_, batch_max * sizeof(Scalar*)));
     HIP_CHECK(hipMalloc(&d_batch_C_, batch_max * sizeof(Scalar*)));
 
     // SVD workspace (reused as NS scratch)
-    int svd_max_m = chi_max_ * d_;
-    int svd_max_n = d_ * chi_max_;
-    int svd_max_k = std::min(svd_max_m, svd_max_n);  // = chi_max_ * d_
-
+    int svd_max_dim = chi_max_ * d_;
     HIP_CHECK(hipMalloc(&d_svd_A_,    theta_size_max_ * sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_svd_U_,    (size_t)svd_max_m * svd_max_k * sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_svd_S_,    svd_max_k * sizeof(RealType)));
-    HIP_CHECK(hipMalloc(&d_svd_Vh_,   (size_t)svd_max_k * svd_max_n * sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_svd_U_,    (size_t)svd_max_dim * chi_max_ * sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_svd_S_,    chi_max_ * sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_svd_Vh_,   (size_t)chi_max_ * svd_max_dim * sizeof(Scalar)));
 
-    // CPU SVD workspace (fallback)
+    // CPU SVD workspace
     h_svd_A_.resize(theta_size_max_);
-    h_svd_U_.resize((size_t)svd_max_m * svd_max_k);
-    h_svd_S_.resize(svd_max_k);
-    h_svd_Vh_.resize((size_t)svd_max_k * svd_max_n);
-    h_svd_tmp_.resize(std::max((size_t)svd_max_m * svd_max_k, (size_t)svd_max_k * svd_max_n));
-    h_svd_rwork_.resize(Traits::svd_rwork_size(svd_max_m, svd_max_n));
+    h_svd_U_.resize((size_t)svd_max_dim * chi_max_);
+    h_svd_S_.resize(chi_max_);
+    h_svd_Vh_.resize((size_t)chi_max_ * svd_max_dim);
+    h_svd_tmp_.resize((size_t)svd_max_dim * chi_max_);
+    h_svd_rwork_.resize(Traits::svd_rwork_size(svd_max_dim, svd_max_dim));
 
-    // Query optimal LAPACK SVD workspace
+    // Query optimal LAPACK workspace for ALL possible (m, n) combinations
     {
-        int m = svd_max_m, n = svd_max_n;
-        int lwork_query = -1;
-        Scalar work_opt;
-        int info;
+        int max_lwork = 0;
         const char jobu = 'S', jobvt = 'S';
-        Traits::lapack_gesvd(&jobu, &jobvt, &m, &n, nullptr, &m, nullptr,
-                nullptr, &m, nullptr, &svd_max_k, &work_opt, &lwork_query,
-                h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
-        int opt_size;
-        if constexpr (Traits::is_complex) {
-            opt_size = (int)Traits::real_part(work_opt) + 1;
-        } else {
-            opt_size = (int)work_opt + 1;
+        int dims[][2] = {
+            {svd_max_dim, svd_max_dim},  // square
+            {svd_max_dim, chi_max_},      // tall: m = chi*d, n = chi (direction R)
+            {chi_max_, svd_max_dim},      // wide: m = chi, n = chi*d (direction L)
+        };
+        for (auto& dim : dims) {
+            int qm = dim[0], qn = dim[1];
+            int qk = std::min(qm, qn);
+            int lwork_query = -1;
+            Scalar work_opt;
+            int info;
+            Traits::lapack_gesvd(&jobu, &jobvt, &qm, &qn, nullptr, &qm, nullptr,
+                    nullptr, &qm, nullptr, &qk, &work_opt, &lwork_query,
+                    h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
+            int opt_size;
+            if constexpr (Traits::is_complex) {
+                opt_size = (int)Traits::real_part(work_opt) + 1;
+            } else {
+                opt_size = (int)work_opt + 1;
+            }
+            if (opt_size > max_lwork) max_lwork = opt_size;
         }
-        h_svd_work_.resize(opt_size);
+        h_svd_work_.resize(max_lwork);
     }
 
     // Newton-Schulz workspace
-    int ns_max = chi_max_ * d_;
-    HIP_CHECK(hipMalloc(&d_ns_U_,     (size_t)ns_max * ns_max * sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_ns_U_new_, (size_t)ns_max * ns_max * sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_ns_gram_,  (size_t)ns_max * ns_max * sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_ns_P_,     (size_t)ns_max * ns_max * sizeof(Scalar)));
-    h_ns_PtP_.resize(ns_max * ns_max);
-    h_ns_eigvals_.resize(ns_max);
-    h_ns_syev_rwork_.resize(Traits::syev_rwork_size(ns_max));
+    // Single-site: theta is at most (chi_max*d, chi_max), so NS matrices are at most (chi_max, chi_max)
+    int ns_max_m = chi_max_ * d_;   // max tall dim
+    int ns_max_n = chi_max_;        // max short dim
+    HIP_CHECK(hipMalloc(&d_ns_U_,     (size_t)ns_max_m * ns_max_n * sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_ns_U_new_, (size_t)ns_max_m * ns_max_n * sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_ns_gram_,  (size_t)ns_max_n * ns_max_n * sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_ns_P_,     (size_t)ns_max_n * ns_max_n * sizeof(Scalar)));
+    h_ns_PtP_.resize(ns_max_n * ns_max_n);
+    h_ns_eigvals_.resize(ns_max_n);
+    h_ns_syev_rwork_.resize(Traits::syev_rwork_size(ns_max_n));
     {
         int lwork_q = -1; Scalar work_opt; int info_q;
         const char jobz_q = 'V', uplo_q = 'U';
-        Traits::lapack_syev(&jobz_q, &uplo_q, &ns_max, h_ns_PtP_.data(), &ns_max,
+        Traits::lapack_syev(&jobz_q, &uplo_q, &ns_max_n, h_ns_PtP_.data(), &ns_max_n,
                             h_ns_eigvals_.data(), &work_opt, &lwork_q,
                             h_ns_syev_rwork_.empty() ? nullptr : h_ns_syev_rwork_.data(), &info_q);
         int opt_lwork;
@@ -174,7 +177,6 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     HIP_CHECK(hipMalloc(&d_dav_V_,     (size_t)theta_size_max_ * davidson_max_sub_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_dav_AV_,    (size_t)theta_size_max_ * davidson_max_sub_ * sizeof(Scalar)));
     {
-        // d_dav_work_ must hold both (dim, b) orthogonalization scratch and (k, k) projected H
         size_t dav_work_sz = std::max((size_t)theta_size_max_ * davidson_b_,
                                        (size_t)davidson_max_sub_ * davidson_max_sub_);
         HIP_CHECK(hipMalloc(&d_dav_work_,  dav_work_sz * sizeof(Scalar)));
@@ -190,17 +192,16 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
 // ============================================================================
 
 template<typename Scalar>
-DMRG2GPUOpt<Scalar>::~DMRG2GPUOpt() {
+DMRGGPUOpt<Scalar>::~DMRGGPUOpt() {
     free_gpu_resources();
 }
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::free_gpu_resources() {
+void DMRGGPUOpt<Scalar>::free_gpu_resources() {
     for (auto ptr : d_mps_tensors_) if (ptr) hipFree(ptr);
     for (auto ptr : d_mpo_tensors_) if (ptr) hipFree(ptr);
     for (auto ptr : d_W_left_) if (ptr) hipFree(ptr);
     for (auto ptr : d_W_right_) if (ptr) hipFree(ptr);
-    for (auto ptr : d_WW_) if (ptr) hipFree(ptr);
     for (auto ptr : d_L_envs_) if (ptr) hipFree(ptr);
     for (auto ptr : d_R_envs_) if (ptr) hipFree(ptr);
 
@@ -239,13 +240,13 @@ void DMRG2GPUOpt<Scalar>::free_gpu_resources() {
 // ============================================================================
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::allocate_mps_tensor(int site, int cL, int cR) {
+void DMRGGPUOpt<Scalar>::allocate_mps_tensor(int site, int cL, int cR) {
     if (d_mps_tensors_[site]) HIP_CHECK(hipFree(d_mps_tensors_[site]));
     HIP_CHECK(hipMalloc(&d_mps_tensors_[site], cL * d_ * cR * sizeof(Scalar)));
 }
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::ensure_L_env_alloc(int idx, int chi) {
+void DMRGGPUOpt<Scalar>::ensure_L_env_alloc(int idx, int chi) {
     if (chi > L_env_alloc_chi_[idx]) {
         if (d_L_envs_[idx]) HIP_CHECK(hipFree(d_L_envs_[idx]));
         int sz = chi * D_mpo_ * chi;
@@ -255,7 +256,7 @@ void DMRG2GPUOpt<Scalar>::ensure_L_env_alloc(int idx, int chi) {
 }
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::ensure_R_env_alloc(int idx, int chi) {
+void DMRGGPUOpt<Scalar>::ensure_R_env_alloc(int idx, int chi) {
     if (chi > R_env_alloc_chi_[idx]) {
         if (d_R_envs_[idx]) HIP_CHECK(hipFree(d_R_envs_[idx]));
         int sz = chi * D_mpo_ * chi;
@@ -269,7 +270,7 @@ void DMRG2GPUOpt<Scalar>::ensure_R_env_alloc(int idx, int chi) {
 // ============================================================================
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::initialize_mps_random(double scale) {
+void DMRGGPUOpt<Scalar>::initialize_mps_random(double scale) {
     for (int i = 0; i < L_; i++) {
         int size = chi_L(i) * d_ * chi_R(i);
         std::vector<Scalar> h_A(size);
@@ -282,16 +283,11 @@ void DMRG2GPUOpt<Scalar>::initialize_mps_random(double scale) {
 }
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::initialize_mps_product() {
-    // Reset all interior bonds to 1 for product state
-    for (int i = 1; i < L_; i++) bond_dims_[i] = 1;
-
+void DMRGGPUOpt<Scalar>::initialize_mps_product() {
     for (int i = 0; i < L_; i++) {
         int cL = chi_L(i), cR = chi_R(i);
-        allocate_mps_tensor(i, cL, cR);
         int size = cL * d_ * cR;
         std::vector<Scalar> h_A(size, Traits::zero());
-        // |0> state: only s=0, diagonal bonds
         int chi_min = std::min(cL, cR);
         for (int a = 0; a < chi_min; a++) {
             h_A[a + 0*cL + a*cL*d_] = Traits::one();
@@ -302,7 +298,7 @@ void DMRG2GPUOpt<Scalar>::initialize_mps_product() {
 }
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::initialize_mps_neel() {
+void DMRGGPUOpt<Scalar>::initialize_mps_neel() {
     for (int i = 0; i < L_; i++) {
         int cL = chi_L(i), cR = chi_R(i);
         int size = cL * d_ * cR;
@@ -317,12 +313,8 @@ void DMRG2GPUOpt<Scalar>::initialize_mps_neel() {
     }
 }
 
-// ============================================================================
-// MPO setup and fused two-site MPO precomputation
-// ============================================================================
-
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
+void DMRGGPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
     int D = D_mpo_, d = d_;
     for (int i = 0; i < L_; i++) {
         int size = D * d * d * D;
@@ -330,7 +322,7 @@ void DMRG2GPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
         HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_mpo_tensors[i],
                             size * sizeof(Scalar), hipMemcpyHostToDevice));
 
-        // Precompute W_left and W_right matrices (for single-site env updates)
+        // Precompute W_left and W_right matrices
         int wm_size = D * d * d * D;
         std::vector<Scalar> h_WL(wm_size, Traits::zero());
         std::vector<Scalar> h_WR(wm_size, Traits::zero());
@@ -349,140 +341,72 @@ void DMRG2GPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
         HIP_CHECK(hipMemcpy(d_W_right_[i], h_WR.data(),
                             wm_size * sizeof(Scalar), hipMemcpyHostToDevice));
     }
-
-    // Precompute fused two-site MPO
-    precompute_fused_mpo(h_mpo_tensors);
-}
-
-template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
-    int D = D_mpo_, d = d_;
-    int dd = d * d;
-
-    for (int bond = 0; bond < L_ - 1; bond++) {
-        int ww_size = D * dd * dd * D;
-        std::vector<Scalar> h_WW(ww_size, Traits::zero());
-
-        const Scalar* WL = h_mpo_tensors[bond];
-        const Scalar* WR = h_mpo_tensors[bond + 1];
-
-        for (int w = 0; w < D; w++)
-            for (int n = 0; n < D; n++)
-                for (int s1 = 0; s1 < d; s1++)
-                    for (int s2 = 0; s2 < d; s2++)
-                        for (int s1p = 0; s1p < d; s1p++)
-                            for (int s2p = 0; s2p < d; s2p++) {
-                                Scalar val = Traits::zero();
-                                for (int m = 0; m < D; m++) {
-                                    Scalar wl = WL[w + s1*D + s1p*D*d + m*D*d*d];
-                                    Scalar wr = WR[m + s2*D + s2p*D*d + n*D*d*d];
-                                    if constexpr (Traits::is_complex) {
-                                        val = hipCadd(val, hipCmul(wl, wr));
-                                    } else {
-                                        val += wl * wr;
-                                    }
-                                }
-                                int row = w * dd + s1 * d + s2;
-                                int col = n * dd + s1p * d + s2p;
-                                h_WW[row + col * D * dd] = val;
-                            }
-
-        HIP_CHECK(hipMalloc(&d_WW_[bond], ww_size * sizeof(Scalar)));
-        HIP_CHECK(hipMemcpy(d_WW_[bond], h_WW.data(),
-                            ww_size * sizeof(Scalar), hipMemcpyHostToDevice));
-    }
 }
 
 // ============================================================================
-// Two-site theta formation
+// GEMM-based tensor contractions
 // ============================================================================
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::form_theta_two_site(int site) {
+void DMRGGPUOpt<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_result) {
     int cL = chi_L(site);
-    int chi_mid = bond_dims_[site + 1];
-    int cR = chi_R(site + 1);
-    Scalar one = Traits::one(), zero_val = Traits::zero();
-
-    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-        rocblas_operation_none, rocblas_operation_none,
-        cL * d_, d_ * cR, chi_mid,
-        &one,
-        d_mps_tensors_[site], cL * d_,
-        d_mps_tensors_[site + 1], chi_mid,
-        &zero_val,
-        d_theta_, cL * d_));
-}
-
-// ============================================================================
-// Two-site H_eff application (3-step with fused WW)
-// ============================================================================
-
-template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in, Scalar* d_result) {
-    int cL = chi_L(site);
-    int cR = chi_R(site + 1);
+    int cR = chi_R(site);
     int D = D_mpo_, d = d_;
-    int dd = d * d;
     Scalar one = Traits::one(), zero_val = Traits::zero();
 
     Scalar* L_env = d_L_envs_[site];
-    Scalar* R_env = d_R_envs_[site + 2];
-    Scalar* WW = d_WW_[site];
-    Scalar* T1 = d_T1_;
-    Scalar* T2 = d_T2_;
+    Scalar* R_env = d_R_envs_[site + 1];
+    Scalar* W_mat = d_W_left_[site];
+    Scalar* V = d_T1_;
+    Scalar* U = d_T2_;
 
-    // Step 1: Batched GEMM — contract L_env with theta
+    // Step 1: V_ws[a',b] = L_w^T[a',a] * theta_s[a,b]  (batched GEMM)
     {
-        int batch_count = D * dd;
-        std::vector<Scalar*> h_A(batch_count), h_B(batch_count), h_C(batch_count);
+        std::vector<Scalar*> h_A(D * d), h_B(D * d), h_C(D * d);
         for (int w = 0; w < D; w++)
-            for (int s1 = 0; s1 < d; s1++)
-                for (int s2 = 0; s2 < d; s2++) {
-                    int ws = w * dd + s1 * d + s2;
-                    h_A[ws] = L_env + w * cL;
-                    h_B[ws] = const_cast<Scalar*>(d_theta_in) + s1 * cL + s2 * cL * d;
-                    h_C[ws] = T1 + ws * cL * cR;
-                }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            for (int s = 0; s < d; s++) {
+                int ws = w * d + s;
+                h_A[ws] = L_env + w * cL;
+                h_B[ws] = const_cast<Scalar*>(d_theta_in) + s * cL;
+                h_C[ws] = V + ws * cL * cR;
+            }
+        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
         ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
             Traits::op_t, rocblas_operation_none,
             cL, cR, cL,
             &one,
             (const Scalar**)d_batch_A_, cL * D,
-            (const Scalar**)d_batch_B_, cL * dd,
+            (const Scalar**)d_batch_B_, cL * d,
             &zero_val,
             d_batch_C_, cL,
-            batch_count));
+            D * d));
     }
 
-    // Step 2: Dense GEMM — absorb fused WW
+    // Step 2: U = V * W_matrix
     ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
         rocblas_operation_none, rocblas_operation_none,
-        cL * cR, dd * D, D * dd,
+        cL * cR, d * D, D * d,
         &one,
-        T1, cL * cR,
-        WW, D * dd,
+        V, cL * cR,
+        W_mat, D * d,
         &zero_val,
-        T2, cL * cR));
+        U, cL * cR));
 
-    // Step 3: Loop of GEMMs — contract R_env
-    for (int s1p = 0; s1p < d; s1p++) {
-        for (int s2p = 0; s2p < d; s2p++) {
-            for (int n = 0; n < D; n++) {
-                Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
-                int ws_out = n * dd + s1p * d + s2p;
-                ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-                    rocblas_operation_none, rocblas_operation_none,
-                    cL, cR, cR,
-                    &one,
-                    T2 + ws_out * cL * cR, cL,
-                    R_env + n * cR, cR * D,
-                    &beta,
-                    d_result + s1p * cL + s2p * cL * d, cL * dd));
-            }
+    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
+    for (int wp = 0; wp < D; wp++) {
+        Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
+        for (int sp = 0; sp < d; sp++) {
+            int ws_out = wp * d + sp;
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                cL, cR, cR,
+                &one,
+                U + ws_out * cL * cR, cL,
+                R_env + wp * cR, cR * D,
+                &beta,
+                d_result + sp * cL, cL * d));
         }
     }
 }
@@ -492,7 +416,7 @@ void DMRG2GPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
 // ============================================================================
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::update_left_env(int site) {
+void DMRGGPUOpt<Scalar>::update_left_env(int site) {
     int chi_in = bond_dims_[site];
     int chi_out = bond_dims_[site + 1];
     int D = D_mpo_, d = d_;
@@ -557,6 +481,7 @@ void DMRG2GPUOpt<Scalar>::update_left_env(int site) {
         }
     }
 
+    // For complex: L_new = conj(U^H * A) = U^T * conj(A), the correct bra contraction
     if constexpr (Traits::is_complex) {
         conjugate_inplace(L_new, chi_out * D * chi_out, stream_);
     }
@@ -567,7 +492,7 @@ void DMRG2GPUOpt<Scalar>::update_left_env(int site) {
 // ============================================================================
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::update_right_env(int site) {
+void DMRGGPUOpt<Scalar>::update_right_env(int site) {
     int chi_in = bond_dims_[site + 1];
     int chi_out = bond_dims_[site];
     int D = D_mpo_, d = d_;
@@ -638,8 +563,8 @@ void DMRG2GPUOpt<Scalar>::update_right_env(int site) {
 // ============================================================================
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::build_initial_environments() {
-    // L[0] = trivial left boundary
+void DMRGGPUOpt<Scalar>::build_initial_environments() {
+    // L[0] = trivial left boundary: (1, D_mpo, 1), L[0][0,0,0] = 1
     {
         std::vector<Scalar> h_L(D_mpo_, Traits::zero());
         h_L[0] = Traits::one();
@@ -647,7 +572,7 @@ void DMRG2GPUOpt<Scalar>::build_initial_environments() {
                             D_mpo_ * sizeof(Scalar), hipMemcpyHostToDevice));
     }
 
-    // R[L] = trivial right boundary
+    // R[L] = trivial right boundary: (1, D_mpo, 1), R[L][0,D-1,0] = 1
     {
         std::vector<Scalar> h_R(D_mpo_, Traits::zero());
         h_R[D_mpo_ - 1] = Traits::one();
@@ -662,12 +587,19 @@ void DMRG2GPUOpt<Scalar>::build_initial_environments() {
 }
 
 // ============================================================================
-// Lanczos eigensolver (fallback for small systems / Davidson failure)
+// Theta formation and Lanczos (fallback)
 // ============================================================================
 
 template<typename Scalar>
-double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int theta_size) {
-    int n = theta_size;
+void DMRGGPUOpt<Scalar>::form_theta(int site, Scalar* d_theta) {
+    int size = chi_L(site) * d_ * chi_R(site);
+    HIP_CHECK(hipMemcpy(d_theta, d_mps_tensors_[site],
+                        size * sizeof(Scalar), hipMemcpyDeviceToDevice));
+}
+
+template<typename Scalar>
+double DMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
+    int n = chi_L(site) * d_ * chi_R(site);
     int max_iter = std::min(max_lanczos_iter_, n);
     double tol_lanczos = 1e-12;
     double tol_eig_conv = 1e-12;
@@ -699,7 +631,7 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
         Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
 
         // w = H|v_i>
-        apply_heff_two_site(site, d_vi, d_heff_result_);
+        apply_heff(site, d_vi, d_heff_result_);
 
         // alpha_i = <v_i|w>
         Scalar alpha_result;
@@ -834,7 +766,7 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
 // ============================================================================
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::newton_schulz_left(
+void DMRGGPUOpt<Scalar>::newton_schulz_left(
     Scalar* d_A, int m, int n,
     Scalar* d_U, Scalar* d_P,
     double tol, int* out_iters) {
@@ -916,214 +848,246 @@ void DMRG2GPUOpt<Scalar>::newton_schulz_left(
 }
 
 // ============================================================================
-// Newton-Schulz bond split
-// Uses Newton-Schulz + eigendecomposition of P^H P for truncation
+// NS-based SVD and MPS update (single-site)
 // ============================================================================
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::ns_split(int site, Scalar* d_theta, char direction) {
+void DMRGGPUOpt<Scalar>::ns_svd_and_update_mps(int site, Scalar* d_theta, char direction) {
     int cL = chi_L(site);
-    int cR = chi_R(site + 1);
+    int cR = chi_R(site);
 
-    int m = cL * d_;
-    int n_svd = d_ * cR;
-    int k = std::min(m, n_svd);
-    int max_k = std::min(k, chi_max_);
+    int m, n_svd;
+    if (direction == 'R') { m = cL * d_; n_svd = cR; }
+    else                  { m = cL;      n_svd = d_ * cR; }
 
-    // For very small systems, fall back to SVD
-    if (k <= 4 || m < 2 || n_svd < 2) {
-        svd_split_fallback(site, d_theta, direction);
+    // For direction 'L', theta is (cL, d*cR) which is typically wide -> fall back to SVD
+    // For direction 'R', theta is (cL*d, cR) which is tall when cL*d > cR
+    // For very small systems or wide case, fall back to SVD
+    if (m < n_svd || n_svd <= 4 || m < 2) {
+        svd_fallback(site, d_theta, direction);
         return;
     }
 
-    if (m >= n_svd) {
-        // Tall/square: left Newton-Schulz -> A = U_ns @ P
-        int ns_iters = 0;
-        newton_schulz_left(d_theta, m, n_svd, d_ns_U_, d_ns_P_, 1e-10, &ns_iters);
-        prof_ns_iters += ns_iters;
+    // Tall/square case: Newton-Schulz left polar decomposition
+    int ns_iters = 0;
+    newton_schulz_left(d_theta, m, n_svd, d_ns_U_, d_ns_P_, 1e-10, &ns_iters);
+    prof_ns_iters += ns_iters;
 
-        // If NS didn't converge well, fall back to SVD
-        if (ns_iters >= 29) {
-            svd_split_fallback(site, d_theta, direction);
-            return;
-        }
+    // If NS didn't converge well, fall back to SVD
+    if (ns_iters >= 29) {
+        svd_fallback(site, d_theta, direction);
+        return;
+    }
 
-        HIP_CHECK(hipStreamSynchronize(stream_));
+    HIP_CHECK(hipStreamSynchronize(stream_));
 
-        // Verify ||U^H U - I||_F < tol to catch silent NS failures
-        {
-            Scalar one_v = Traits::one(), zero_v = Traits::zero();
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-                Traits::op_h, rocblas_operation_none,
-                n_svd, n_svd, m, &one_v, d_ns_U_, m, d_ns_U_, m,
-                &zero_v, d_ns_gram_, n_svd));
-
-            std::vector<Scalar> h_UtU(n_svd * n_svd);
-            HIP_CHECK(hipMemcpy(h_UtU.data(), d_ns_gram_,
-                                n_svd * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
-            RealType frob2 = 0.0;
-            for (int j = 0; j < n_svd; j++) {
-                for (int i = 0; i < n_svd; i++) {
-                    RealType re = Traits::real_part(h_UtU[i + j * n_svd]);
-                    if (i == j) re -= 1.0;
-                    frob2 += re * re;
-                    if constexpr (Traits::is_complex) {
-                        RealType im = hipCimag(h_UtU[i + j * n_svd]);
-                        frob2 += im * im;
-                    }
-                }
-            }
-            if (std::sqrt(frob2) > 1e-10) {
-                svd_split_fallback(site, d_theta, direction);
-                return;
-            }
-        }
-
-        // Eigendecompose P^H P -> eigenvalues sigma^2, eigenvectors V
-        Scalar one = Traits::one(), zero_val = Traits::zero();
-        Scalar* d_PtP = d_ns_gram_;  // reuse gram buffer for (n_svd, n_svd)
+    // Verify ||U^H U - I||_F < tol to catch silent NS failures
+    {
+        Scalar one_v = Traits::one(), zero_v = Traits::zero();
         ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
             Traits::op_h, rocblas_operation_none,
-            n_svd, n_svd, n_svd, &one, d_ns_P_, n_svd, d_ns_P_, n_svd,
-            &zero_val, d_PtP, n_svd));
+            n_svd, n_svd, m, &one_v, d_ns_U_, m, d_ns_U_, m,
+            &zero_v, d_ns_gram_, n_svd));
 
-        // Copy P^H P to host
-        HIP_CHECK(hipMemcpy(h_ns_PtP_.data(), d_PtP, n_svd * n_svd * sizeof(Scalar),
-                            hipMemcpyDeviceToHost));
-
-        // Eigendecompose on CPU
-        int info;
-        const char jobz = 'V', uplo = 'U';
-        int lwork = (int)h_ns_syev_work_.size();
-        Traits::lapack_syev(&jobz, &uplo, &n_svd,
-                h_ns_PtP_.data(), &n_svd,
-                h_ns_eigvals_.data(),
-                h_ns_syev_work_.data(), &lwork,
-                h_ns_syev_rwork_.empty() ? nullptr : h_ns_syev_rwork_.data(),
-                &info);
-
-        if (info != 0) {
-            svd_split_fallback(site, d_theta, direction);
-            return;
-        }
-
-        // Eigenvalues are in ascending order. Singular values = sqrt(eigenvalues).
-        // Reverse to get descending order.
-        std::vector<RealType> sing_vals(n_svd);
-        for (int i = 0; i < n_svd; i++) {
-            RealType ev = h_ns_eigvals_[n_svd - 1 - i];
-            sing_vals[i] = (ev > 0) ? std::sqrt(ev) : 0.0;
-        }
-
-        // Truncation
-        int new_k = std::min(max_k, n_svd);
-        for (int i = 0; i < new_k; i++) {
-            if (sing_vals[i] < 1e-14) { new_k = i; break; }
-        }
-        if (new_k == 0) new_k = 1;
-
-        // Build Vh_trunc (new_k x n_svd) on host: rows are reversed eigenvectors
-        std::vector<Scalar> h_Vh_trunc(new_k * n_svd);
-        for (int i = 0; i < new_k; i++) {
-            int src_col = n_svd - 1 - i;
-            for (int j = 0; j < n_svd; j++) {
-                Scalar v_val = h_ns_PtP_[j + src_col * n_svd];
+        std::vector<Scalar> h_UtU(n_svd * n_svd);
+        HIP_CHECK(hipMemcpy(h_UtU.data(), d_ns_gram_,
+                            n_svd * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
+        RealType frob2 = 0.0;
+        for (int j = 0; j < n_svd; j++) {
+            for (int i = 0; i < n_svd; i++) {
+                RealType re = Traits::real_part(h_UtU[i + j * n_svd]);
+                if (i == j) re -= 1.0;
+                frob2 += re * re;
                 if constexpr (Traits::is_complex) {
-                    h_Vh_trunc[i + j * new_k] = make_hipDoubleComplex(hipCreal(v_val), -hipCimag(v_val));
-                } else {
-                    h_Vh_trunc[i + j * new_k] = v_val;
+                    RealType im = hipCimag(h_UtU[i + j * n_svd]);
+                    frob2 += im * im;
                 }
             }
         }
-
-        // Upload Vh_trunc to GPU (into d_svd_Vh_)
-        HIP_CHECK(hipMemcpy(d_svd_Vh_, h_Vh_trunc.data(),
-                            new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
-
-        // Compute U_p_trunc = P @ V_trunc @ diag(1/S) on GPU
-        // First: upload V_trunc (n_svd x new_k) to GPU
-        std::vector<Scalar> h_V_trunc(n_svd * new_k);
-        for (int i = 0; i < new_k; i++) {
-            int src_col = n_svd - 1 - i;
-            for (int j = 0; j < n_svd; j++) {
-                h_V_trunc[j + i * n_svd] = h_ns_PtP_[j + src_col * n_svd];
-            }
+        if (std::sqrt(frob2) > 1e-10) {
+            svd_fallback(site, d_theta, direction);
+            return;
         }
-        HIP_CHECK(hipMemcpy(d_svd_U_, h_V_trunc.data(),
-                            n_svd * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
+    }
 
-        // U_p = P @ V_trunc -> (n_svd, n_svd) x (n_svd, new_k) -> (n_svd, new_k)
-        // Store in d_svd_A_ (scratch)
-        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-            rocblas_operation_none, rocblas_operation_none,
-            n_svd, new_k, n_svd, &one, d_ns_P_, n_svd,
-            d_svd_U_, n_svd, &zero_val, d_svd_A_, n_svd));
+    // Eigendecompose P^H P -> eigenvalues sigma^2, eigenvectors V
+    Scalar one = Traits::one(), zero_val = Traits::zero();
+    Scalar* d_PtP = d_ns_gram_;  // reuse gram buffer for (n_svd, n_svd)
+    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+        Traits::op_h, rocblas_operation_none,
+        n_svd, n_svd, n_svd, &one, d_ns_P_, n_svd, d_ns_P_, n_svd,
+        &zero_val, d_PtP, n_svd));
 
-        // Scale columns by 1/S: U_p[:, i] /= S[i]
-        for (int i = 0; i < new_k; i++) {
-            if (sing_vals[i] > 1e-14) {
-                RealType inv_s = 1.0 / sing_vals[i];
-                ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n_svd, &inv_s,
-                    d_svd_A_ + i * n_svd, 1));
-            }
-        }
+    // Copy P^H P to host
+    HIP_CHECK(hipMemcpy(h_ns_PtP_.data(), d_PtP, n_svd * n_svd * sizeof(Scalar),
+                        hipMemcpyDeviceToHost));
 
-        // U_full = U_ns @ U_p -> (m, n_svd) x (n_svd, new_k) -> (m, new_k)
-        // Store in d_svd_U_ (reuse, large enough)
-        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-            rocblas_operation_none, rocblas_operation_none,
-            m, new_k, n_svd, &one, d_ns_U_, m,
-            d_svd_A_, n_svd, &zero_val, d_svd_U_, m));
+    // Eigendecompose on CPU
+    int info;
+    const char jobz_ev = 'V', uplo_ev = 'U';
+    int lwork = (int)h_ns_syev_work_.size();
+    Traits::lapack_syev(&jobz_ev, &uplo_ev, &n_svd,
+            h_ns_PtP_.data(), &n_svd,
+            h_ns_eigvals_.data(),
+            h_ns_syev_work_.data(), &lwork,
+            h_ns_syev_rwork_.empty() ? nullptr : h_ns_syev_rwork_.data(),
+            &info);
 
-        HIP_CHECK(hipStreamSynchronize(stream_));
-
-        // Upload singular values to device for GPU-side scaling
-        HIP_CHECK(hipMemcpyAsync(d_svd_S_, sing_vals.data(), new_k * sizeof(RealType),
-                                  hipMemcpyHostToDevice, stream_));
-
-        // Store MPS tensors -- scale on GPU
-        if (direction == 'R') {
-            // MPS[site] = U_full[:, :new_k] -> (cL*d, new_k) = (m, new_k)
-            allocate_mps_tensor(site, cL, new_k);
-            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], d_svd_U_,
-                        m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice, stream_));
-
-            // MPS[site+1] = diag(S) @ Vh[:new_k, :] -- scale rows on GPU
-            allocate_mps_tensor(site + 1, new_k, cR);
-            scale_rows_by_real(d_svd_Vh_, new_k, d_svd_S_,
-                               d_mps_tensors_[site + 1], new_k, new_k, n_svd, stream_);
-        } else {
-            // MPS[site] = U_full @ diag(S) -- scale columns on GPU
-            allocate_mps_tensor(site, cL, new_k);
-            scale_columns_by_real(d_svd_U_, m, d_svd_S_,
-                                  d_mps_tensors_[site], m, m, new_k, stream_);
-
-            // MPS[site+1] = Vh[:new_k, :] -- upload from host
-            allocate_mps_tensor(site + 1, new_k, cR);
-            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], h_Vh_trunc.data(),
-                        new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, stream_));
-        }
-
-        bond_dims_[site + 1] = new_k;
-
-    } else {
-        // Wide case: fall back to SVD for simplicity
-        svd_split_fallback(site, d_theta, direction);
+    if (info != 0) {
+        svd_fallback(site, d_theta, direction);
         return;
+    }
+
+    // Eigenvalues are in ascending order. Singular values = sqrt(eigenvalues).
+    // Reverse to get descending order.
+    std::vector<RealType> sing_vals(n_svd);
+    for (int i = 0; i < n_svd; i++) {
+        RealType ev = h_ns_eigvals_[n_svd - 1 - i];
+        sing_vals[i] = (ev > 0) ? std::sqrt(ev) : 0.0;
+    }
+
+    // Truncation: single-site doesn't change bond dims, but we still truncate near-zero
+    int full_k = n_svd;
+    int max_k = std::min(full_k, chi_max_);
+    int new_k = max_k;
+    for (int i = 0; i < new_k; i++) {
+        if (sing_vals[i] < 1e-14) { new_k = i; break; }
+    }
+    if (new_k == 0) new_k = 1;
+
+    // Build Vh_trunc (new_k x n_svd) on host: rows are reversed eigenvectors (conjugated)
+    std::vector<Scalar> h_Vh_trunc(new_k * n_svd);
+    for (int i = 0; i < new_k; i++) {
+        int src_col = n_svd - 1 - i;
+        for (int j = 0; j < n_svd; j++) {
+            Scalar v_val = h_ns_PtP_[j + src_col * n_svd];
+            if constexpr (Traits::is_complex) {
+                h_Vh_trunc[i + j * new_k] = make_hipDoubleComplex(hipCreal(v_val), -hipCimag(v_val));
+            } else {
+                h_Vh_trunc[i + j * new_k] = v_val;
+            }
+        }
+    }
+
+    // Upload Vh_trunc to GPU (into d_svd_Vh_)
+    HIP_CHECK(hipMemcpy(d_svd_Vh_, h_Vh_trunc.data(),
+                        new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+
+    // Compute U_p_trunc = P @ V_trunc @ diag(1/S) on GPU
+    // First: upload V_trunc (n_svd x new_k) to GPU
+    std::vector<Scalar> h_V_trunc(n_svd * new_k);
+    for (int i = 0; i < new_k; i++) {
+        int src_col = n_svd - 1 - i;
+        for (int j = 0; j < n_svd; j++) {
+            h_V_trunc[j + i * n_svd] = h_ns_PtP_[j + src_col * n_svd];
+        }
+    }
+    HIP_CHECK(hipMemcpy(d_svd_U_, h_V_trunc.data(),
+                        n_svd * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
+
+    // U_p = P @ V_trunc -> (n_svd, n_svd) x (n_svd, new_k) -> (n_svd, new_k)
+    // Store in d_svd_A_ (scratch)
+    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+        rocblas_operation_none, rocblas_operation_none,
+        n_svd, new_k, n_svd, &one, d_ns_P_, n_svd,
+        d_svd_U_, n_svd, &zero_val, d_svd_A_, n_svd));
+
+    // Scale columns by 1/S: U_p[:, i] /= S[i]
+    for (int i = 0; i < new_k; i++) {
+        if (sing_vals[i] > 1e-14) {
+            RealType inv_s = 1.0 / sing_vals[i];
+            ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n_svd, &inv_s,
+                d_svd_A_ + i * n_svd, 1));
+        }
+    }
+
+    // U_full = U_ns @ U_p -> (m, n_svd) x (n_svd, new_k) -> (m, new_k)
+    // Store in d_svd_U_ (reuse, large enough)
+    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+        rocblas_operation_none, rocblas_operation_none,
+        m, new_k, n_svd, &one, d_ns_U_, m,
+        d_svd_A_, n_svd, &zero_val, d_svd_U_, m));
+
+    HIP_CHECK(hipStreamSynchronize(stream_));
+
+    // Upload singular values to device for GPU-side scaling
+    HIP_CHECK(hipMemcpyAsync(d_svd_S_, sing_vals.data(), new_k * sizeof(RealType),
+                              hipMemcpyHostToDevice, stream_));
+
+    // Store MPS tensors -- single-site pattern: absorb remainder into neighbor
+    if (direction == 'R') {
+        int new_chi_R = new_k;
+
+        // MPS[site] = U_full[:, :new_k] -> (cL*d, new_k) = (m, new_k)
+        allocate_mps_tensor(site, cL, new_chi_R);
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], d_svd_U_,
+                    m * new_chi_R * sizeof(Scalar), hipMemcpyDeviceToDevice, stream_));
+
+        // S*Vh -> (new_k, n_svd) = (new_k, cR), absorb into MPS[site+1]
+        // First compute S*Vh on GPU using row-scaling
+        // d_svd_Vh_ has Vh (new_k x n_svd), scale rows by S
+        // Result stored in d_svd_A_ (scratch, large enough)
+        scale_rows_by_real(d_svd_Vh_, new_k, d_svd_S_,
+                           d_svd_A_, new_k, new_k, n_svd, stream_);
+
+        if (site + 1 < L_) {
+            int next_cR = chi_R(site + 1);
+            Scalar one_v = Traits::one(), zero_v = Traits::zero();
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                new_k, d_ * next_cR, cR, &one_v,
+                d_svd_A_, new_k,
+                d_mps_tensors_[site + 1], cR, &zero_v,
+                d_T1_, new_k));
+            allocate_mps_tensor(site + 1, new_chi_R, next_cR);
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], d_T1_,
+                                new_k * d_ * next_cR * sizeof(Scalar), hipMemcpyDeviceToDevice));
+        }
+        bond_dims_[site + 1] = new_chi_R;
+
+    } else {  // direction == 'L'
+        // This shouldn't be reached (we fall back for wide case above)
+        // But handle it for safety: U*S -> absorb into MPS[site-1]
+        int new_chi_L = new_k;
+
+        // MPS[site] = Vh[:new_k, :] -> (new_k, n_svd)
+        allocate_mps_tensor(site, new_chi_L, cR);
+        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_Vh_trunc.data(),
+                            new_chi_L * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+
+        // U_full @ diag(S) -> scale columns on GPU
+        scale_columns_by_real(d_svd_U_, m, d_svd_S_,
+                              d_svd_A_, m, m, new_k, stream_);
+
+        if (site > 0) {
+            int prev_cL = chi_L(site - 1);
+            Scalar one_v = Traits::one(), zero_v = Traits::zero();
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                prev_cL * d_, new_k, m, &one_v,
+                d_mps_tensors_[site - 1], prev_cL * d_,
+                d_svd_A_, m, &zero_v,
+                d_T1_, prev_cL * d_));
+            allocate_mps_tensor(site - 1, prev_cL, new_chi_L);
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site - 1], d_T1_,
+                                prev_cL * d_ * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice));
+        }
+        bond_dims_[site] = new_chi_L;
     }
 }
 
 // ============================================================================
-// SVD split fallback (CPU LAPACK only)
+// SVD fallback (CPU LAPACK only)
 // ============================================================================
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char direction) {
+void DMRGGPUOpt<Scalar>::svd_fallback(int site, Scalar* d_theta, char direction) {
     int cL = chi_L(site);
-    int cR = chi_R(site + 1);
+    int cR = chi_R(site);
 
-    int m = cL * d_;
-    int n_svd = d_ * cR;
+    int m, n_svd;
+    if (direction == 'R') { m = cL * d_; n_svd = cR; }
+    else                  { m = cL;      n_svd = d_ * cR; }
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_);
 
@@ -1139,7 +1103,7 @@ void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char dir
             h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
 
     if (info != 0) {
-        throw std::runtime_error("svd_split_fallback: LAPACK gesvd failed, info=" + std::to_string(info));
+        throw std::runtime_error("svd_fallback: LAPACK gesvd failed, info=" + std::to_string(info));
     }
 
     Scalar* h_U_data = h_svd_U_.data();
@@ -1154,44 +1118,75 @@ void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char dir
     if (new_k == 0) new_k = 1;
 
     if (direction == 'R') {
-        // U -> MPS[site] (left-canonical), S*Vh -> MPS[site+1]
-        allocate_mps_tensor(site, cL, new_k);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_U_data,
-                            m * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
+        int new_chi_R = new_k;
 
-        // Compute S*Vh on CPU: (new_k, n_svd)
+        // Compute S*Vh on CPU
         for (int j = 0; j < n_svd; j++)
             for (int i = 0; i < new_k; i++)
                 h_svd_tmp_[i + j * new_k] = Traits::scale_by_real(h_S_data[i], h_Vh_data[i + j * full_k]);
 
-        allocate_mps_tensor(site + 1, new_k, cR);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_svd_tmp_.data(),
-                            new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+        // Upload U[:, :new_k]
+        allocate_mps_tensor(site, cL, new_chi_R);
+        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_U_data,
+                            m * new_chi_R * sizeof(Scalar), hipMemcpyHostToDevice));
+
+        // Absorb S*Vh into A[site+1]
+        if (site + 1 < L_) {
+            HIP_CHECK(hipMemcpy(d_svd_A_, h_svd_tmp_.data(),
+                                new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+            int next_cR = chi_R(site + 1);
+            Scalar one_v = Traits::one(), zero_v = Traits::zero();
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                new_k, d_ * next_cR, cR, &one_v,
+                d_svd_A_, new_k,
+                d_mps_tensors_[site + 1], cR, &zero_v,
+                d_T1_, new_k));
+            allocate_mps_tensor(site + 1, new_chi_R, next_cR);
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], d_T1_,
+                                new_k * d_ * next_cR * sizeof(Scalar), hipMemcpyDeviceToDevice));
+        }
+        bond_dims_[site + 1] = new_chi_R;
 
     } else {  // direction == 'L'
-        // U*S -> MPS[site], Vh -> MPS[site+1] (right-canonical)
+        int new_chi_L = new_k;
+
+        // Upload Vh[:new_k, :]
+        allocate_mps_tensor(site, new_chi_L, cR);
+        if (new_chi_L == full_k) {
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_Vh_data,
+                                full_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+        } else {
+            for (int j = 0; j < n_svd; j++)
+                for (int i = 0; i < new_chi_L; i++)
+                    h_svd_tmp_[i + j * new_chi_L] = h_Vh_data[i + j * full_k];
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_svd_tmp_.data(),
+                                new_chi_L * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+        }
+
+        // Compute U*S on CPU
         for (int j = 0; j < new_k; j++)
             for (int i = 0; i < m; i++)
                 h_svd_tmp_[i + j * m] = Traits::scale_by_real(h_S_data[j], h_U_data[i + j * m]);
 
-        allocate_mps_tensor(site, cL, new_k);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_svd_tmp_.data(),
-                            m * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
-
-        allocate_mps_tensor(site + 1, new_k, cR);
-        if (new_k == full_k) {
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_Vh_data,
-                                full_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
-        } else {
-            for (int j = 0; j < n_svd; j++)
-                for (int i = 0; i < new_k; i++)
-                    h_svd_tmp_[i + j * new_k] = h_Vh_data[i + j * full_k];
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_svd_tmp_.data(),
-                                new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+        // Absorb U*S into A[site-1]
+        if (site > 0) {
+            HIP_CHECK(hipMemcpy(d_svd_A_, h_svd_tmp_.data(),
+                                m * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
+            int prev_cL = chi_L(site - 1);
+            Scalar one_v = Traits::one(), zero_v = Traits::zero();
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                prev_cL * d_, new_k, m, &one_v,
+                d_mps_tensors_[site - 1], prev_cL * d_,
+                d_svd_A_, m, &zero_v,
+                d_T1_, prev_cL * d_));
+            allocate_mps_tensor(site - 1, prev_cL, new_chi_L);
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site - 1], d_T1_,
+                                prev_cL * d_ * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice));
         }
+        bond_dims_[site] = new_chi_L;
     }
-
-    bond_dims_[site + 1] = new_k;
 }
 
 // ============================================================================
@@ -1199,8 +1194,8 @@ void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char dir
 // ============================================================================
 
 template<typename Scalar>
-double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta, int theta_size) {
-    int dim = theta_size;
+double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta) {
+    int dim = chi_L(site) * d_ * chi_R(site);
     int b = std::min(davidson_b_, dim);
     int max_sub = std::min(davidson_max_sub_, dim);
     int max_iter = 30;
@@ -1211,7 +1206,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
 
     // For tiny systems, use Lanczos fallback
     if (dim <= 2 * b) {
-        return lanczos_eigensolver(site, d_theta, theta_size);
+        return lanczos_eigensolver(site, d_theta);
     }
 
     // Initialize V: first column = theta/||theta||
@@ -1264,7 +1259,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
 
     // Compute AV[:, j] = H @ V[:, j] for j = 0..b-1
     for (int j = 0; j < b; j++) {
-        apply_heff_two_site(site, V + (size_t)j * dim, AV + (size_t)j * dim);
+        apply_heff(site, V + (size_t)j * dim, AV + (size_t)j * dim);
     }
 
     double best_energy = 1e30;
@@ -1308,29 +1303,30 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
                   h_dav_eigvecs_.begin());
         int info;
         const char jobz = 'V', uplo = 'U';
-        int lwork = -1;
+        int lwork_q = -1;
         Scalar work_opt;
         // Query workspace (need valid rwork for zheev_)
         std::vector<RealType> syev_rwork_q(std::max(1, Traits::syev_rwork_size(k)));
         Traits::lapack_syev(&jobz, &uplo, &k,
                 h_dav_eigvecs_.data(), &k, h_dav_eigvals_.data(),
-                &work_opt, &lwork,
+                &work_opt, &lwork_q,
                 syev_rwork_q.empty() ? nullptr : syev_rwork_q.data(), &info);
+        int lwork_val;
         if constexpr (Traits::is_complex) {
-            lwork = (int)Traits::real_part(work_opt) + 1;
+            lwork_val = (int)Traits::real_part(work_opt) + 1;
         } else {
-            lwork = (int)work_opt + 1;
+            lwork_val = (int)work_opt + 1;
         }
-        std::vector<Scalar> syev_work(lwork);
+        std::vector<Scalar> syev_work(lwork_val);
         std::vector<RealType> syev_rwork(Traits::syev_rwork_size(k));
         Traits::lapack_syev(&jobz, &uplo, &k,
                 h_dav_eigvecs_.data(), &k, h_dav_eigvals_.data(),
-                syev_work.data(), &lwork,
+                syev_work.data(), &lwork_val,
                 syev_rwork.empty() ? nullptr : syev_rwork.data(), &info);
 
         if (info != 0) {
             // Eigendecomp failed -- fall back to Lanczos
-            return lanczos_eigensolver(site, d_theta, theta_size);
+            return lanczos_eigensolver(site, d_theta);
         }
 
         double energy = h_dav_eigvals_[0];  // lowest eigenvalue
@@ -1483,7 +1479,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
 
             // Recompute AV for kept vectors
             for (int j = 0; j < keep; j++) {
-                apply_heff_two_site(site, V + (size_t)j * dim, AV + (size_t)j * dim);
+                apply_heff(site, V + (size_t)j * dim, AV + (size_t)j * dim);
             }
 
             k = keep;
@@ -1494,7 +1490,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
         for (int j = 0; j < n_good; j++) {
             HIP_CHECK(hipMemcpyAsync(V + (size_t)(k + j) * dim, W + (size_t)j * dim,
                                       dim * sizeof(Scalar), hipMemcpyDeviceToDevice, stream_));
-            apply_heff_two_site(site, V + (size_t)(k + j) * dim, AV + (size_t)(k + j) * dim);
+            apply_heff(site, V + (size_t)(k + j) * dim, AV + (size_t)(k + j) * dim);
         }
         k += n_good;
     }
@@ -1507,24 +1503,21 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
 }
 
 // ============================================================================
-// Bond optimization (two-site)
+// Site optimization
 // ============================================================================
 
 template<typename Scalar>
-double DMRG2GPUOpt<Scalar>::optimize_bond(int site, char direction) {
-    form_theta_two_site(site);
-    int cL = chi_L(site);
-    int cR = chi_R(site + 1);
-    int theta_size = cL * d_ * d_ * cR;
+double DMRGGPUOpt<Scalar>::optimize_site(int site, char direction) {
+    form_theta(site, d_theta_);
 
     auto t0 = std::chrono::high_resolution_clock::now();
-    double energy = block_davidson_eigensolver(site, d_theta_, theta_size);
+    double energy = block_davidson_eigensolver(site, d_theta_);
     auto t1 = std::chrono::high_resolution_clock::now();
     prof_davidson_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
 
     t0 = std::chrono::high_resolution_clock::now();
     HIP_CHECK(hipStreamSynchronize(stream_));
-    ns_split(site, d_theta_, direction);
+    ns_svd_and_update_mps(site, d_theta_, direction);
     t1 = std::chrono::high_resolution_clock::now();
     prof_ns_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
 
@@ -1537,11 +1530,11 @@ double DMRG2GPUOpt<Scalar>::optimize_bond(int site, char direction) {
 // ============================================================================
 
 template<typename Scalar>
-double DMRG2GPUOpt<Scalar>::sweep_left_to_right() {
+double DMRGGPUOpt<Scalar>::sweep_left_to_right() {
     double energy = 0.0;
 
     for (int site = 0; site < L_ - 1; site++) {
-        energy = optimize_bond(site, 'R');
+        energy = optimize_site(site, 'R');
         HIP_CHECK(hipStreamSynchronize(stream_));
         auto te0 = std::chrono::high_resolution_clock::now();
         update_left_env(site);
@@ -1549,22 +1542,46 @@ double DMRG2GPUOpt<Scalar>::sweep_left_to_right() {
         auto te1 = std::chrono::high_resolution_clock::now();
         prof_env_ms += std::chrono::duration<double, std::milli>(te1 - te0).count();
     }
+    // Optimize last site without SVD
+    {
+        int site = L_ - 1;
+        form_theta(site, d_theta_);
+        auto t0 = std::chrono::high_resolution_clock::now();
+        energy = block_davidson_eigensolver(site, d_theta_);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        prof_davidson_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        int sz = chi_L(site) * d_ * chi_R(site);
+        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_theta_, sz * sizeof(Scalar),
+                            hipMemcpyDeviceToDevice));
+    }
 
     return energy;
 }
 
 template<typename Scalar>
-double DMRG2GPUOpt<Scalar>::sweep_right_to_left() {
+double DMRGGPUOpt<Scalar>::sweep_right_to_left() {
     double energy = 0.0;
 
-    for (int site = L_ - 2; site >= 0; site--) {
-        energy = optimize_bond(site, 'L');
+    for (int site = L_ - 1; site >= 1; site--) {
+        energy = optimize_site(site, 'L');
         HIP_CHECK(hipStreamSynchronize(stream_));
         auto te0 = std::chrono::high_resolution_clock::now();
-        update_right_env(site + 1);
+        update_right_env(site);
         HIP_CHECK(hipStreamSynchronize(stream_));
         auto te1 = std::chrono::high_resolution_clock::now();
         prof_env_ms += std::chrono::duration<double, std::milli>(te1 - te0).count();
+    }
+    // Optimize first site without SVD
+    {
+        int site = 0;
+        form_theta(site, d_theta_);
+        auto t0 = std::chrono::high_resolution_clock::now();
+        energy = block_davidson_eigensolver(site, d_theta_);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        prof_davidson_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        int sz = chi_L(site) * d_ * chi_R(site);
+        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_theta_, sz * sizeof(Scalar),
+                            hipMemcpyDeviceToDevice));
     }
 
     return energy;
@@ -1575,9 +1592,9 @@ double DMRG2GPUOpt<Scalar>::sweep_right_to_left() {
 // ============================================================================
 
 template<typename Scalar>
-double DMRG2GPUOpt<Scalar>::run(int n_sweeps) {
+double DMRGGPUOpt<Scalar>::run(int n_sweeps) {
     const char* type_name = Traits::is_complex ? "complex128" : "float64";
-    printf("=== GPU-Native Two-Site DMRG-OPT (Newton-Schulz + Block-Davidson, %s) ===\n", type_name);
+    printf("=== GPU-Native Single-Site DMRG-OPT (Newton-Schulz + Block-Davidson, %s) ===\n", type_name);
     printf("L = %d, d = %d, chi_max = %d, D_mpo = %d\n", L_, d_, chi_max_, D_mpo_);
     printf("Running %d sweeps...\n\n", n_sweeps);
 
@@ -1607,16 +1624,9 @@ double DMRG2GPUOpt<Scalar>::run(int n_sweeps) {
         energy_ = energy_RL;
         double dE = std::abs(energy_ - energy_prev);
 
-        // Print bond dimensions
-        printf("Sweep %3d: E = %.12f, dE = %.2e, time = %.3f s  chi=[",
-               sweep, energy_, dE, sweep_time);
-        for (int i = 1; i < L_; i++) {
-            printf("%d", bond_dims_[i]);
-            if (i < L_ - 1) printf(",");
-        }
-        printf("]\n");
-
         double other_ms = sweep_time*1000.0 - prof_davidson_ms - prof_ns_ms - prof_env_ms;
+        printf("Sweep %3d: E = %.12f, dE = %.2e, time = %.3f s\n",
+               sweep, energy_, dE, sweep_time);
         printf("  Profile: davidson=%.0fms (%d iters, %d heff) ns=%.0fms (%d iters) env=%.0fms other=%.0fms\n",
                prof_davidson_ms, prof_davidson_iters, prof_heff_calls,
                prof_ns_ms, prof_ns_iters, prof_env_ms, other_ms);
@@ -1641,7 +1651,7 @@ double DMRG2GPUOpt<Scalar>::run(int n_sweeps) {
 // ============================================================================
 
 template<typename Scalar>
-void DMRG2GPUOpt<Scalar>::get_mps(std::vector<std::vector<Scalar>>& h_mps) const {
+void DMRGGPUOpt<Scalar>::get_mps(std::vector<std::vector<Scalar>>& h_mps) const {
     h_mps.resize(L_);
     for (int i = 0; i < L_; i++) {
         int size = chi_L(i) * d_ * chi_R(i);
@@ -1651,4 +1661,4 @@ void DMRG2GPUOpt<Scalar>::get_mps(std::vector<std::vector<Scalar>>& h_mps) const
     }
 }
 
-#endif // DMRG2_GPU_OPT_IMPL_H
+#endif // DMRG_GPU_OPT_IMPL_H
