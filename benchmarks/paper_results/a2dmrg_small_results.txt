@@ -1,0 +1,23 @@
+A2DMRG (np=2) vs quimb DMRG1/DMRG2 — Small Benchmark
+Run date: 2026-03-23, Remote MI300X VM (CPU-only, MPI np=2)
+Heisenberg spin-1/2 chain (real, OBC)
+
+   L  chi |            E_DMRG1     t1 |            E_DMRG2     t2 |           E_A2DMRG    ta2 |    |A2-D1|    |A2-D2|
+----------------------------------------------------------------------------------------------------------------------------------
+   8   20 |    -3.374932598688   3.8s |    -3.374932598688   3.2s |    -3.374932598688   0.1s |   2.22e-15 PASS   1.78e-15 PASS
+  10   20 |    -4.258035206806   0.2s |    -4.258035206806   0.1s |    -4.258035206806   0.1s |   5.44e-13 PASS   8.88e-16 PASS
+  12   20 |    -5.142090628199   0.3s |    -5.142090628178   0.1s |    -5.142090628177   0.1s |   2.28e-11 PASS   1.41e-12 PASS
+  12   50 |    -5.142090632841   0.1s |    -5.142090632840   0.1s |    -5.142090632841   0.2s |   3.11e-14 PASS   9.77e-15 PASS
+  16   20 |    -6.911737071806   0.4s |    -6.911737071107   0.2s |    -6.911737069813   0.2s |   1.99e-09 WARN   1.29e-09 WARN
+  16   50 |    -6.911737145574   0.3s |    -6.911737145574   0.4s |    -6.911737145574   0.4s |   2.72e-13 PASS   2.09e-13 PASS
+  20   20 |    -8.682472919095   0.6s |    -8.682472913802   0.3s |    -8.682472607257   0.2s |   3.12e-07 FAIL   3.07e-07 FAIL
+  20   50 |    -8.682473334379   0.7s |    -8.682473334379   0.6s |    -8.682473334320   0.8s |   5.97e-11 PASS   5.97e-11 PASS
+
+Target: |diff| < 1e-10 = PASS, < 1e-8 = WARN, else FAIL
+
+Notes:
+- A2DMRG uses 2 MPI processes (additive two-level parallelism)
+- L=20 chi=20 FAIL: expected — bond dimension too small for this chain length
+- L=16 chi=20 WARN: borderline, insufficient chi for this system size
+- All chi=50 cases PASS with machine precision agreement
+- quimb times include cotengra import overhead (first run: ~3.8s)

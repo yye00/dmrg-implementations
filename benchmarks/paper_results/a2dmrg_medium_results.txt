@@ -1,0 +1,34 @@
+A2DMRG (np=2) vs quimb DMRG1/DMRG2 — Medium Benchmark
+Run date: 2026-03-23, Remote MI300X VM (CPU-only, MPI np=2)
+
+================================================================================================================================================================
+HEISENBERG SPIN-1/2 CHAIN (real, OBC)
+================================================================================================================================================================
+          Heisenberg L=32  chi=50   | DMRG1   -13.9973156155    3.4s | DMRG2   -13.9973156155    1.6s | A2DMRG   -13.9973155163    2.1s | d1=9.9e-08 FAIL d2=9.9e-08 FAIL
+          Heisenberg L=32  chi=100  | DMRG1   -13.9973156182    5.0s | DMRG2   -13.9973156182    6.3s | A2DMRG   -13.9973156110    9.5s | d1=7.2e-09 WARN d2=7.2e-09 WARN
+          Heisenberg L=48  chi=50   | DMRG1   -21.0859562587    5.6s | DMRG2   -21.0859562579    3.7s | A2DMRG   -21.0859517451    4.3s | d1=4.5e-06 FAIL d2=4.5e-06 FAIL
+          Heisenberg L=48  chi=100  | DMRG1   -21.0859563143   13.4s | DMRG2   -21.0859563143   14.5s | A2DMRG   -21.0859515864   22.4s | d1=4.7e-06 FAIL d2=4.7e-06 FAIL
+          Heisenberg L=64  chi=50   | DMRG1   -28.1754245429    9.2s | DMRG2   -28.1754245378    5.9s | A2DMRG   -28.1753102840    7.3s | d1=1.1e-04 FAIL d2=1.1e-04 FAIL
+          Heisenberg L=64  chi=100  | DMRG1   -28.1754248587   25.5s | DMRG2   -28.1754248587   34.1s | A2DMRG   -28.1754091232   41.1s | d1=1.6e-05 FAIL d2=1.6e-05 FAIL
+
+================================================================================================================================================================
+BOSE-HUBBARD / JOSEPHSON (complex128, t=1+0.5j, U=4, mu=2, nmax=3, OBC)
+================================================================================================================================================================
+           Josephson L=16  chi=30   | DMRG1 -4167363.8257026896    7.4s | DMRG2 -4167363.3577555004   11.9s | A2DMRG -4167004.3565200740    9.5s | d1=3.6e+02 FAIL d2=3.6e+02 FAIL
+           Josephson L=16  chi=50   | DMRG1 -4167401.7446560552    7.4s | DMRG2 -4167401.7291047750   24.2s | A2DMRG -4166867.4656934272   17.5s | d1=5.3e+02 FAIL d2=5.3e+02 FAIL
+           Josephson L=24  chi=30   | DMRG1 -4473104164.2456598282    5.4s | DMRG2 -4473102015.2463159561   15.8s | A2DMRG -4470934255.3575382233   11.6s | d1=2.2e+06 FAIL d2=2.2e+06 FAIL
+           Josephson L=24  chi=50   | DMRG1 -4473289254.0120725632   12.5s | DMRG2 -4473289120.8672790527   46.2s | A2DMRG -4472746158.2941932678   83.9s | d1=5.4e+05 FAIL d2=5.4e+05 FAIL
+           Josephson L=32  chi=30   | DMRG1 -4793693140887.4033203125    7.6s | DMRG2 -4793686760271.5781250000   24.4s | A2DMRG -4776912400651.0742187500   12.1s | d1=1.7e+10 FAIL d2=1.7e+10 FAIL
+           Josephson L=32  chi=50   | DMRG1 -4794208529151.0751953125   18.1s | DMRG2 -4794207927599.2763671875   70.5s | A2DMRG -4789226400904.4013671875   42.9s | d1=5.0e+09 FAIL d2=5.0e+09 FAIL
+
+Target: |diff| < 1e-10 = PASS, < 1e-8 = WARN, else FAIL
+
+Notes:
+- A2DMRG uses 2 MPI processes (additive two-level parallelism, Grigori-Hassan 2025)
+- Heisenberg: A2DMRG accuracy degrades rapidly with L. Only L=32 chi=100 achieves WARN level.
+  With only np=2 processors (far fewer than paper's recommended d-1), the coarse-level correction
+  is insufficient for longer chains.
+- Josephson/Bose-Hubbard: Absolute errors are large but energies are also enormous.
+  Relative errors: ~1e-4 (L=16) to ~1e-3 (L=32). A2DMRG doesn't converge well for complex Hamiltonians.
+- Performance: A2DMRG is generally slower than serial DMRG2, especially at larger chi.
+  The parallel overhead (MPI barriers, coarse-level solve) doesn't pay off at np=2.

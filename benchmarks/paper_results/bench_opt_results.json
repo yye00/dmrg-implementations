@@ -1,0 +1,1922 @@
+[
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 20,
+    "energy": -6.911737071806,
+    "wall_time": 1.662,
+    "sweeps": 11,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 20,
+    "energy": -6.911737071806,
+    "wall_time": 3.518,
+    "sweeps": 12,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 20,
+    "energy": -6.911737071105,
+    "wall_time": 1.225,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 20,
+    "energy": -6.911737071105,
+    "wall_time": 3.28,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 50,
+    "energy": -6.911737145574,
+    "wall_time": 1.021,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 50,
+    "energy": -6.911737145574,
+    "wall_time": 1.412,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 50,
+    "energy": -6.911737145574,
+    "wall_time": 1.391,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 50,
+    "energy": -6.911737145574,
+    "wall_time": 2.662,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 128,
+    "energy": -6.911737145575,
+    "wall_time": 1.173,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 128,
+    "energy": -18.776610658803,
+    "wall_time": 11.994,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 128,
+    "energy": -6.911737145575,
+    "wall_time": 1.686,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 128,
+    "energy": -56.732931319065,
+    "wall_time": 11.3,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 256,
+    "energy": -6.911737145575,
+    "wall_time": 1.371,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 256,
+    "energy": -16.916619846737,
+    "wall_time": 3.83,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 256,
+    "energy": -6.911737145575,
+    "wall_time": 1.608,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 16,
+    "chi": 256,
+    "energy": -42.201965078504,
+    "wall_time": 7.265,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 20,
+    "energy": -13.997308480726,
+    "wall_time": 4.854,
+    "sweeps": 16,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 20,
+    "energy": -13.997308480726,
+    "wall_time": 13.727,
+    "sweeps": 16,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 20,
+    "energy": -13.997308348754,
+    "wall_time": 2.887,
+    "sweeps": 6,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 20,
+    "energy": -13.997308348749,
+    "wall_time": 11.538,
+    "sweeps": 6,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 50,
+    "energy": -13.997315615495,
+    "wall_time": 8.406,
+    "sweeps": 18,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 50,
+    "energy": -13.997315615493,
+    "wall_time": 10.539,
+    "sweeps": 17,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 50,
+    "energy": -13.997315615465,
+    "wall_time": 3.479,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 50,
+    "energy": -13.997315615465,
+    "wall_time": 7.973,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 128,
+    "energy": -13.997315618224,
+    "wall_time": 4.598,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 128,
+    "energy": -639.943048931402,
+    "wall_time": 40.698,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 128,
+    "energy": -13.997315618224,
+    "wall_time": 6.212,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 128,
+    "energy": -5657738755.457611,
+    "wall_time": 76.653,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 256,
+    "energy": -13.997315618224,
+    "wall_time": 11.779,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 256,
+    "energy": -4103.925300220033,
+    "wall_time": 49.142,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 256,
+    "energy": -13.997315618225,
+    "wall_time": 12.333,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 256,
+    "energy": -30359307429876.258,
+    "wall_time": 211.935,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 20,
+    "energy": -28.175292937987,
+    "wall_time": 16.598,
+    "sweeps": 27,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 20,
+    "energy": -28.175292937986,
+    "wall_time": 55.06,
+    "sweeps": 26,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 20,
+    "energy": -28.175290238287,
+    "wall_time": 8.552,
+    "sweeps": 8,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 20,
+    "energy": -28.175290238194,
+    "wall_time": 37.312,
+    "sweeps": 8,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 50,
+    "energy": -28.175424542897,
+    "wall_time": 22.973,
+    "sweeps": 20,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 50,
+    "energy": -28.175424542903,
+    "wall_time": 37.828,
+    "sweeps": 20,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 50,
+    "energy": -28.175424537573,
+    "wall_time": 10.552,
+    "sweeps": 6,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 50,
+    "energy": -28.175424537571,
+    "wall_time": 41.961,
+    "sweeps": 6,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 128,
+    "energy": -28.175424859649,
+    "wall_time": 25.201,
+    "sweeps": 7,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 128,
+    "energy": -2051436.2867112816,
+    "wall_time": 154.254,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 128,
+    "energy": -28.175424859649,
+    "wall_time": 24.484,
+    "sweeps": 6,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 128,
+    "energy": -4.2036558976070425e+25,
+    "wall_time": 164.925,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 256,
+    "energy": -28.175424859743,
+    "wall_time": 33.016,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 256,
+    "energy": -9.439302905788508e+20,
+    "wall_time": 124.927,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 256,
+    "energy": -28.175424859744,
+    "wall_time": 66.221,
+    "sweeps": 6,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 256,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 20,
+    "energy": -56.5345176687,
+    "wall_time": 41.89,
+    "sweeps": 30,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 20,
+    "energy": -56.534517668677,
+    "wall_time": 203.668,
+    "sweeps": 30,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 20,
+    "energy": -56.534500375628,
+    "wall_time": 26.97,
+    "sweeps": 11,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 20,
+    "energy": -56.534500374769,
+    "wall_time": 143.829,
+    "sweeps": 14,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 50,
+    "energy": -56.535461738413,
+    "wall_time": 49.615,
+    "sweeps": 20,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 50,
+    "energy": -56.535461738769,
+    "wall_time": 114.597,
+    "sweeps": 20,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 50,
+    "energy": -56.53546154385,
+    "wall_time": 71.727,
+    "sweeps": 16,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 50,
+    "energy": -56.535461543828,
+    "wall_time": 143.076,
+    "sweeps": 13,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 128,
+    "energy": -56.535469872199,
+    "wall_time": 116.462,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 128,
+    "energy": -1396234578247.7935,
+    "wall_time": 176.76,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 128,
+    "energy": -56.535469872211,
+    "wall_time": 94.538,
+    "sweeps": 8,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 128,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 256,
+    "energy": -56.535469884564,
+    "wall_time": 151.481,
+    "sweeps": 6,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 256,
+    "energy": null,
+    "wall_time": 16.581,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 256,
+    "energy": -56.535469884568,
+    "wall_time": 161.295,
+    "sweeps": 6,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "heisenberg",
+    "L": 128,
+    "chi": 256,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 8,
+    "chi": 20,
+    "energy": -2.446313889893,
+    "wall_time": 1.145,
+    "sweeps": 12,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 8,
+    "chi": 20,
+    "energy": -2.446313889892,
+    "wall_time": 2.546,
+    "sweeps": 14,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 8,
+    "chi": 20,
+    "energy": -2.44631388925,
+    "wall_time": 0.785,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 8,
+    "chi": 20,
+    "energy": -2.446313889251,
+    "wall_time": 2.127,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 8,
+    "chi": 50,
+    "energy": -2.446314012418,
+    "wall_time": 0.612,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 8,
+    "chi": 50,
+    "energy": -2.446314012418,
+    "wall_time": 1.465,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 8,
+    "chi": 50,
+    "energy": -2.446314012418,
+    "wall_time": 0.703,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 8,
+    "chi": 50,
+    "energy": -2.446314012418,
+    "wall_time": 1.949,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 8,
+    "chi": 128,
+    "energy": -2.446314012419,
+    "wall_time": 0.638,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 8,
+    "chi": 128,
+    "energy": -2.446314012418,
+    "wall_time": 1.123,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 8,
+    "chi": 128,
+    "energy": -2.446314012419,
+    "wall_time": 0.674,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 8,
+    "chi": 128,
+    "energy": -2.446314012418,
+    "wall_time": 1.67,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 8,
+    "chi": 256,
+    "energy": -2.446314012419,
+    "wall_time": 0.695,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 8,
+    "chi": 256,
+    "energy": -2.446314012418,
+    "wall_time": 1.098,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 8,
+    "chi": 256,
+    "energy": -2.446314012419,
+    "wall_time": 0.677,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 8,
+    "chi": 256,
+    "energy": -2.446314012418,
+    "wall_time": 1.726,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 16,
+    "chi": 20,
+    "energy": -5.241533798909,
+    "wall_time": 5.01,
+    "sweeps": 30,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 16,
+    "chi": 20,
+    "energy": -5.241533804332,
+    "wall_time": 21.198,
+    "sweeps": 30,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 16,
+    "chi": 20,
+    "energy": -5.2415337323,
+    "wall_time": 3.775,
+    "sweeps": 9,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 16,
+    "chi": 20,
+    "energy": -5.241533732309,
+    "wall_time": 15.278,
+    "sweeps": 8,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 16,
+    "chi": 50,
+    "energy": -5.241540001909,
+    "wall_time": 3.912,
+    "sweeps": 14,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 16,
+    "chi": 50,
+    "energy": -5.241540001908,
+    "wall_time": 9.166,
+    "sweeps": 12,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 16,
+    "chi": 50,
+    "energy": -5.241540001876,
+    "wall_time": 2.939,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 16,
+    "chi": 50,
+    "energy": -5.241540001876,
+    "wall_time": 8.389,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 16,
+    "chi": 128,
+    "energy": null,
+    "wall_time": 2.293,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 16,
+    "chi": 128,
+    "energy": -5.241540002733,
+    "wall_time": 8.662,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 16,
+    "chi": 128,
+    "energy": -5.241540002733,
+    "wall_time": 7.204,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 16,
+    "chi": 128,
+    "energy": -5.241540002733,
+    "wall_time": 24.157,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 16,
+    "chi": 256,
+    "energy": -5.241540002733,
+    "wall_time": 4.237,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 16,
+    "chi": 256,
+    "energy": -5.241540002733,
+    "wall_time": 24.262,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 16,
+    "chi": 256,
+    "energy": -5.241540002733,
+    "wall_time": 15.837,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 16,
+    "chi": 256,
+    "energy": -5.241540002733,
+    "wall_time": 98.41,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 32,
+    "chi": 20,
+    "energy": -10.836607847634,
+    "wall_time": 10.557,
+    "sweeps": 30,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 32,
+    "chi": 20,
+    "energy": -10.836607945566,
+    "wall_time": 59.921,
+    "sweeps": 30,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 32,
+    "chi": 20,
+    "energy": -10.836606542934,
+    "wall_time": 15.564,
+    "sweeps": 17,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 32,
+    "chi": 20,
+    "energy": -10.83660654297,
+    "wall_time": 93.134,
+    "sweeps": 21,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 32,
+    "chi": 50,
+    "energy": -10.836693972854,
+    "wall_time": 13.139,
+    "sweeps": 20,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 32,
+    "chi": 50,
+    "energy": -10.836693973359,
+    "wall_time": 51.763,
+    "sweeps": 20,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 32,
+    "chi": 50,
+    "energy": -10.83669395872,
+    "wall_time": 38.415,
+    "sweeps": 20,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 32,
+    "chi": 50,
+    "energy": -10.836693958924,
+    "wall_time": 161.851,
+    "sweeps": 20,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 32,
+    "chi": 128,
+    "energy": -10.836694079124,
+    "wall_time": 8.301,
+    "sweeps": 4,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 32,
+    "chi": 128,
+    "energy": -10.836694079124,
+    "wall_time": 41.981,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 32,
+    "chi": 128,
+    "energy": -10.836694079124,
+    "wall_time": 34.253,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 32,
+    "chi": 128,
+    "energy": -10.836694079124,
+    "wall_time": 99.325,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 32,
+    "chi": 256,
+    "energy": -10.836694079139,
+    "wall_time": 18.376,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 32,
+    "chi": 256,
+    "energy": -10.836694079138,
+    "wall_time": 104.64,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 32,
+    "chi": 256,
+    "energy": -10.836694079139,
+    "wall_time": 70.125,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 32,
+    "chi": 256,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 64,
+    "chi": 20,
+    "energy": -22.028351045617,
+    "wall_time": 40.692,
+    "sweeps": 30,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 64,
+    "chi": 20,
+    "energy": -22.028351979469,
+    "wall_time": 206.315,
+    "sweeps": 30,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 64,
+    "chi": 20,
+    "energy": -22.028344100181,
+    "wall_time": 48.295,
+    "sweeps": 24,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 64,
+    "chi": 20,
+    "energy": -22.028344100399,
+    "wall_time": 287.717,
+    "sweeps": 30,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 64,
+    "chi": 50,
+    "energy": -22.028849777157,
+    "wall_time": 29.437,
+    "sweeps": 20,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 64,
+    "chi": 50,
+    "energy": -22.028849774714,
+    "wall_time": 163.42,
+    "sweeps": 20,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 64,
+    "chi": 50,
+    "energy": -22.028849707454,
+    "wall_time": 93.825,
+    "sweeps": 20,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 64,
+    "chi": 50,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 20,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 64,
+    "chi": 128,
+    "energy": -22.028852120439,
+    "wall_time": 89.72,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 64,
+    "chi": 128,
+    "energy": -22.028852120438,
+    "wall_time": 251.397,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 64,
+    "chi": 128,
+    "energy": -22.02885212042,
+    "wall_time": 106.614,
+    "sweeps": 4,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 64,
+    "chi": 128,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "josephson",
+    "L": 64,
+    "chi": 256,
+    "energy": -22.028852121967,
+    "wall_time": 114.281,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "josephson",
+    "L": 64,
+    "chi": 256,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "josephson",
+    "L": 64,
+    "chi": 256,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "josephson",
+    "L": 64,
+    "chi": 256,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 16,
+    "chi": 20,
+    "energy": -20.016387900485,
+    "wall_time": 1.197,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 16,
+    "chi": 20,
+    "energy": -20.016387900485,
+    "wall_time": 2.977,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 16,
+    "chi": 20,
+    "energy": -20.016387900485,
+    "wall_time": 1.011,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 16,
+    "chi": 20,
+    "energy": -20.016387900485,
+    "wall_time": 3.757,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 16,
+    "chi": 50,
+    "energy": -20.016387900485,
+    "wall_time": 0.918,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 16,
+    "chi": 50,
+    "energy": -20.016387900485,
+    "wall_time": 4.045,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 16,
+    "chi": 50,
+    "energy": -20.016387900485,
+    "wall_time": 1.15,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 16,
+    "chi": 50,
+    "energy": -20.016387900485,
+    "wall_time": 4.462,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 16,
+    "chi": 128,
+    "energy": -20.016387900485,
+    "wall_time": 1.188,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 16,
+    "chi": 128,
+    "energy": -20.016387900485,
+    "wall_time": 5.019,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 16,
+    "chi": 128,
+    "energy": -20.016387900485,
+    "wall_time": 1.333,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 16,
+    "chi": 128,
+    "energy": -45.913663181433,
+    "wall_time": 16.067,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 16,
+    "chi": 256,
+    "energy": -20.016387900485,
+    "wall_time": 1.24,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 16,
+    "chi": 256,
+    "energy": -20.016387900485,
+    "wall_time": 4.365,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 16,
+    "chi": 256,
+    "energy": -20.016387900485,
+    "wall_time": 3.581,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 16,
+    "chi": 256,
+    "energy": -198.918500286879,
+    "wall_time": 12.31,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 20,
+    "energy": -40.384313161212,
+    "wall_time": 1.819,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 32,
+    "chi": 20,
+    "energy": -40.384313161211,
+    "wall_time": 9.191,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 20,
+    "energy": -40.384313161213,
+    "wall_time": 1.807,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 32,
+    "chi": 20,
+    "energy": -40.384313161213,
+    "wall_time": 9.764,
+    "sweeps": 4,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 50,
+    "energy": -40.384313161219,
+    "wall_time": 4.354,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 32,
+    "chi": 50,
+    "energy": -40.384313161218,
+    "wall_time": 6.477,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 50,
+    "energy": -40.384313161219,
+    "wall_time": 5.867,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 32,
+    "chi": 50,
+    "energy": -40.384313161219,
+    "wall_time": 11.828,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 128,
+    "energy": -40.384313161218,
+    "wall_time": 9.846,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 32,
+    "chi": 128,
+    "energy": -40.384313161217,
+    "wall_time": 24.23,
+    "sweeps": 9,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 128,
+    "energy": -40.384313161219,
+    "wall_time": 20.501,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 32,
+    "chi": 128,
+    "energy": -40.371334759609,
+    "wall_time": 78.338,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 256,
+    "energy": -40.384313161219,
+    "wall_time": 18.861,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 32,
+    "chi": 256,
+    "energy": -40.384312635352,
+    "wall_time": 41.137,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 256,
+    "energy": -40.384313161219,
+    "wall_time": 57.122,
+    "sweeps": 2,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 32,
+    "chi": 256,
+    "energy": -41789.88147874243,
+    "wall_time": 107.133,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 64,
+    "chi": 20,
+    "energy": -81.125980121941,
+    "wall_time": 7.197,
+    "sweeps": 8,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 64,
+    "chi": 20,
+    "energy": -81.125980121938,
+    "wall_time": 33.734,
+    "sweeps": 9,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 64,
+    "chi": 20,
+    "energy": -81.125980121908,
+    "wall_time": 7.023,
+    "sweeps": 4,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 64,
+    "chi": 20,
+    "energy": -81.125980121906,
+    "wall_time": 28.838,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 64,
+    "chi": 50,
+    "energy": -81.125980123144,
+    "wall_time": 9.592,
+    "sweeps": 4,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 64,
+    "chi": 50,
+    "energy": -81.125980123142,
+    "wall_time": 17.317,
+    "sweeps": 4,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 64,
+    "chi": 50,
+    "energy": -81.125980123146,
+    "wall_time": 18.587,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 64,
+    "chi": 50,
+    "energy": -81.125980123144,
+    "wall_time": 33.754,
+    "sweeps": 4,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 64,
+    "chi": 128,
+    "energy": -81.125980123143,
+    "wall_time": 40.62,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 64,
+    "chi": 128,
+    "energy": -8718.193420929332,
+    "wall_time": 168.144,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 64,
+    "chi": 128,
+    "energy": -81.125980123146,
+    "wall_time": 106.099,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 64,
+    "chi": 128,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 64,
+    "chi": 256,
+    "energy": -81.125980123143,
+    "wall_time": 73.375,
+    "sweeps": 4,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 64,
+    "chi": 256,
+    "energy": -25103293.97441683,
+    "wall_time": 153.157,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 64,
+    "chi": 256,
+    "energy": -81.125980123146,
+    "wall_time": 162.275,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 64,
+    "chi": 256,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 128,
+    "chi": 20,
+    "energy": -162.612300113883,
+    "wall_time": 13.727,
+    "sweeps": 10,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 128,
+    "chi": 20,
+    "energy": -162.612300113878,
+    "wall_time": 80.379,
+    "sweeps": 13,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 128,
+    "chi": 20,
+    "energy": -162.612300111818,
+    "wall_time": 13.131,
+    "sweeps": 6,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 128,
+    "chi": 20,
+    "energy": -162.612300111808,
+    "wall_time": 60.354,
+    "sweeps": 7,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 128,
+    "chi": 50,
+    "energy": -162.61230017757,
+    "wall_time": 9.665,
+    "sweeps": 3,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 128,
+    "chi": 50,
+    "energy": -162.61230017756,
+    "wall_time": 35.198,
+    "sweeps": 8,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 128,
+    "chi": 50,
+    "energy": -162.612300177578,
+    "wall_time": 28.07,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 128,
+    "chi": 50,
+    "energy": -162.612300177567,
+    "wall_time": 39.308,
+    "sweeps": 4,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 128,
+    "chi": 128,
+    "energy": -162.61230017757,
+    "wall_time": 49.18,
+    "sweeps": 5,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 128,
+    "chi": 128,
+    "energy": -14049164.065979,
+    "wall_time": 151.983,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 128,
+    "chi": 128,
+    "energy": -162.61230017758,
+    "wall_time": 120.791,
+    "sweeps": 4,
+    "converged": true
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 128,
+    "chi": 128,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 15,
+    "converged": false
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "tfim",
+    "L": 128,
+    "chi": 256,
+    "energy": -162.61230017757,
+    "wall_time": 99.455,
+    "sweeps": 4,
+    "converged": true
+  },
+  {
+    "impl": "dmrg-gpu-opt",
+    "model": "tfim",
+    "L": 128,
+    "chi": 256,
+    "energy": null,
+    "wall_time": 20.796,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu",
+    "model": "tfim",
+    "L": 128,
+    "chi": 256,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 10,
+    "converged": false
+  },
+  {
+    "impl": "dmrg2-gpu-opt",
+    "model": "tfim",
+    "L": 128,
+    "chi": 256,
+    "energy": null,
+    "wall_time": 300,
+    "sweeps": 10,
+    "converged": false
+  }
+]
