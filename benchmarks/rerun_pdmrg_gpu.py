@@ -155,26 +155,41 @@ def run_gpu_pdmrg_opt(L, chi, sweeps, segments, model='heisenberg', nmax=2):
 def main():
     os.makedirs(RESULTS_DIR, exist_ok=True)
 
-    # Step 1: Load existing results, remove pdmrg-gpu and pdmrg-gpu-opt entries
+    # Step 1: Load existing results
+    # On first run: remove old pdmrg-gpu/pdmrg-gpu-opt entries
+    # On resume: keep new entries (already cleaned in prior run)
     results_path = os.path.join(RESULTS_DIR, 'results.json')
+    marker_path = os.path.join(RESULTS_DIR, '.rerun_cleaned')
     if os.path.exists(results_path):
         with open(results_path) as f:
             all_results = json.load(f)
-        n_before = len(all_results)
-        all_results = [r for r in all_results
-                       if r['impl'] not in ('pdmrg-gpu', 'pdmrg-gpu-opt')]
-        n_removed = n_before - len(all_results)
-        log(f"Loaded {n_before} results, removed {n_removed} pdmrg-gpu/pdmrg-gpu-opt entries")
+        if not os.path.exists(marker_path):
+            # First run: strip old broken results
+            n_before = len(all_results)
+            all_results = [r for r in all_results
+                           if r['impl'] not in ('pdmrg-gpu', 'pdmrg-gpu-opt')]
+            n_removed = n_before - len(all_results)
+            log(f"Loaded {n_before} results, removed {n_removed} old pdmrg-gpu/pdmrg-gpu-opt entries")
+            with open(results_path, 'w') as f:
+                json.dump(all_results, f, indent=2, default=str)
+            with open(marker_path, 'w') as f:
+                f.write(datetime.now().isoformat())
+        else:
+            log(f"Resuming: {len(all_results)} results (already cleaned)")
     else:
         all_results = []
         log("No existing results.json found, starting fresh")
 
-    # Save cleaned results
-    with open(results_path, 'w') as f:
-        json.dump(all_results, f, indent=2, default=str)
-    log(f"Saved {len(all_results)} cleaned results")
+    log(f"Base results: {len(all_results)}")
 
     # Step 2: Re-run all pdmrg-gpu and pdmrg-gpu-opt benchmarks
+    # Build completed set from any already-run results (for resume)
+    completed = set()
+    for r in all_results:
+        if r['impl'] in ('pdmrg-gpu', 'pdmrg-gpu-opt') and r.get('success'):
+            seg = r.get('segments', '')
+            completed.add(f"{r['impl']}|{r['model']}|{r['L']}|{r['chi']}|{seg}")
+
     new_results = []
     timeout_records = []
     oom_records = []
@@ -199,17 +214,9 @@ def main():
             json.dump(merged, f, indent=2, default=str)
 
     def git_push():
-        try:
-            subprocess.run(
-                f'cd {REPO} && git add benchmarks/paper_results/ && '
-                f'git diff --cached --quiet || '
-                f'git commit -m "auto: pdmrg-gpu rerun results ({datetime.now().strftime("%Y-%m-%d %H:%M")})" && '
-                f'git push',
-                shell=True, capture_output=True, timeout=60
-            )
-            log("  [git push: results saved]")
-        except Exception as e:
-            log(f"  [git push failed: {e}]")
+        # Skip git push — no auth configured on this remote VM.
+        # Results are saved locally; pull them after benchmark completes.
+        pass
 
     def maybe_push():
         nonlocal results_since_push
@@ -228,6 +235,9 @@ def main():
         for L, chi, sweeps in HEISENBERG_SIZES:
             for seg in GPU_SEGMENTS:
                 if seg > max_segments_for_L(L):
+                    continue
+                key = f"{impl_name}|heisenberg|{L}|{chi}|{seg}"
+                if key in completed:
                     continue
                 if should_skip(impl_name, 'heisenberg', L, chi, timeout_records):
                     log(f"  SKIP {impl_name} heisenberg L={L} chi={chi} seg={seg} (timeout)")
@@ -259,6 +269,9 @@ def main():
             for seg in GPU_SEGMENTS:
                 if seg > max_segments_for_L(L):
                     continue
+                key = f"{impl_name}|josephson|{L}|{chi}|{seg}"
+                if key in completed:
+                    continue
                 if should_skip(impl_name, 'josephson', L, chi, timeout_records):
                     log(f"  SKIP {impl_name} josephson L={L} chi={chi} seg={seg} (timeout)")
                     continue
@@ -287,6 +300,9 @@ def main():
         for L, chi, sweeps in TFIM_SIZES:
             for seg in GPU_SEGMENTS:
                 if seg > max_segments_for_L(L):
+                    continue
+                key = f"{impl_name}|tfim|{L}|{chi}|{seg}"
+                if key in completed:
                     continue
                 if should_skip(impl_name, 'tfim', L, chi, timeout_records):
                     log(f"  SKIP {impl_name} tfim L={L} chi={chi} seg={seg} (timeout)")
