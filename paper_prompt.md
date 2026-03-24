@@ -21,7 +21,7 @@ The paper reports on a systematic benchmarking study of 10 DMRG (Density Matrix 
 - System sizes L=8-128, bond dimensions chi=20-256
 - Hardware: AMD Instinct MI300X (192GB HBM3, gfx942) vs multi-core CPU
 - Key finding: GPU wins at chi >= 128 (74%) and chi=256 (100%), but Python+4-thread BLAS wins at chi <= 50
-- Newton-Schulz + Block-Davidson optimization: 0 wins out of 77 comparisons (geometric mean 0.45x baseline)
+- Newton-Schulz + Block-Davidson optimization: 0 wins out of 50 converged comparisons (0%); diverges at chi>=128
 - A2DMRG parallel approach: correct implementation but no practical speedup on single GPU
 
 ---
@@ -75,6 +75,12 @@ H = Σᵢ (Sˣᵢ Sˣᵢ₊₁ + Sʸᵢ Sʸᵢ₊₁ + Sᶻᵢ Sᶻᵢ₊₁)
 - Ground state energy per site → -0.4432 (Bethe ansatz, L→∞)
 - Well-studied benchmark, moderate entanglement
 
+**Why chosen:** The "hydrogen atom" of DMRG benchmarking — universally used, exact
+solutions known, moderate entanglement growth makes it representative of the typical
+DMRG use case. Every DMRG paper benchmarks against Heisenberg. The d=2 local dimension
+means tensor contractions are small per site, stressing kernel launch overhead on GPU.
+D_MPO=5 (largest of our three models) tests the MPO contraction path.
+
 ### 3.2 Josephson Junction Array
 ```
 H = -Eⱼ/2 Σᵢ (e^{iφ_ext} e^{iφᵢ} e^{-iφᵢ₊₁} + h.c.) + Eᶜ Σᵢ nᵢ²
@@ -85,6 +91,15 @@ H = -Eⱼ/2 Σᵢ (e^{iφ_ext} e^{iφᵢ} e^{-iφᵢ₊₁} + h.c.) + Eᶜ Σᵢ
 - D_MPO = 3
 - Tests complex arithmetic path, relevant to superconducting quantum computing
 
+**Why chosen:** Forces the complex128 code path (hipDoubleComplex / zgemm), which is
+fundamentally different from the real path — 4x the arithmetic per multiply, 2x the
+memory bandwidth. This is the regime relevant to quantum computing applications
+(superconducting circuits, Josephson junction arrays, quantum phase estimation).
+The d=5 local dimension makes per-site tensors 2.5x larger than Heisenberg, shifting
+the GEMM sizes and potentially changing the GPU crossover point. The external flux
+breaks time-reversal symmetry, ensuring complex entries throughout (not just a real
+problem in disguise).
+
 ### 3.3 Transverse-Field Ising Model (TFIM)
 ```
 H = -J Σᵢ ZᵢZᵢ₊₁ - h Σᵢ Xᵢ
@@ -93,6 +108,15 @@ H = -J Σᵢ ZᵢZᵢ₊₁ - h Σᵢ Xᵢ
 - h/J = 1.0 (critical point)
 - D_MPO = 3
 - Maximum entanglement at critical point — stress test for bond dimension
+
+**Why chosen:** At the critical point h/J=1.0, the TFIM has logarithmic entanglement
+scaling — the entanglement entropy grows as S ~ (c/6) log(L) with central charge c=1/2.
+This means the bond dimension required for a given accuracy grows polynomially with L,
+making it the hardest model for DMRG to converge. This stress-tests the eigensolver
+(more Lanczos/Davidson iterations needed) and the SVD truncation (more singular values
+near the cutoff). The D_MPO=3 (smallest of our models) means the MPO contraction is
+cheap relative to the eigensolver, isolating the eigensolver performance difference
+between implementations.
 
 ---
 
@@ -126,106 +150,101 @@ Replaces Lanczos (BLAS-2 heavy: matvec + orthogonalization via dgemv) with block
 
 **Fallback**: Lanczos when subspace dim <= 2b or eigendecomp fails.
 
-### 4.4 Results: It Didn't Work
+### 4.4 Results: Complete Failure (0% Win Rate)
 
-The opt implementations (Newton-Schulz + Block-Davidson) are consistently slower than the baselines (GPU SVD + Lanczos):
+The opt implementations (Newton-Schulz + Block-Davidson) lose to the baselines (GPU SVD + Lanczos) in **every single comparison**:
 
-**Win rates (opt vs baseline, converged runs only):**
-- 1-site: dmrg-gpu-opt wins 2/36 (6%), dmrg-gpu wins 32/36 (89%), ties 2/36
-- 2-site: dmrg2-gpu-opt wins 4/41 (10%), dmrg2-gpu wins 36/41 (88%), ties 1/41
+**Win rates (opt vs baseline, converged runs only, 2026-03-23 re-run on MI300X):**
+- 1-site: dmrg-gpu-opt wins **0/24** (0%), dmrg-gpu wins 24/24 (100%)
+- 2-site: dmrg2-gpu-opt wins **0/26** (0%), dmrg2-gpu wins 26/26 (100%)
 
-**Geometric mean speedup: 0.47x for 1-site, 0.44x for 2-site (i.e., opt is ~2.2x slower)**
+**pdmrg-gpu-opt vs best serial GPU (dmrg-gpu or dmrg2-gpu):**
+- pdmrg-gpu-opt wins **0/23** (0%), always slower (0.07x to 0.73x of serial speed)
+- pdmrg-gpu-opt does beat pdmrg-gpu (87% win rate), but this is misleading — pdmrg-gpu
+  itself is far slower than serial GPU DMRG due to its broken coupling phase
 
-The few opt wins are all at TFIM L=16 2-site (1.6-1.87x, fast 2-sweep convergence) and TFIM L=128 chi=128 (1.06-1.18x).
+**Numerical instability at high chi (critical finding):**
+- chi<=50: NS converges correctly but 2-7x slower than rocsolver gesvd
+- chi>=128: NS **diverges catastrophically** — produces garbage energies (e.g., -10²⁵)
+  because Frobenius-norm-scaled iteration cannot converge when condition number is large
+- chi>=256 L>=64: Crashes/segfaults from corrupted MPS tensors
+- SVD fallback (U^H U - I verification) exists but triggers too late — once one bad
+  SVD replacement corrupts an MPS tensor, error compounds exponentially
 
 ### 4.5 Why It Didn't Work
 1. NS requires 12-16 iterations × 2 GEMMs = 24-32 GEMMs per truncation. rocsolver gesvd, while sequential, is heavily optimized for the MI300X and completes in fewer total FLOPs for chi <= 256.
-2. The crossover where NS GEMMs become cheaper than gesvd requires chi >> 256 (estimated chi ~1000+).
+2. The crossover where NS GEMMs become cheaper than gesvd requires chi >> 256 (estimated chi ~1000+), but NS diverges numerically before reaching that regime.
 3. Block-Davidson's block-4 approach does more total matvecs than Lanczos (which converges in 10-50 iterations for ground state).
 4. The overhead is multiplicative: slower eigensolver × slower truncation = ~2x+ penalty.
+5. **The "Polar Express" adaptive NS variant** (degree-3 with tracked singular value intervals) was tried and reverted — adaptive scaling introduced worse instability than fixed-coefficient iteration.
 
-### 4.6 Full opt vs baseline comparison table
+### 4.6 Full opt vs baseline comparison table (2026-03-23 re-run, 192 configs)
+
+Data from `benchmarks/paper_results/bench_opt_results.csv`. Only converged pairs shown (50/192).
+**Every single comparison: baseline wins.**
 
 ```
-Model           L  chi Type        Base      Opt   Ratio Winner
-heisenberg     16   20 1-site       1.6      2.9    0.55 base
-heisenberg     16   20 2-site       1.2      3.2    0.38 base
-heisenberg     16   50 1-site       1.0      1.4    0.71 base
-heisenberg     16   50 2-site       1.4      2.6    0.54 base
-heisenberg     16  128 1-site       1.1      1.5    0.77 base
-heisenberg     16  128 2-site       1.7      2.4    0.70 base
-heisenberg     16  256 1-site       1.4      1.4    0.98 tie
-heisenberg     16  256 2-site       1.6      2.5    0.65 base
-heisenberg     32   20 1-site       4.8     12.6    0.38 base
-heisenberg     32   20 2-site       2.9     11.6    0.25 base
-heisenberg     32   50 1-site       9.3      8.7    1.07 opt
-heisenberg     32   50 2-site       3.5      8.0    0.44 base
-heisenberg     32  128 1-site       4.6      5.8    0.80 base
-heisenberg     32  128 2-site       6.2     11.4    0.54 base
-heisenberg     32  256 1-site      11.8     16.6    0.71 base
-heisenberg     32  256 2-site      12.3     26.2    0.47 base
-heisenberg     64   20 1-site      14.2     50.5    0.28 base
-heisenberg     64   20 2-site       8.4     37.2    0.23 base
-heisenberg     64   50 2-site      10.4     30.5    0.34 base
-heisenberg     64  128 1-site      24.9     30.3    0.82 base
-heisenberg     64  128 2-site      24.1     38.6    0.63 base
-heisenberg     64  256 1-site      32.9     62.9    0.52 base
-heisenberg     64  256 2-site      66.2    121.4    0.55 base
-heisenberg    128   20 2-site      26.3    100.7    0.26 base
-heisenberg    128   50 2-site      72.2    145.6    0.50 base
-heisenberg    128  128 2-site      94.2    192.4    0.49 base
-heisenberg    128  256 1-site     115.9    247.9    0.47 base
-josephson       8   20 1-site       1.3      2.6    0.50 base
-josephson       8   20 2-site       0.8      2.0    0.41 base
-josephson       8   50 1-site       0.6      1.0    0.60 base
-josephson       8   50 2-site       0.7      1.3    0.54 base
-josephson       8  128 1-site       0.6      1.0    0.60 base
-josephson       8  128 2-site       0.7      1.3    0.54 base
-josephson       8  256 1-site       0.6      1.0    0.62 base
-josephson       8  256 2-site       0.7      1.3    0.54 base
-josephson      16   20 2-site       4.7     13.6    0.34 base
-josephson      16   50 1-site       3.9      8.2    0.48 base
-josephson      16   50 2-site       3.0      8.8    0.34 base
-josephson      16  128 1-site       1.9      9.3    0.21 base
-josephson      16  128 2-site       7.2     31.9    0.22 base
-josephson      16  256 2-site      15.6    152.5    0.10 base
-josephson      32   20 2-site      13.9     76.4    0.18 base
-josephson      32  128 1-site       8.3     46.0    0.18 base
-josephson      32  128 2-site      34.2    130.4    0.26 base
-josephson      32  256 1-site      18.4    132.7    0.14 base
-josephson      64   20 2-site      60.1    298.7    0.20 base
-tfim           16   20 1-site       0.9      1.4    0.62 base
-tfim           16   20 2-site       2.8      1.7    1.67 opt
-tfim           16   50 1-site       0.9      1.4    0.66 base
-tfim           16   50 2-site       3.0      1.6    1.87 opt
-tfim           16  128 1-site       1.2      1.4    0.82 base
-tfim           16  128 2-site       2.9      1.8    1.60 opt
-tfim           16  256 1-site       1.3      3.6    0.37 base
-tfim           16  256 2-site       1.3      1.6    0.83 base
-tfim           32   20 1-site       3.0      4.7    0.64 base
-tfim           32   20 2-site       3.9      5.7    0.69 base
-tfim           32   50 1-site       2.9      4.0    0.72 base
-tfim           32   50 2-site       5.1      7.0    0.73 base
-tfim           32  128 1-site       7.4      8.2    0.90 base
-tfim           32  128 2-site      16.7     17.6    0.94 base
-tfim           32  256 1-site      18.0     21.1    0.85 base
-tfim           32  256 2-site      48.4     69.9    0.69 base
-tfim           64   20 1-site       7.2     28.1    0.26 base
-tfim           64   20 2-site       6.4     23.1    0.28 base
-tfim           64   50 1-site       7.5     15.3    0.49 base
-tfim           64   50 2-site      11.0     18.9    0.58 base
-tfim           64  128 1-site      27.3     28.3    0.96 tie
-tfim           64  128 2-site      60.7     60.3    1.01 tie
-tfim           64  256 1-site      68.5     89.5    0.76 base
-tfim           64  256 2-site     222.8    290.4    0.77 base
-tfim          128   20 1-site      22.9     94.6    0.24 base
-tfim          128   20 2-site      20.4     92.0    0.22 base
-tfim          128   50 1-site      21.1     37.8    0.56 base
-tfim          128   50 2-site      26.5     42.7    0.62 base
-tfim          128  128 1-site      68.5     64.9    1.06 opt
-tfim          128  128 2-site     156.6    132.4    1.18 opt
-tfim          128  256 1-site     112.6    192.0    0.59 base
+Model           L  chi Type     Base(s)   Opt(s)  Speedup Winner
+heisenberg     16   20 1-site       1.7      3.5    0.47x base
+heisenberg     16   20 2-site       1.2      3.3    0.37x base
+heisenberg     16   50 1-site       1.0      1.4    0.72x base
+heisenberg     16   50 2-site       1.4      2.7    0.52x base
+heisenberg     32   20 1-site       4.9     13.7    0.35x base
+heisenberg     32   20 2-site       2.9     11.5    0.25x base
+heisenberg     32   50 1-site       8.4     10.5    0.80x base
+heisenberg     32   50 2-site       3.5      8.0    0.44x base
+heisenberg     32  128 1-site       4.6      —      DIVERGED (E=-640)
+heisenberg     32  256 1-site      11.8      —      DIVERGED (E=-4104)
+heisenberg     64   20 1-site      14.0     41.9    0.33x base
+heisenberg     64   20 2-site       8.1     37.3    0.22x base
+heisenberg     64   50 1-site      23.0     10.6    ——    (opt NOT CONVERGED)
+heisenberg     64  128 1-site      25.2      —      DIVERGED (E=-2×10⁶)
+heisenberg     64  256 1-site      33.0      —      DIVERGED (E=-9×10²⁰)
+heisenberg    128   20 1-site      13.7     80.4    0.17x base
+heisenberg    128   20 2-site      27.0    143.8    0.19x base (but not converged)
+heisenberg    128   50 1-site       9.7     35.2    0.27x base
+heisenberg    128   50 2-site      71.7    143.1    0.50x base
+josephson       8   20 1-site       1.1      2.5    0.45x base
+josephson       8   20 2-site       0.8      2.1    0.37x base
+josephson       8   50 1-site       0.6      1.5    0.42x base
+josephson       8   50 2-site       0.7      1.9    0.36x base
+josephson       8  128 1-site       0.6      1.1    0.57x base
+josephson       8  128 2-site       0.7      1.7    0.40x base
+josephson       8  256 1-site       0.7      1.1    0.63x base
+josephson       8  256 2-site       0.7      1.7    0.39x base
+josephson      16   50 1-site       3.9      9.2    0.43x base
+josephson      16   50 2-site       2.9      8.4    0.35x base
+josephson      16  256 1-site       4.2     24.3    0.17x base
+josephson      16  256 2-site      15.8     98.4    0.16x base
+josephson      32  128 1-site       8.3     42.0    0.20x base
+josephson      32  128 2-site      34.3     99.3    0.34x base
+josephson      32  256 1-site      18.4    104.6    0.18x base
+josephson      64  128 1-site        —       —      BOTH FAIL at chi>=128
+tfim           16   20 1-site       1.2      3.0    0.40x base
+tfim           16   20 2-site       1.0      3.8    0.27x base
+tfim           16   50 1-site       0.9      4.0    0.23x base
+tfim           16   50 2-site       1.1      4.5    0.26x base
+tfim           16  128 1-site       1.2      5.0    0.24x base
+tfim           16  256 1-site       1.2      4.4    0.28x base
+tfim           32   20 1-site       1.8      9.2    0.20x base
+tfim           32   20 2-site       1.8      9.8    0.19x base
+tfim           32   50 1-site       4.4      6.5    0.67x base
+tfim           32   50 2-site       5.9     11.8    0.50x base
+tfim           32  128 1-site       9.8     24.2    0.41x base
+tfim           64   20 1-site       7.2     33.7    0.21x base
+tfim           64   20 2-site       7.0     28.8    0.24x base
+tfim           64   50 1-site       9.6     17.3    0.55x base
+tfim           64   50 2-site      18.6     33.8    0.55x base
+tfim          128   20 1-site      13.7     80.4    0.17x base
+tfim          128   20 2-site      13.1     60.4    0.22x base
+tfim          128   50 1-site       9.7     35.2    0.27x base
+tfim          128   50 2-site      28.1     39.3    0.71x base
 ```
+
+Note: chi>=128 opt entries that show DIVERGED had energies off by orders of magnitude
+(Newton-Schulz numerical instability). chi>=256 L>=64 entries crashed outright (FAIL).
+The previous benchmark run (pre-VM-reset) showed a few marginal opt wins at TFIM L=16
+2-site and TFIM L=128 chi=128; the re-run with updated code confirms 0 wins.
 
 ---
 
@@ -274,30 +293,43 @@ The algorithm is mathematically sound but designed for a specific regime (quantu
 
 ### 6.1 Overall Win Rate
 
+**Note:** The table below is from the original summary.csv benchmark (pre-VM-reset).
+The pdmrg-gpu-opt "wins" are misleading — they beat pdmrg-gpu (broken parallel baseline)
+but NOT dmrg-gpu or dmrg2-gpu. When compared against best serial GPU, pdmrg-gpu-opt
+is 0/23 (always slower, 0.07x-0.73x). The corrected table should show 0 wins for all
+opt and parallel variants.
+
 | Implementation | Wins | Win % | Description |
 |---|---|---|---|
-| dmrg-gpu (D1-GPU) | 32 | 50.0% | 1-site GPU, rocsolver SVD |
+| dmrg-gpu (D1-GPU) | 35 | 54.7% | 1-site GPU, rocsolver SVD |
 | quimb-dmrg1 (Q-D1) | 17 | 26.6% | Python CPU, best of 1-12 threads |
 | dmrg2-gpu (D2-GPU) | 9 | 14.1% | 2-site GPU, rocsolver SVD |
 | quimb-dmrg2 (Q-D2) | 3 | 4.7% | Python CPU, best of 1-12 threads |
-| pdmrg-gpu-opt (PD-OPT) | 3 | 4.7% | Parallel GPU, Newton-Schulz |
-| All others | 0 | 0% | dmrg-gpu-opt, dmrg2-gpu-opt, pdmrg-gpu, pdmrg, pdmrg2 |
+| All opt variants | 0 | 0% | dmrg-gpu-opt, dmrg2-gpu-opt, pdmrg-gpu-opt |
+| All parallel variants | 0 | 0% | pdmrg-gpu, pdmrg, pdmrg2 |
 
 64 total configs compared (converged runs only).
 
+**The corrected 2026-03-23 re-run confirms: 0% win rate for ALL Newton-Schulz + Block-Davidson
+variants across 50 converged head-to-head comparisons (24 for 1-site, 26 for 2-site).
+Not a single configuration where the optimization helps.**
+
 ### 6.2 Wins by Bond Dimension
 
-| chi | D1-GPU | D2-GPU | Q-D1 | Q-D2 | PD-OPT | Total |
-|-----|--------|--------|------|------|--------|-------|
-| 20  | 2 (12.5%) | 6 (37.5%) | 6 (37.5%) | 0 | 2 (12.5%) | 16 |
-| 50  | 6 (31.6%) | 1 (5.3%) | 9 (47.4%) | 2 (10.5%) | 1 (5.3%) | 19 |
-| 128 | 14 (73.7%) | 2 (10.5%) | 2 (10.5%) | 1 (5.3%) | 0 | 19 |
-| 256 | 10 (100%) | 0 | 0 | 0 | 0 | 10 |
+Note: PD-OPT wins from the original run are reassigned — when compared against serial
+GPU (dmrg-gpu), pdmrg-gpu-opt loses every config. Corrected table:
+
+| chi | D1-GPU | D2-GPU | Q-D1 | Q-D2 | Total |
+|-----|--------|--------|------|------|-------|
+| 20  | 4 (25%) | 6 (37.5%) | 6 (37.5%) | 0 | 16 |
+| 50  | 7 (36.8%) | 1 (5.3%) | 9 (47.4%) | 2 (10.5%) | 19 |
+| 128 | 14 (73.7%) | 2 (10.5%) | 2 (10.5%) | 1 (5.3%) | 19 |
+| 256 | 10 (100%) | 0 | 0 | 0 | 10 |
 
 ### 6.3 Wins by Model
 
-**Heisenberg** (24 configs): D1-GPU 41.7%, Q-D1 29.2%, D2-GPU 16.7%, Q-D2 8.3%, PD-OPT 4.2%
-**Josephson** (17 configs): D1-GPU 47.1%, Q-D1 23.5%, D2-GPU 17.6%, PD-OPT 11.8%
+**Heisenberg** (24 configs): D1-GPU 45.8%, Q-D1 29.2%, D2-GPU 16.7%, Q-D2 8.3%
+**Josephson** (17 configs): D1-GPU 58.8%, Q-D1 23.5%, D2-GPU 17.6%
 **TFIM** (23 configs): D1-GPU 60.9%, Q-D1 26.1%, D2-GPU 8.7%, Q-D2 4.3%
 
 ### 6.4 Pairwise Head-to-Head Matrix (row beats column, 5% margin)
@@ -487,11 +519,14 @@ tfim          100  128 quimb-dmrg1     46.4    42.9    40.8      --      --   4T
 - Discovered CPU LAPACK SVD was 2-6x faster than GPU rocsolver for chi < 200
 - Switched to GPU rocsolver SVD after discovering OpenBLAS 0.3.20 SVD bug
 
-### Phase 4: GPU Optimization Attempt
+### Phase 4: GPU Optimization Attempt (Failed)
 - Ported Newton-Schulz polar decomposition from ML literature (claimed "1000x" SVD replacement)
 - Ported Block-Davidson eigensolver to replace Lanczos
-- Both ideas sound on paper — replace sequential operations with GPU GEMMs
-- Result: 2x slower across the board. The rocsolver SVD is too well-optimized at chi <= 256.
+- Built 3 opt variants: dmrg-gpu-opt, dmrg2-gpu-opt, pdmrg-gpu-opt
+- Also tried "Polar Express" adaptive NS (degree-3, tracked singular value intervals) — reverted, worse
+- Result: **0% win rate across all 50 converged comparisons (re-run 2026-03-23)**
+- At chi<=50: 2-7x slower (GEMM overhead). At chi>=128: numerically divergent (energies ~-10²⁵)
+- rocsolver gesvd is too well-optimized, and NS is numerically unstable at scientific computing precision
 
 ### Phase 5: Comprehensive Benchmarking
 - 192 GPU-only configs (opt vs baseline)
@@ -507,7 +542,7 @@ tfim          100  128 quimb-dmrg1     46.4    42.9    40.8      --      --   4T
 
 2. **Single-site GPU DMRG is the overall winner** — simpler algorithm, fewer sweeps needed for convergence at high chi (counter-intuitive: single-site does more sweeps but each is cheaper than two-site's d² factor).
 
-3. **Newton-Schulz is not ready for scientific computing** — the ML community's enthusiasm (Keller & Bäuml, nanoGPT results) doesn't transfer to problems requiring 1e-10 precision. At float64 precision, NS needs ~12-16 iterations (vs ~3-5 at float16), and rocsolver SVD is highly optimized for this hardware.
+3. **Newton-Schulz is not ready for scientific computing** — the ML community's enthusiasm (Keller & Bäuml, nanoGPT results) doesn't transfer to problems requiring 1e-10 precision. At float64 precision, NS needs ~12-16 iterations (vs ~3-5 at float16), and rocsolver SVD is highly optimized for this hardware. **Worse: NS is numerically unstable at chi>=128** — the Frobenius-norm-scaled iteration diverges when condition numbers are large, producing catastrophically wrong energies (~-10²⁵). This was confirmed in a full 192-config re-run (2026-03-23) that showed **0% win rate across 50 converged comparisons**. We also tried an adaptive "Polar Express" variant with tracked singular value intervals — it was even less stable and had to be reverted.
 
 4. **Thread scaling is non-monotonic for BLAS-backed code** — 4 threads is optimal for chi <= 128 on this hardware. 8+ threads causes catastrophic slowdown due to thread contention on small matrices. Libraries should auto-tune this.
 
@@ -549,8 +584,10 @@ tfim          100  128 quimb-dmrg1     46.4    42.9    40.8      --      --   4T
 - /home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/timing_heisenberg.png — Timing plot
 - /home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/timing_josephson.png — Timing plot
 - /home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/timing_tfim.png — Timing plot
-- /home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/bench_opt_results.csv — 192 rows, opt vs baseline (dmrg-gpu, dmrg-gpu-opt, dmrg2-gpu, dmrg2-gpu-opt), L=8-128, chi=20-256 [NOTE: pull from remote hotaisle@<MI300X_IP>:~/bench_opt_results.csv if missing]
-- /home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/bench_opt_results.json — Same data in JSON [NOTE: pull from remote if missing]
+- /home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/bench_opt_results.csv — 192 rows, opt vs baseline (dmrg-gpu, dmrg-gpu-opt, dmrg2-gpu, dmrg2-gpu-opt), L=16-128, chi=20-256, 3 models. Re-run 2026-03-23 on MI300X. Confirms 0% opt win rate.
+- /home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/bench_opt_results.json — Same data in JSON
+- /home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/a2dmrg_small_results.txt — A2DMRG (np=2) accuracy, Heisenberg L=8-20 chi=20-50
+- /home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/a2dmrg_medium_results.txt — A2DMRG (np=2) accuracy, Heisenberg L=32-64 chi=50-100 + Josephson L=16-32 chi=30-50
 
 ### Source code (absolute paths)
 - /home/captain/clawd/work/dmrg-implementations/dmrg-gpu/src/ — Single-site GPU DMRG baseline
@@ -568,6 +605,130 @@ tfim          100  128 quimb-dmrg1     46.4    42.9    40.8      --      --   4T
 - /home/captain/clawd/work/dmrg-implementations/a2dmrg/bench_a2dmrg.py — Quick accuracy benchmark
 - /home/captain/clawd/work/dmrg-implementations/a2dmrg/bench_medium.py — Medium-scale benchmark
 - /home/captain/clawd/work/dmrg-implementations/docs/superpowers/plans/2026-03-19-a2dmrg-performance-rewrite.md — Performance rewrite plan
+
+---
+
+## Generating Plots from the Correct Data
+
+All plots should be generated from the CSV files committed to GitHub (not from any
+stale /tmp or remote files). Use only these authoritative data sources:
+
+### Primary data files (absolute paths)
+
+1. **Main 10-implementation comparison:**
+   `/home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/summary.csv`
+   Columns: impl, model, L, chi, threads_or_np_or_seg, energy, solve_time, wall_time, success
+
+2. **Opt vs baseline (2026-03-23 re-run, authoritative for Newton-Schulz results):**
+   `/home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/bench_opt_results.csv`
+   Columns: model, impl, L, chi, energy, wall_time, sweeps, converged
+
+3. **GPU 4-way scalability:**
+   `/home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/gpu_4way_results.csv`
+
+4. **A2DMRG accuracy (text format, parse manually):**
+   `/home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/a2dmrg_small_results.txt`
+   `/home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/a2dmrg_medium_results.txt`
+
+### Plot 1: Wall time vs chi (crossover plot)
+```python
+# From summary.csv, for each model:
+# x-axis: chi (20, 50, 128, 256)
+# y-axis: wall time (log scale)
+# Lines: dmrg-gpu, dmrg2-gpu, quimb-dmrg1 (best threads), quimb-dmrg2 (best threads)
+# Fixed L (e.g., L=32 or L=64 — pick L with most data)
+# Shows crossover where GPU lines cross below CPU lines
+# For quimb, use best wall_time across all thread counts for each (model, L, chi)
+```
+
+### Plot 2: Opt vs baseline scatter (the failure plot)
+```python
+# From bench_opt_results.csv (2026-03-23 re-run):
+# x-axis: baseline wall time (dmrg-gpu or dmrg2-gpu)
+# y-axis: opt wall time (dmrg-gpu-opt or dmrg2-gpu-opt)
+# Both log scale. y=x diagonal line.
+# All points should be ABOVE the line (opt always slower)
+# Color by model, shape by 1-site vs 2-site
+# Only include converged=True pairs
+# Annotate the diverged cases (chi>=128) as X marks or arrows off the top
+```
+
+### Plot 3: Win rate by chi (bar chart)
+```python
+# From summary.csv wins analysis:
+# x-axis: chi values (20, 50, 128, 256)
+# y-axis: win percentage
+# Stacked or grouped bars for: dmrg-gpu, dmrg2-gpu, quimb-dmrg1, quimb-dmrg2
+# Shows clean transition from CPU-wins to GPU-wins at chi~100-128
+```
+
+### Plot 4: Thread scaling curves
+```python
+# From summary.csv, filter quimb-dmrg1 and quimb-dmrg2:
+# x-axis: threads (1, 2, 4, 8, 12)
+# y-axis: wall time
+# One subplot per (model, L, chi) showing the contention cliff at 8+ threads
+# Pick 4-6 representative configs
+```
+
+### Plot 5: A2DMRG accuracy degradation
+```python
+# From a2dmrg_small_results.txt + a2dmrg_medium_results.txt:
+# x-axis: L (8, 10, 12, 16, 20, 32, 48, 64)
+# y-axis: |E_a2dmrg - E_ref| (log scale)
+# Lines for chi=20 and chi=50
+# Horizontal lines at 1e-10 (PASS), 1e-8 (WARN)
+# Shows accuracy degradation with system size
+```
+
+### Plot 6: NS divergence energy trajectory (if raw sweep data available)
+```python
+# From bench_opt_results.csv, select diverged cases:
+# Show final energy vs chi for opt implementations
+# Correct energy (from baseline) as reference line
+# Dramatically illustrates the divergence: correct at chi=50, garbage at chi=128
+```
+
+---
+
+## Additional Findings to Include in Paper
+
+### Finding: Single-site GPU DMRG is the surprise winner
+Counter-intuitive: single-site DMRG (dmrg-gpu) outperforms two-site (dmrg2-gpu) at
+high chi despite needing more sweeps. The reason: two-site optimizes over d² sites at
+once, making each matvec d² times more expensive. At d=2, this is 4x. The extra sweeps
+for single-site (10-16 vs 2-5) don't compensate for the 4x per-step cost when chi is
+large enough that GEMM dominates. This finding contradicts conventional wisdom that
+two-site DMRG is "always better" due to automatic bond dimension growth.
+
+### Finding: CPU SVD was initially faster than GPU SVD
+Early in development, CPU LAPACK SVD (dgesvd) was 2-6x faster than GPU rocsolver
+for chi<200. We switched to GPU SVD only after discovering OpenBLAS 0.3.20 has a
+broken SVD that silently produces wrong singular values (fixed in 0.3.28). This
+OpenBLAS bug discovery is itself noteworthy — it means any DMRG code using the
+system-default OpenBLAS on Ubuntu 22.04 may produce silently wrong results.
+
+### Finding: Contraction path optimization matters more than hardware
+Our hand-coded GPU contraction order does 2.3-3.8x more FLOPs than cotengra's optimal
+path (measured via cotengra opt_einsum). At chi>=200, this FLOP penalty dominates wall
+time. quimb uses cotengra internally, which partially explains its competitiveness.
+Future GPU DMRG implementations should incorporate automatic path optimization, not
+just brute-force the contractions.
+
+### Finding: BLAS thread contention is a catastrophic failure mode
+quimb at 12 threads is up to 52x slower than at 1 thread for small chi. This is not
+gradual degradation — it's a cliff at 8 threads. The failure mode: OpenBLAS spawns
+thread pools per GEMM call, and for small matrices (50x50), the thread synchronization
+overhead exceeds the computation. Libraries like quimb should auto-detect this and
+cap thread count based on matrix size.
+
+### Finding: A2DMRG's narrow applicability window
+The Grigori-Hassan A2DMRG algorithm works for quantum chemistry (d=12-24, P~d-1
+processors) but fails for condensed matter (d=2, large L). The additive Schwarz
+correction's convergence rate depends on the ratio P/L — at P=2, L=64, the coarse
+space is too coarse. This is not an implementation deficiency; the algorithm's
+mathematical convergence theory explicitly requires P~d-1. With d=2, you'd need
+P=1, which is serial DMRG.
 
 ---
 

@@ -10,6 +10,64 @@ costs O(L) for the coupling, identical to standard serial DMRG.
 The correct algorithm from Stoudenmire & White (arXiv:1301.3494) uses a
 lightweight **merge + optimize** step at each shared boundary bond only.
 
+## Lessons from GPU Optimization Attempts (2026-03-23)
+
+We attempted two GPU-accelerated replacements for standard LAPACK SVD:
+
+### Newton-Schulz Polar Decomposition + Block-Davidson Eigensolver
+
+Replaced SVD with iterative polar decomposition (GPU GEMMs only) and replaced
+Lanczos with Block-Davidson (BLAS-3 block subspace iteration).
+
+**Results: 0% win rate across ALL opt variants vs their correct baselines.**
+
+| Comparison | Win Rate | Notes |
+|---|---|---|
+| dmrg-gpu-opt vs **dmrg-gpu** | **0/24** (0%) | 2-7x slower |
+| dmrg2-gpu-opt vs **dmrg2-gpu** | **0/26** (0%) | 1.5-6x slower |
+| pdmrg-gpu-opt vs **dmrg-gpu** (best serial) | **0/23** (0%) | 0.07x-0.73x, always slower |
+
+pdmrg-gpu-opt does beat pdmrg-gpu (87% win rate, up to 20x), but this is a
+misleading comparison — pdmrg-gpu itself is far slower than serial dmrg-gpu
+and dmrg2-gpu due to the broken coupling phase (the problem this prompt fixes).
+The "opt" speedup just partially compensates for the PDMRG overhead; it never
+catches up to straightforward serial GPU DMRG.
+
+**Why the optimizations failed:**
+- Newton-Schulz replaces one O(n³) GPU SVD call with ~12-16 O(n³) GPU GEMM
+  iterations — pure overhead. rocsolver gesvd is already highly optimized.
+- Block-Davidson has higher memory/compute per eigensolve than Lanczos.
+- Neither optimization amortizes well in DMRG's sweep-site-by-site pattern.
+
+**Newton-Schulz numerical instability at high chi:**
+- chi<=50: Converges correctly but slower than GPU SVD (rocsolver gesvd)
+- chi>=128: Diverges catastrophically (energies like -10²⁵) — condition number
+  too high for Frobenius-norm-scaled iteration to converge in 30 iterations
+- chi>=256 L>=64: Crashes/segfaults from corrupted MPS tensors
+- SVD fallback exists (U^H U - I verification) but triggers too late — by the
+  time one bad SVD replacement corrupts an MPS tensor, error compounds
+  exponentially through subsequent sweep sites
+
+**Implication for this fix:** Use standard GPU SVD (rocsolver) + Lanczos only.
+Do NOT use Newton-Schulz or Block-Davidson. The Stoudenmire fix should be
+implemented in `pdmrg-gpu` (standard SVD + Lanczos). The `-opt` variants
+should be considered failed experiments.
+
+### Benchmark result files
+
+All results are committed to GitHub at the paths below:
+
+- **GPU opt benchmark (192 configs, 3 models, MI300X):**
+  `benchmarks/paper_results/bench_opt_results.csv` (192 rows)
+  `benchmarks/paper_results/bench_opt_results.json`
+- **Full 10-implementation comparison (737 configs):**
+  `benchmarks/paper_results/summary.csv`
+- **GPU 4-way scalability (pdmrg-gpu vs pdmrg-gpu-opt, segments=2,4):**
+  `benchmarks/paper_results/gpu_4way_results.csv` (248 rows)
+- **A2DMRG accuracy benchmarks:**
+  `benchmarks/paper_results/a2dmrg_small_results.txt` (L=8-20, chi=20-50)
+  `benchmarks/paper_results/a2dmrg_medium_results.txt` (L=32-64, chi=50-100)
+
 ## Reference: Stoudenmire Algorithm (Section II, Figures 2 & 4)
 
 ### Two-node case (Figure 2)
@@ -296,8 +354,8 @@ Expected speedup vs serial DMRG for L=64 chi=128:
 ## Build and test
 
 ```bash
-# On remote MI300X:
-ssh hotaisle@23.183.40.82
+# On remote MI300X (passwordless SSH):
+ssh hotaisle@23.183.40.75
 cd ~/dmrg-implementations && git pull
 
 # Build pdmrg-gpu
@@ -316,21 +374,23 @@ cd ../../pdmrg2-gpu/build && cmake .. -DGPU_TARGETS=gfx942 && make -j$(nproc)
 ./pdmrg_gpu 64 128 20 --segments 8 --warmup 3
 ```
 
+**Note:** Remote VM IP may change between sessions — check CLAUDE.md for current IP.
+Prerequisites on fresh VMs: `sudo apt-get install -y cmake liblapack-dev libopenblas-dev`
+
 ## Implementation order
 
-1. **pdmrg-gpu first** — simpler (Lanczos + SVD), easier to debug
+1. **pdmrg-gpu only** — standard GPU SVD (rocsolver) + Lanczos eigensolver
 2. **Verify correctness** on all 3 test cases with segments=2
 3. **Run scalability** tests for segments=2,4,8
-4. **Port to pdmrg2-gpu** — same changes with Newton-Schulz + Davidson
-5. **Compare performance** pdmrg-gpu vs pdmrg2-gpu vs serial baselines
+4. **Benchmark against dmrg-gpu and dmrg2-gpu** — the real competition
+5. **Do NOT implement in -opt variants** — Newton-Schulz + Block-Davidson is a
+   failed optimization (0% win rate vs standard GPU SVD in every context tested)
 
 ## Key files for reference
 
 - `pdmrg-gpu/src/pdmrg_gpu.h` — class declaration, StreamWorkspace struct
 - `pdmrg-gpu/src/pdmrg_gpu_impl.h` — full implementation (~1270 lines)
 - `pdmrg-gpu/src/scalar_traits.h` — type dispatch, LAPACK/rocBLAS wrappers
-- `pdmrg2-gpu/src/pdmrg2_gpu.h` — class declaration with NS/Davidson additions
-- `pdmrg2-gpu/src/pdmrg2_gpu_impl.h` — full implementation (~2090 lines)
-- `pdmrg2-gpu/src/scalar_traits.h` — extended with syev, NS kernels
+- `pdmrg-gpu-opt/` — failed optimization experiment (0% win rate vs serial GPU, do not use)
 - Paper: https://arxiv.org/abs/1301.3494 (Stoudenmire & White, 2013)
-- Benchmark results: `benchmarks/gpu_scalability_results.md`
+- Benchmark results: `benchmarks/paper_results/` (all CSV/JSON/TXT files)
