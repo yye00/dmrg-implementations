@@ -1,10 +1,10 @@
-# Fix PDMRG2 (CPU) and PDMRG2-GPU Canonicalization Bugs
+# Fix PDMRG-OPT (CPU) and PDMRG-OPT-GPU Canonicalization Bugs
 
 ## Context
 
-Benchmarking shows pdmrg2 is 25x slower than pdmrg on small systems (L=8, chi=20, Josephson np=2: 46.4s vs 1.82s) and delivers worse accuracy (-2.8436 vs -2.8438). The root cause is three canonicalization bugs in pdmrg2 that propagate stale/incorrect environments into the eigensolver. pdmrg2-gpu has analogous issues.
+Benchmarking shows pdmrg-opt is 25x slower than pdmrg on small systems (L=8, chi=20, Josephson np=2: 46.4s vs 1.82s) and delivers worse accuracy (-2.8436 vs -2.8438). The root cause is three canonicalization bugs in pdmrg-opt that propagate stale/incorrect environments into the eigensolver. pdmrg-gpu-opt has analogous issues.
 
-The reference (correct) implementation is pdmrg at `/home/captain/clawd/work/dmrg-implementations/pdmrg/pdmrg/dmrg.py`. The fixes below port its canonicalization discipline to pdmrg2 and pdmrg2-gpu.
+The reference (correct) implementation is pdmrg at `/home/captain/clawd/work/dmrg-implementations/pdmrg/pdmrg/dmrg.py`. The fixes below port its canonicalization discipline to pdmrg-opt and pdmrg-gpu-opt.
 
 ## Verification
 
@@ -12,24 +12,24 @@ Before and after each fix, run the benchmark suite to measure impact:
 
 ```bash
 cd /home/captain/clawd/work/dmrg-implementations
-python benchmarks/run.py validate --impl pdmrg,pdmrg2 --model heisenberg,josephson --np 2
+python benchmarks/run.py validate --impl pdmrg,pdmrg-opt --model heisenberg,josephson --np 2
 ```
 
-The pdmrg2 Josephson energy should improve from -2.8436 toward -2.8438 (matching pdmrg), and timing should drop significantly.
+The pdmrg-opt Josephson energy should improve from -2.8436 toward -2.8438 (matching pdmrg), and timing should drop significantly.
 
-For pdmrg2-gpu, compile and test on the remote MI300X (ssh hotaisle@23.183.40.75):
+For pdmrg-gpu-opt, compile and test on the remote MI300X (ssh hotaisle@23.183.40.75):
 
 ```bash
-cd ~/dmrg-implementations/pdmrg2-gpu/build
+cd ~/dmrg-implementations/pdmrg-gpu-opt/build
 cmake .. && make -j
-./pdmrg2_gpu 8 20 10 --josephson --segments 2
+./pdmrg_gpu_opt 8 20 10 --josephson --segments 2
 ```
 
 ---
 
-## Fix 1: pdmrg2 CPU — Return A_right_canonical from merge_boundary_tensors
+## Fix 1: pdmrg-opt CPU — Return A_right_canonical from merge_boundary_tensors
 
-**File**: `/home/captain/clawd/work/dmrg-implementations/pdmrg2/pdmrg/parallel/merge.py`
+**File**: `/home/captain/clawd/work/dmrg-implementations/pdmrg-opt/pdmrg/parallel/merge.py`
 
 **Problem**: `merge_boundary_tensors` returns only 5 values. After SVD split `M = U @ diag(S) @ Vh`, it computes `A_right_new = (diag(S) @ Vh).reshape(k, d_R, chi_R)` and returns that. But when this tensor is used to build R_env, the norm matrix becomes S^2 instead of I, breaking the N_eff = I assumption in subsequent eigensolves.
 
@@ -39,15 +39,15 @@ A_right_canonical = Vh.reshape(k, d_R, chi_R)
 return A_left_new, A_right_new, V_new, energy, trunc_err, A_right_canonical
 ```
 
-**Fix**: Add `A_right_canonical = Vh.reshape(k, d_R, chi_R)` after the SVD truncation in pdmrg2's merge.py, and return it as a 6th value.
+**Fix**: Add `A_right_canonical = Vh.reshape(k, d_R, chi_R)` after the SVD truncation in pdmrg-opt's merge.py, and return it as a 6th value.
 
 ---
 
-## Fix 2: pdmrg2 CPU — Use A_right_canonical for R_env rebuild after merge
+## Fix 2: pdmrg-opt CPU — Use A_right_canonical for R_env rebuild after merge
 
-**File**: `/home/captain/clawd/work/dmrg-implementations/pdmrg2/pdmrg/dmrg.py`
+**File**: `/home/captain/clawd/work/dmrg-implementations/pdmrg-opt/pdmrg/dmrg.py`
 
-**Problem**: In the `boundary_merge` function (around line 249), pdmrg2 unpacks only 5 return values:
+**Problem**: In the `boundary_merge` function (around line 249), pdmrg-opt unpacks only 5 return values:
 ```python
 A_left_new, A_right_new, V_new, energy, _ = merge_boundary_tensors(...)
 ```
@@ -67,30 +67,30 @@ env_mgr.R_envs[global_end] = update_right_env(R_env, A_right_canonical, mpo_arra
 
 ---
 
-## Fix 3: pdmrg2 CPU — Canonicalize MPS before building environments in build_local_environments
+## Fix 3: pdmrg-opt CPU — Canonicalize MPS before building environments in build_local_environments
 
-**File**: `/home/captain/clawd/work/dmrg-implementations/pdmrg2/pdmrg/dmrg.py`
+**File**: `/home/captain/clawd/work/dmrg-implementations/pdmrg-opt/pdmrg/dmrg.py`
 
 **Problem**: The `build_local_environments` function (around lines 290-347) builds L_envs and R_envs directly from the raw MPS arrays without first putting them in canonical form. L_env assumes left-canonical tensors (so that the norm matrix is I). R_env assumes right-canonical tensors. Using non-canonical tensors produces stale environments.
 
 **What pdmrg does correctly** (pdmrg/pdmrg/dmrg.py, lines 313-366):
 Before building L_envs, it left-canonicalizes the MPS (QR sweep left-to-right). Before building R_envs, it right-canonicalizes (LQ sweep right-to-left). This ensures norm = I at each step.
 
-**Fix**: In pdmrg2's `build_local_environments`, add a left-canonicalization sweep (using Newton-Schulz polar, since that's pdmrg2's convention) before building L_envs, and a right-canonicalization sweep before building R_envs. The pdmrg version uses QR; pdmrg2 should use Newton-Schulz polar for consistency, but QR would also work and be faster.
+**Fix**: In pdmrg-opt's `build_local_environments`, add a left-canonicalization sweep (using Newton-Schulz polar, since that's pdmrg-opt's convention) before building L_envs, and a right-canonicalization sweep before building R_envs. The pdmrg version uses QR; pdmrg-opt should use Newton-Schulz polar for consistency, but QR would also work and be faster.
 
-**Note**: pdmrg2 already has `rebuild_boundary_r_env` and `rebuild_boundary_l_env` functions (lines 350-442) that are identical to pdmrg's. The issue is they're not called at the right time — specifically, `build_local_environments` doesn't canonicalize before env construction.
+**Note**: pdmrg-opt already has `rebuild_boundary_r_env` and `rebuild_boundary_l_env` functions (lines 350-442) that are identical to pdmrg's. The issue is they're not called at the right time — specifically, `build_local_environments` doesn't canonicalize before env construction.
 
 ---
 
-## Fix 4: pdmrg2-gpu — Rebuild boundary environments after segment canonicalization
+## Fix 4: pdmrg-gpu-opt — Rebuild boundary environments after segment canonicalization
 
-**File**: `/home/captain/clawd/work/dmrg-implementations/pdmrg2-gpu/src/pdmrg2_gpu_impl.h`
+**File**: `/home/captain/clawd/work/dmrg-implementations/pdmrg-gpu-opt/src/pdmrg_gpu_opt_impl.h`
 
 **Problem**: In `segment_sweep_LR` (lines 1867-1886), after `canonize_segment_right(seg_idx)`, the code rebuilds R_envs via incremental `update_right_env`. But the L_envs at the segment boundaries were built from the PRE-canonicalization MPS and are now stale. Same issue in `segment_sweep_RL` with L_envs.
 
 Current code:
 ```cpp
-void PDMRG2GPU<Scalar>::segment_sweep_LR(int seg_idx) {
+void PDMRGGPUOpt<Scalar>::segment_sweep_LR(int seg_idx) {
     int first = seg_first_[seg_idx];
     int last = seg_last_[seg_idx];
     int si = seg_idx;
@@ -111,9 +111,9 @@ void PDMRG2GPU<Scalar>::segment_sweep_LR(int seg_idx) {
 
 ---
 
-## Fix 5: pdmrg2-gpu — Canonicalize between double optimize_bond in merge_and_optimize_boundaries
+## Fix 5: pdmrg-gpu-opt — Canonicalize between double optimize_bond in merge_and_optimize_boundaries
 
-**File**: `/home/captain/clawd/work/dmrg-implementations/pdmrg2-gpu/src/pdmrg2_gpu_impl.h`
+**File**: `/home/captain/clawd/work/dmrg-implementations/pdmrg-gpu-opt/src/pdmrg_gpu_opt_impl.h`
 
 **Problem**: In `merge_and_optimize_boundaries` (lines 1918-1936):
 ```cpp
@@ -142,9 +142,9 @@ update_right_env(bsite + 1, si);
 
 ---
 
-## Fix 6: pdmrg2-gpu — Add Newton-Schulz convergence verification in ns_split
+## Fix 6: pdmrg-gpu-opt — Add Newton-Schulz convergence verification in ns_split
 
-**File**: `/home/captain/clawd/work/dmrg-implementations/pdmrg2-gpu/src/pdmrg2_gpu_impl.h`
+**File**: `/home/captain/clawd/work/dmrg-implementations/pdmrg-gpu-opt/src/pdmrg_gpu_opt_impl.h`
 
 **Problem**: `ns_split` (lines 907-1091) only checks `if (ns_iters >= 29)` to decide whether to fall back to SVD. It never verifies that `||U^H U - I|| < tol` after Newton-Schulz iterations.
 
@@ -165,12 +165,12 @@ This is lower priority than Fixes 1-5 but prevents silent accuracy degradation.
 
 | Fix | Affects | Expected Improvement |
 |-----|---------|---------------------|
-| Fix 1+2 | pdmrg2 CPU accuracy | Energy from -2.8436 → -2.8438 (matching pdmrg) |
-| Fix 3 | pdmrg2 CPU speed | Fewer eigensolver iterations per sweep, ~2-5x faster |
-| Fix 1+2+3 combined | pdmrg2 CPU overall | Should bring pdmrg2 within 2-3x of pdmrg (down from 25x), remaining gap is Newton-Schulz vs QR overhead |
-| Fix 4 | pdmrg2-gpu convergence | Fewer sweeps to converge, better boundary accuracy |
-| Fix 5 | pdmrg2-gpu boundary quality | More accurate boundary optimization, better energy |
-| Fix 6 | pdmrg2-gpu robustness | Prevents silent NS failures at large chi |
+| Fix 1+2 | pdmrg-opt CPU accuracy | Energy from -2.8436 → -2.8438 (matching pdmrg) |
+| Fix 3 | pdmrg-opt CPU speed | Fewer eigensolver iterations per sweep, ~2-5x faster |
+| Fix 1+2+3 combined | pdmrg-opt CPU overall | Should bring pdmrg-opt within 2-3x of pdmrg (down from 25x), remaining gap is Newton-Schulz vs QR overhead |
+| Fix 4 | pdmrg-gpu-opt convergence | Fewer sweeps to converge, better boundary accuracy |
+| Fix 5 | pdmrg-gpu-opt boundary quality | More accurate boundary optimization, better energy |
+| Fix 6 | pdmrg-gpu-opt robustness | Prevents silent NS failures at large chi |
 
 ## Order of Operations
 
@@ -184,12 +184,12 @@ This is lower priority than Fixes 1-5 but prevents silent accuracy degradation.
 
 ## Files to Modify
 
-### pdmrg2 CPU:
-- `pdmrg2/pdmrg/parallel/merge.py` — Fix 1 (add A_right_canonical return)
-- `pdmrg2/pdmrg/dmrg.py` — Fix 2 (use A_right_canonical for R_env) + Fix 3 (canonicalize in build_local_environments)
+### pdmrg-opt CPU:
+- `pdmrg-opt/pdmrg/parallel/merge.py` — Fix 1 (add A_right_canonical return)
+- `pdmrg-opt/pdmrg/dmrg.py` — Fix 2 (use A_right_canonical for R_env) + Fix 3 (canonicalize in build_local_environments)
 
-### pdmrg2-gpu:
-- `pdmrg2-gpu/src/pdmrg2_gpu_impl.h` — Fix 4 (rebuild boundary envs after canonize) + Fix 5 (canonicalize between double optimize_bond) + Fix 6 (NS convergence check)
+### pdmrg-gpu-opt:
+- `pdmrg-gpu-opt/src/pdmrg_gpu_opt_impl.h` — Fix 4 (rebuild boundary envs after canonize) + Fix 5 (canonicalize between double optimize_bond) + Fix 6 (NS convergence check)
 
 ## Reference Implementation
 

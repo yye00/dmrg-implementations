@@ -25,9 +25,9 @@ MODELS = {
 }
 
 SERIAL_CPU = ["quimb-dmrg1", "quimb-dmrg2"]
-PARALLEL_CPU = ["pdmrg", "pdmrg2"]
+PARALLEL_CPU = ["pdmrg", "pdmrg-opt"]
 SERIAL_GPU = ["dmrg-gpu", "dmrg2-gpu"]
-PARALLEL_GPU = ["pdmrg-gpu", "pdmrg2-gpu"]
+PARALLEL_GPU = ["pdmrg-gpu", "pdmrg-gpu-opt"]
 NP_VALUES = [2, 4]
 BLAS_THREADS = [1, 2, 4, 8]
 TOTAL_CORES = 13
@@ -192,7 +192,7 @@ def run_gpu_parallel(impl, model, size, n_streams):
 
     exe_map = {
         "pdmrg-gpu": f"{REMOTE_REPO}/pdmrg-gpu/build/pdmrg_gpu",
-        "pdmrg2-gpu": f"{REMOTE_REPO}/pdmrg2-gpu/build/pdmrg2_gpu",
+        "pdmrg-gpu-opt": f"{REMOTE_REPO}/pdmrg-gpu-opt/build/pdmrg_gpu_opt",
     }
     exe = exe_map[impl]
 

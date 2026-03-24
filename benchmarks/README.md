@@ -33,20 +33,20 @@ suite currently supports 10 implementations across CPU and GPU:
 | `quimb-dmrg1` | CPU serial | - | BLAS threads | Quimb DMRG single-site (reference) |
 | `quimb-dmrg2` | CPU serial | - | BLAS threads | Quimb DMRG two-site (reference) |
 | `pdmrg` | CPU parallel | MPI ranks | BLAS threads/rank | Parallel DMRG (numpy tensordot) |
-| `pdmrg2` | CPU parallel | MPI ranks | BLAS threads/rank | Parallel DMRG two-site |
+| `pdmrg-opt` | CPU parallel | MPI ranks | BLAS threads/rank | Parallel DMRG two-site |
 | `pdmrg-cotengra` | CPU parallel | MPI ranks | BLAS threads/rank | Parallel DMRG (cotengra paths) |
 | `a2dmrg` | CPU parallel | MPI ranks | BLAS threads/rank | Additive two-level DMRG |
 | `dmrg-gpu` | GPU serial | - | - | GPU single-site (HIP/rocBLAS) |
 | `dmrg2-gpu` | GPU serial | - | - | GPU two-site (HIP/rocBLAS) |
 | `pdmrg-gpu` | GPU parallel | HIP streams | - | GPU parallel DMRG |
-| `pdmrg2-gpu` | GPU parallel | HIP streams | - | GPU parallel two-site DMRG |
+| `pdmrg-gpu-opt` | GPU parallel | HIP streams | - | GPU parallel two-site DMRG |
 
 ### What `--np` means
 
-- **CPU parallel implementations** (pdmrg, pdmrg2, pdmrg-cotengra, a2dmrg):
+- **CPU parallel implementations** (pdmrg, pdmrg-opt, pdmrg-cotengra, a2dmrg):
   `--np` sets the number of MPI ranks via `mpirun -np N`.
 
-- **GPU parallel implementations** (pdmrg-gpu, pdmrg2-gpu):
+- **GPU parallel implementations** (pdmrg-gpu, pdmrg-gpu-opt):
   `--np` sets the number of HIP streams for concurrent segment sweeping.
 
 - **Serial implementations** ignore `--np`.
@@ -103,7 +103,7 @@ compares energies against the gold standard (tolerance: 1e-10).
 ./run.py validate
 
 # Just GPU implementations
-./run.py validate --impl dmrg-gpu,dmrg2-gpu,pdmrg-gpu,pdmrg2-gpu
+./run.py validate --impl dmrg-gpu,dmrg2-gpu,pdmrg-gpu,pdmrg-gpu-opt
 
 # CPU parallel with specific np values
 ./run.py validate --impl pdmrg,a2dmrg --np 2,4 --threads 1
@@ -194,7 +194,7 @@ benchmarks/
 │   ├── report.py             # Table formatting and report generation
 │   └── runners/              # Per-implementation launch logic
 │       ├── quimb_runner.py   # In-process quimb DMRG1/2
-│       ├── pdmrg_runner.py   # MPI subprocess for pdmrg/pdmrg2/cotengra
+│       ├── pdmrg_runner.py   # MPI subprocess for pdmrg/pdmrg-opt/cotengra
 │       ├── a2dmrg_runner.py  # MPI subprocess for a2dmrg
 │       └── gpu_runner.py     # Subprocess for compiled GPU executables
 │

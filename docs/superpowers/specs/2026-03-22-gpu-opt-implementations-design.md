@@ -2,7 +2,7 @@
 
 ## Goal
 
-Create GPU-optimized variants of dmrg-gpu (single-site) and dmrg2-gpu (two-site) by porting Newton-Schulz polar decomposition and Block-Davidson eigensolver from pdmrg2-gpu. Rename pdmrg2-gpu to pdmrg-gpu-opt for naming consistency.
+Create GPU-optimized variants of dmrg-gpu (single-site) and dmrg2-gpu (two-site) by porting Newton-Schulz polar decomposition and Block-Davidson eigensolver from pdmrg-gpu-opt. Rename pdmrg-gpu-opt to pdmrg-gpu-opt for naming consistency.
 
 ## Motivation
 
@@ -10,7 +10,7 @@ Profiling shows SVD dominates wall time at high bond dimension:
 - dmrg-gpu L=64 chi=256: SVD = 97% of wall time
 - dmrg2-gpu L=64 chi=256: SVD = 99% of wall time
 
-Newton-Schulz replaces sequential gesvd with ~12-16 GPU GEMMs. Block-Davidson replaces BLAS-2-heavy Lanczos with BLAS-3-heavy block subspace iteration. Both are already proven in pdmrg2-gpu.
+Newton-Schulz replaces sequential gesvd with ~12-16 GPU GEMMs. Block-Davidson replaces BLAS-2-heavy Lanczos with BLAS-3-heavy block subspace iteration. Both are already proven in pdmrg-gpu-opt.
 
 ## Architecture
 
@@ -18,7 +18,7 @@ The project has 4 GPU DMRG implementations:
 - `dmrg-gpu/` — single-site baseline (Lanczos + CPU SVD)
 - `dmrg2-gpu/` — two-site baseline (Lanczos + CPU SVD)
 - `pdmrg-gpu/` — parallel single-site baseline (Lanczos + GPU SVD, recently fixed)
-- `pdmrg2-gpu/` — parallel two-site with Newton-Schulz + Block-Davidson
+- `pdmrg-gpu-opt/` — parallel two-site with Newton-Schulz + Block-Davidson
 
 After this work:
 - `dmrg-gpu/` — single-site baseline (unchanged)
@@ -26,7 +26,7 @@ After this work:
 - `dmrg2-gpu/` — two-site baseline (unchanged)
 - `dmrg2-gpu-opt/` — two-site with Newton-Schulz + Block-Davidson
 - `pdmrg-gpu/` — parallel single-site baseline (unchanged)
-- `pdmrg-gpu-opt/` — renamed from pdmrg2-gpu (parallel two-site, already has NS + Davidson)
+- `pdmrg-gpu-opt/` — renamed from pdmrg-gpu-opt (parallel two-site, already has NS + Davidson)
 
 ## Deliverables
 
@@ -49,7 +49,7 @@ Copy `dmrg-gpu/` → `dmrg-gpu-opt/`. Rename class `DMRGGPU` → `DMRGGPUOpt`.
 
 **Single-site adaptation notes:**
 - Direction 'R': theta is (chi_L*d, chi_R) — tall matrix, NS-left works directly
-- Direction 'L': theta is (chi_L, d*chi_R) — wide matrix when chi_L < d*chi_R. Fall back to CPU SVD for the wide case (matching pdmrg2-gpu behavior which also falls back for wide matrices in ns_split)
+- Direction 'L': theta is (chi_L, d*chi_R) — wide matrix when chi_L < d*chi_R. Fall back to CPU SVD for the wide case (matching pdmrg-gpu-opt behavior which also falls back for wide matrices in ns_split)
 - After NS factorization: U → MPS[site], S*Vh absorbed into adjacent MPS tensor via GEMM (same as current SVD path, just different factorization method)
 - Block-Davidson calls single-site `apply_heff()` not `apply_heff_two_site()`
 
@@ -61,7 +61,7 @@ Copy `dmrg-gpu/` → `dmrg-gpu-opt/`. Rename class `DMRGGPU` → `DMRGGPUOpt`.
 - Newton-Schulz: `d_ns_U`, `d_ns_U_new`, `d_ns_gram`, `d_ns_P` (GPU); `h_ns_PtP`, `h_ns_eigvals`, `h_ns_syev_work` (host)
 - Block-Davidson: `d_dav_V`, `d_dav_AV`, `d_dav_work`, `d_dav_work2` (GPU); `h_dav_H_proj`, `h_dav_eigvals`, `h_dav_eigvecs` (host)
 
-**scalar_traits.h additions** (ported from pdmrg2-gpu's scalar_traits.h):
+**scalar_traits.h additions** (ported from pdmrg-gpu-opt's scalar_traits.h):
 
 GPU kernels:
 - `scaled_identity_minus_double` / `scaled_identity_minus_complex` — computes `A[i,j] = alpha*I[i,j] - A[i,j]` in-place
@@ -73,7 +73,7 @@ LAPACK additions (not in baseline scalar_traits.h):
 - `ScalarTraits<double>::lapack_syev()` and `ScalarTraits<hipDoubleComplex>::lapack_syev()` static methods
 - `syev_rwork_size()` for complex workspace sizing
 
-Note: the baseline scalar_traits.h already has `dsyev_`/`zheev_` declarations and `lapack_syev` — these only need to be added if missing. The dead-code kernels (`compute_3I_minus_A`, templated `scaled_identity_minus_kernel`) from pdmrg2-gpu should NOT be ported.
+Note: the baseline scalar_traits.h already has `dsyev_`/`zheev_` declarations and `lapack_syev` — these only need to be added if missing. The dead-code kernels (`compute_3I_minus_A`, templated `scaled_identity_minus_kernel`) from pdmrg-gpu-opt should NOT be ported.
 
 **Removed from baseline:**
 - `--cpu-svd`, `--gpu-svd`, `--rsvd` command-line flags and associated code paths
@@ -93,11 +93,11 @@ Copy `dmrg2-gpu/` → `dmrg2-gpu-opt/`. Rename class `DMRG2GPU` → `DMRG2GPUOpt
 
 **New algorithms added:**
 - `newton_schulz_left(d_A, m, n, d_U, d_P, tol, max_iter)` — same as dmrg-gpu-opt
-- `ns_split(site, d_theta, direction)` — nearly direct port from pdmrg2-gpu; factors (chi_L*d, d*chi_R) two-site theta; removes `si` stream parameter
-- `block_davidson_eigensolver(site, d_theta, theta_size)` — direct port from pdmrg2-gpu; calls `apply_heff_two_site()`; removes `si` stream parameter
+- `ns_split(site, d_theta, direction)` — nearly direct port from pdmrg-gpu-opt; factors (chi_L*d, d*chi_R) two-site theta; removes `si` stream parameter
+- `block_davidson_eigensolver(site, d_theta, theta_size)` — direct port from pdmrg-gpu-opt; calls `apply_heff_two_site()`; removes `si` stream parameter
 
 **Two-site notes:**
-- Geometry matches pdmrg2-gpu exactly (both are two-site)
+- Geometry matches pdmrg-gpu-opt exactly (both are two-site)
 - The port removes the `si` stream parameter and flattens `StreamWorkspace` members into class members directly (matching dmrg2-gpu's flat member style). E.g. `ws.d_ns_U` → `d_ns_U_`, `ws.d_dav_V` → `d_dav_V_`
 - Uses single `stream_` and `rocblas_h_` instead of per-stream vectors
 
@@ -110,22 +110,22 @@ Copy `dmrg2-gpu/` → `dmrg2-gpu-opt/`. Rename class `DMRG2GPU` → `DMRG2GPUOpt
 **Removed from baseline:**
 - Same removals as dmrg-gpu-opt (SVD toggle flags, rSVD)
 
-### 3. pdmrg-gpu-opt (rename of pdmrg2-gpu)
+### 3. pdmrg-gpu-opt (rename of pdmrg-gpu-opt)
 
 Rename directory and all identifiers. No algorithmic changes.
 
 **Renames:**
-- Directory: `pdmrg2-gpu/` → `pdmrg-gpu-opt/`
-- Header: `pdmrg2_gpu.h` → `pdmrg_gpu_opt.h`
-- Implementation: `pdmrg2_gpu_impl.h` → `pdmrg_gpu_opt_impl.h`
-- Instantiation: `pdmrg2_gpu.cpp` → `pdmrg_gpu_opt.cpp`
-- Test: `test_pdmrg2_gpu.cpp` → `test_pdmrg_gpu_opt.cpp`
-- Class: `PDMRG2GPU` → `PDMRGGPUOpt`
-- CMake target: `pdmrg2_gpu` → `pdmrg_gpu_opt`
+- Directory: `pdmrg-gpu-opt/` → `pdmrg-gpu-opt/`
+- Header: `pdmrg_gpu_opt.h` → `pdmrg_gpu_opt.h`
+- Implementation: `pdmrg_gpu_opt_impl.h` → `pdmrg_gpu_opt_impl.h`
+- Instantiation: `pdmrg_gpu_opt.cpp` → `pdmrg_gpu_opt.cpp`
+- Test: `test_pdmrg_gpu_opt.cpp` → `test_pdmrg_gpu_opt.cpp`
+- Class: `PDMRGGPUOpt` → `PDMRGGPUOpt`
+- CMake target: `pdmrg_gpu_opt` → `pdmrg_gpu_opt`
 
 ### 4. Benchmark data update
 
-Rename `pdmrg2-gpu` → `pdmrg-gpu-opt` in all benchmark result files:
+Rename `pdmrg-gpu-opt` → `pdmrg-gpu-opt` in all benchmark result files:
 - `benchmarks/paper_results/gpu_4way_results.csv` — impl column
 - `benchmarks/paper_results/summary.csv` — impl column
 - `benchmarks/paper_results/results.json` — impl field
@@ -152,8 +152,8 @@ Rename profiling variables to reflect actual algorithms:
 ## Implementation order
 
 1. **pdmrg-gpu-opt** (rename) — simplest, validates rename process
-2. **Benchmark data update** — rename pdmrg2-gpu in CSVs
-3. **dmrg2-gpu-opt** (new) — mechanical port, geometry matches pdmrg2-gpu
+2. **Benchmark data update** — rename pdmrg-gpu-opt in CSVs
+3. **dmrg2-gpu-opt** (new) — mechanical port, geometry matches pdmrg-gpu-opt
 4. **dmrg-gpu-opt** (new) — requires single-site NS adaptation
 
 ## Test plan
@@ -178,5 +178,5 @@ When copying dmrg2-gpu → dmrg2-gpu-opt:
 ## What stays unchanged
 
 - `dmrg-gpu/`, `dmrg2-gpu/`, `pdmrg-gpu/` — untouched baselines
-- `pdmrg2-gpu/` — deleted after pdmrg-gpu-opt is created and verified
+- `pdmrg-gpu-opt/` — deleted after pdmrg-gpu-opt is created and verified
 - Benchmark scripts — not modified (new benchmarks are a separate task)

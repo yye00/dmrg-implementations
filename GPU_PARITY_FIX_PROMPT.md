@@ -434,7 +434,7 @@ assert(mps_tensors[L-1].shape[2] == 1);  // Right boundary
 - [ ] Remove deprecated implementations:
   - `dmrg_working.cpp` (working prototype → merge into production)
   - `dmrg_gpu.cpp`, `dmrg_gpu_native.cpp` (keep only ONE canonical version)
-  - `pdmrg_complete.cpp`, `pdmrg2_complete.cpp` (merge into `pdmrg_gpu.cpp` and `pdmrg2_gpu.cpp`)
+  - `pdmrg_complete.cpp`, `pdmrg-opt_complete.cpp` (merge into `pdmrg_gpu.cpp` and `pdmrg_gpu_opt.cpp`)
 
 ### Consolidate Implementations
 
@@ -468,7 +468,7 @@ src/
 1. Audit all 77 TODOs
 2. Classify:
    - **Fix now**: Critical for correctness (e.g., "TODO: Use actual Lanczos instead of placeholder")
-   - **Document**: Design decisions (e.g., "TODO: Consider block-Davidson for PDMRG2")
+   - **Document**: Design decisions (e.g., "TODO: Consider block-Davidson for PDMRG-OPT")
    - **Delete**: Obsolete or already fixed
 3. Fix or remove ALL TODOs in production code path
 4. Move design TODOs to `FUTURE_WORK.md`

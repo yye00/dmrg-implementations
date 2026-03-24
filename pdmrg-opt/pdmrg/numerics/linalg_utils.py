@@ -1,4 +1,4 @@
-"""GEMM-optimized linear algebra utilities for PDMRG2.
+"""GEMM-optimized linear algebra utilities for PDMRG-OPT.
 
 Replaces memory-bandwidth-bound operations (Lanczos, QR) with
 BLAS-3-heavy alternatives that map efficiently onto CPU cache hierarchies

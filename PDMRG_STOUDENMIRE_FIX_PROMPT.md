@@ -2,7 +2,7 @@
 
 ## Problem
 
-Both `pdmrg-gpu` and `pdmrg2-gpu` implement the PDMRG outer loop incorrectly.
+Both `pdmrg-gpu` and `pdmrg-gpu-opt` implement the PDMRG outer loop incorrectly.
 After parallel segment sweeps, they perform a **full-chain sequential LR+RL sweep**
 as the coupling phase. This negates all parallelism gains — each outer iteration
 costs O(L) for the coupling, identical to standard serial DMRG.
@@ -128,8 +128,8 @@ the loss in efficiency due to a node briefly remaining idle."
 
 1. `pdmrg-gpu/src/pdmrg_gpu.h` — add boundary state storage and merge methods
 2. `pdmrg-gpu/src/pdmrg_gpu_impl.h` — implement merge+optimize, fix outer loop
-3. `pdmrg2-gpu/src/pdmrg2_gpu.h` — same additions
-4. `pdmrg2-gpu/src/pdmrg2_gpu_impl.h` — same fixes
+3. `pdmrg-gpu-opt/src/pdmrg_gpu_opt.h` — same additions
+4. `pdmrg-gpu-opt/src/pdmrg_gpu_opt_impl.h` — same fixes
 
 ### Step-by-step changes
 
@@ -215,7 +215,7 @@ For each boundary bond b:
   1. Build/update left environment at site_L and right environment at site_R+1
      (these come from the segment sweeps — they should be current)
 
-  2. Run eigensolver (Lanczos for pdmrg-gpu, Block-Davidson for pdmrg2-gpu)
+  2. Run eigensolver (Lanczos for pdmrg-gpu, Block-Davidson for pdmrg-gpu-opt)
      on the two-site Hamiltonian at (site_L, site_R) using theta as initial guess
 
   3. SVD the optimized theta:
@@ -363,10 +363,10 @@ cd pdmrg-gpu/build && cmake .. -DGPU_TARGETS=gfx942 && make -j$(nproc)
 ./pdmrg_gpu 8 32 20 --segments 2 --warmup 3
 ./pdmrg_gpu 32 64 20 --segments 4 --warmup 3
 
-# Build pdmrg2-gpu
-cd ../../pdmrg2-gpu/build && cmake .. -DGPU_TARGETS=gfx942 && make -j$(nproc)
-./pdmrg2_gpu 8 32 20 --segments 2 --warmup 3
-./pdmrg2_gpu 32 64 20 --segments 4 --warmup 3
+# Build pdmrg-gpu-opt
+cd ../../pdmrg-gpu-opt/build && cmake .. -DGPU_TARGETS=gfx942 && make -j$(nproc)
+./pdmrg_gpu_opt 8 32 20 --segments 2 --warmup 3
+./pdmrg_gpu_opt 32 64 20 --segments 4 --warmup 3
 
 # Scalability test
 ./pdmrg_gpu 64 128 20 --segments 2 --warmup 3

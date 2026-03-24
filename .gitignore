@@ -41,7 +41,7 @@ slurm-*.out
 
 # Virtual environments in subdirectories
 pdmrg/venv/
-pdmrg2/venv/
+pdmrg-opt/venv/
 a2dmrg/venv/
 
 # Exclude development artifacts in subdirectories

@@ -4889,7 +4889,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 20,
@@ -4902,7 +4902,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 20,
@@ -4915,7 +4915,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 50,
@@ -4928,7 +4928,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 50,
@@ -4941,7 +4941,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 128,
@@ -4954,7 +4954,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 128,
@@ -4967,7 +4967,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 20,
     "chi": 20,
@@ -4980,7 +4980,7 @@
     "raw_output": "TIMEOUT"
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 20,
@@ -4994,7 +4994,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 20,
@@ -5008,7 +5008,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 50,
@@ -5022,7 +5022,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 50,
@@ -5036,7 +5036,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 128,
@@ -5050,7 +5050,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 128,
@@ -5064,7 +5064,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 20,
@@ -5078,7 +5078,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 20,
@@ -5092,7 +5092,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 20,
@@ -5106,7 +5106,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 50,
@@ -5120,7 +5120,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 50,
@@ -5134,7 +5134,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 50,
@@ -5148,7 +5148,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 128,
@@ -5162,7 +5162,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 32,
     "chi": 50,
@@ -5176,7 +5176,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 32,
     "chi": 50,
@@ -5190,7 +5190,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 32,
     "chi": 50,
@@ -5204,7 +5204,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 48,
     "chi": 50,
@@ -6013,7 +6013,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 20,
@@ -6027,7 +6027,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 20,
@@ -6041,7 +6041,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 20,
@@ -6055,7 +6055,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 20,
@@ -6069,7 +6069,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 20,
@@ -6083,7 +6083,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 50,
@@ -6097,7 +6097,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 50,
@@ -6111,7 +6111,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 50,
@@ -6125,7 +6125,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 50,
@@ -6139,7 +6139,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 50,
@@ -6153,7 +6153,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 128,
@@ -6167,7 +6167,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 128,
@@ -6181,7 +6181,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 128,
@@ -6195,7 +6195,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 128,
@@ -6209,7 +6209,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "heisenberg",
     "L": 12,
     "chi": 128,
@@ -6223,7 +6223,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 20,
@@ -6238,7 +6238,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 20,
@@ -6253,7 +6253,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 20,
@@ -6268,7 +6268,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 20,
@@ -6283,7 +6283,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 20,
@@ -6298,7 +6298,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 50,
@@ -6313,7 +6313,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 50,
@@ -6328,7 +6328,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 50,
@@ -6343,7 +6343,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 50,
@@ -6358,7 +6358,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 50,
@@ -6373,7 +6373,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 128,
@@ -6388,7 +6388,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 128,
@@ -6403,7 +6403,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 128,
@@ -6418,7 +6418,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 128,
@@ -6433,7 +6433,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 8,
     "chi": 128,
@@ -6448,7 +6448,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 20,
@@ -6463,7 +6463,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 20,
@@ -6478,7 +6478,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 20,
@@ -6493,7 +6493,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 20,
@@ -6508,7 +6508,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 20,
@@ -6523,7 +6523,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 20,
@@ -6538,7 +6538,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 50,
@@ -6553,7 +6553,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 50,
@@ -6568,7 +6568,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 50,
@@ -6583,7 +6583,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 50,
@@ -6598,7 +6598,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 50,
@@ -6613,7 +6613,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 16,
     "chi": 50,
@@ -6628,7 +6628,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 32,
     "chi": 50,
@@ -6643,7 +6643,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 32,
     "chi": 50,
@@ -6658,7 +6658,7 @@
     "nmax": 2
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "josephson",
     "L": 32,
     "chi": 50,
@@ -8345,7 +8345,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 12,
     "chi": 20,
@@ -8359,7 +8359,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 12,
     "chi": 20,
@@ -8373,7 +8373,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 12,
     "chi": 50,
@@ -8387,7 +8387,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 12,
     "chi": 50,
@@ -8401,7 +8401,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 12,
     "chi": 128,
@@ -8415,7 +8415,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 12,
     "chi": 128,
@@ -8429,7 +8429,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 20,
     "chi": 20,
@@ -8443,7 +8443,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 20,
     "chi": 20,
@@ -8457,7 +8457,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 20,
     "chi": 20,
@@ -8471,7 +8471,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 20,
     "chi": 50,
@@ -8485,7 +8485,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 20,
     "chi": 50,
@@ -8499,7 +8499,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 20,
     "chi": 50,
@@ -8513,7 +8513,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 20,
     "chi": 128,
@@ -8527,7 +8527,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 20,
     "chi": 128,
@@ -8541,7 +8541,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 20,
     "chi": 128,
@@ -8555,7 +8555,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 32,
     "chi": 20,
@@ -8569,7 +8569,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 32,
     "chi": 20,
@@ -8583,7 +8583,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 32,
     "chi": 20,
@@ -8597,7 +8597,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 32,
     "chi": 50,
@@ -8611,7 +8611,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 32,
     "chi": 50,
@@ -8625,7 +8625,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 32,
     "chi": 50,
@@ -8639,7 +8639,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 32,
     "chi": 128,
@@ -8653,7 +8653,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 32,
     "chi": 128,
@@ -8667,7 +8667,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 32,
     "chi": 128,
@@ -8681,7 +8681,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 64,
     "chi": 50,
@@ -8695,7 +8695,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 64,
     "chi": 50,
@@ -8709,7 +8709,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 64,
     "chi": 50,
@@ -8723,7 +8723,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 64,
     "chi": 128,
@@ -8737,7 +8737,7 @@
     "raw_output": "TIMEOUT"
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 100,
     "chi": 50,
@@ -8751,7 +8751,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 100,
     "chi": 50,
@@ -8765,7 +8765,7 @@
     "raw_output": ""
   },
   {
-    "impl": "pdmrg2",
+    "impl": "pdmrg-opt",
     "model": "tfim",
     "L": 100,
     "chi": 50,

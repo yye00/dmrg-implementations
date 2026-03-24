@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Create GPU-optimized variants of dmrg-gpu and dmrg2-gpu with Newton-Schulz + Block-Davidson, and rename pdmrg2-gpu to pdmrg-gpu-opt.
+**Goal:** Create GPU-optimized variants of dmrg-gpu and dmrg2-gpu with Newton-Schulz + Block-Davidson, and rename pdmrg-gpu-opt to pdmrg-gpu-opt.
 
-**Architecture:** Copy each baseline implementation into a new `-opt` directory, replace SVD with Newton-Schulz polar decomposition + eigendecomp, replace Lanczos with Block-Davidson eigensolver, remove unused SVD toggle flags. Source of truth for the algorithms is pdmrg2-gpu.
+**Architecture:** Copy each baseline implementation into a new `-opt` directory, replace SVD with Newton-Schulz polar decomposition + eigendecomp, replace Lanczos with Block-Davidson eigensolver, remove unused SVD toggle flags. Source of truth for the algorithms is pdmrg-gpu-opt.
 
 **Tech Stack:** C++17, HIP, rocBLAS, rocSOLVER, LAPACK (OpenBLAS 0.3.28+), AMD MI300X (gfx942)
 
@@ -17,9 +17,9 @@
 ## File Map
 
 ### Task 1: pdmrg-gpu-opt (rename)
-- Rename: `pdmrg2-gpu/` → `pdmrg-gpu-opt/`
-- Rename: all `pdmrg2_gpu*` files → `pdmrg_gpu_opt*`
-- Modify: all source files (class name `PDMRG2GPU` → `PDMRGGPUOpt`)
+- Rename: `pdmrg-gpu-opt/` → `pdmrg-gpu-opt/`
+- Rename: all `pdmrg_gpu_opt*` files → `pdmrg_gpu_opt*`
+- Modify: all source files (class name `PDMRGGPUOpt` → `PDMRGGPUOpt`)
 - Modify: `CMakeLists.txt` (target name)
 
 ### Task 2: Benchmark data rename
@@ -50,36 +50,36 @@
 
 ---
 
-## Task 1: Rename pdmrg2-gpu → pdmrg-gpu-opt
+## Task 1: Rename pdmrg-gpu-opt → pdmrg-gpu-opt
 
 **Files:**
-- Rename: `pdmrg2-gpu/` → `pdmrg-gpu-opt/`
+- Rename: `pdmrg-gpu-opt/` → `pdmrg-gpu-opt/`
 - Modify: all 5 source files + CMakeLists.txt
 
 - [ ] **Step 1: Copy the directory with new name**
 
 ```bash
-cp -r pdmrg2-gpu pdmrg-gpu-opt
+cp -r pdmrg-gpu-opt pdmrg-gpu-opt
 ```
 
 - [ ] **Step 2: Rename the source files**
 
 ```bash
 cd pdmrg-gpu-opt/src
-mv pdmrg2_gpu.h pdmrg_gpu_opt.h
-mv pdmrg2_gpu_impl.h pdmrg_gpu_opt_impl.h
-mv pdmrg2_gpu.cpp pdmrg_gpu_opt.cpp
-mv test_pdmrg2_gpu.cpp test_pdmrg_gpu_opt.cpp
+mv pdmrg_gpu_opt.h pdmrg_gpu_opt.h
+mv pdmrg_gpu_opt_impl.h pdmrg_gpu_opt_impl.h
+mv pdmrg_gpu_opt.cpp pdmrg_gpu_opt.cpp
+mv test_pdmrg_gpu_opt.cpp test_pdmrg_gpu_opt.cpp
 ```
 
 - [ ] **Step 3: Rename class and identifiers in all source files**
 
 In every `.h`, `.cpp` file in `pdmrg-gpu-opt/src/`:
-- Replace `PDMRG2GPU` → `PDMRGGPUOpt` (class name)
-- Replace `PDMRG2_GPU_H` → `PDMRG_GPU_OPT_H` (include guard)
-- Replace `pdmrg2_gpu.h` → `pdmrg_gpu_opt.h` (include directive)
-- Replace `pdmrg2_gpu_impl.h` → `pdmrg_gpu_opt_impl.h` (include directive)
-- Replace `PDMRG2_GPU_IMPL_H` → `PDMRG_GPU_OPT_IMPL_H` (include guard)
+- Replace `PDMRGGPUOpt` → `PDMRGGPUOpt` (class name)
+- Replace `PDMRG-OPT_GPU_H` → `PDMRG_GPU_OPT_H` (include guard)
+- Replace `pdmrg_gpu_opt.h` → `pdmrg_gpu_opt.h` (include directive)
+- Replace `pdmrg_gpu_opt_impl.h` → `pdmrg_gpu_opt_impl.h` (include directive)
+- Replace `PDMRG-OPT_GPU_IMPL_H` → `PDMRG_GPU_OPT_IMPL_H` (include guard)
 
 In `pdmrg_gpu_opt.cpp`:
 ```cpp
@@ -92,21 +92,21 @@ template class PDMRGGPUOpt<hipDoubleComplex>;
 - [ ] **Step 4: Update CMakeLists.txt**
 
 Change the target name and source files:
-- `pdmrg2_gpu` → `pdmrg_gpu_opt` (target name)
-- `src/test_pdmrg2_gpu.cpp` → `src/test_pdmrg_gpu_opt.cpp`
-- `src/pdmrg2_gpu.cpp` → `src/pdmrg_gpu_opt.cpp`
+- `pdmrg_gpu_opt` → `pdmrg_gpu_opt` (target name)
+- `src/test_pdmrg_gpu_opt.cpp` → `src/test_pdmrg_gpu_opt.cpp`
+- `src/pdmrg_gpu_opt.cpp` → `src/pdmrg_gpu_opt.cpp`
 - Update project name and status messages accordingly
 
 - [ ] **Step 5: Update test driver output strings**
 
 In `test_pdmrg_gpu_opt.cpp`, update the banner strings:
-- `"PDMRG2-GPU"` → `"PDMRG-GPU-OPT"` in all printf/cout statements
-- `"pdmrg2-gpu"` → `"pdmrg-gpu-opt"` in result output
+- `"PDMRG-OPT-GPU"` → `"PDMRG-GPU-OPT"` in all printf/cout statements
+- `"pdmrg-gpu-opt"` → `"pdmrg-gpu-opt"` in result output
 
-- [ ] **Step 6: Delete old pdmrg2-gpu directory**
+- [ ] **Step 6: Delete old pdmrg-gpu-opt directory**
 
 ```bash
-rm -rf pdmrg2-gpu
+rm -rf pdmrg-gpu-opt
 ```
 
 - [ ] **Step 7: Verify build locally (syntax check)**
@@ -116,13 +116,13 @@ Read through the renamed files and verify all identifiers are consistent.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add pdmrg-gpu-opt/ && git rm -r pdmrg2-gpu/
-git commit -m "refactor: rename pdmrg2-gpu to pdmrg-gpu-opt"
+git add pdmrg-gpu-opt/ && git rm -r pdmrg-gpu-opt/
+git commit -m "refactor: rename pdmrg-gpu-opt to pdmrg-gpu-opt"
 ```
 
 ---
 
-## Task 2: Rename pdmrg2-gpu in benchmark data
+## Task 2: Rename pdmrg-gpu-opt in benchmark data
 
 **Files:**
 - Modify: `benchmarks/paper_results/gpu_4way_results.csv`
@@ -131,16 +131,16 @@ git commit -m "refactor: rename pdmrg2-gpu to pdmrg-gpu-opt"
 
 - [ ] **Step 1: Replace in CSV files**
 
-In `gpu_4way_results.csv` and `summary.csv`, replace all occurrences of `pdmrg2-gpu` with `pdmrg-gpu-opt` in the `impl` column.
+In `gpu_4way_results.csv` and `summary.csv`, replace all occurrences of `pdmrg-gpu-opt` with `pdmrg-gpu-opt` in the `impl` column.
 
 - [ ] **Step 2: Replace in JSON file**
 
-In `results.json`, replace all `"pdmrg2-gpu"` with `"pdmrg-gpu-opt"`.
+In `results.json`, replace all `"pdmrg-gpu-opt"` with `"pdmrg-gpu-opt"`.
 
 - [ ] **Step 3: Verify counts**
 
 Count occurrences before and after to ensure all replacements happened:
-- `gpu_4way_results.csv`: 88 rows of pdmrg2-gpu → 88 rows of pdmrg-gpu-opt
+- `gpu_4way_results.csv`: 88 rows of pdmrg-gpu-opt → 88 rows of pdmrg-gpu-opt
 - `summary.csv`: 57 rows
 - `results.json`: 57 entries
 
@@ -148,18 +148,18 @@ Count occurrences before and after to ensure all replacements happened:
 
 ```bash
 git add benchmarks/paper_results/
-git commit -m "refactor: rename pdmrg2-gpu to pdmrg-gpu-opt in benchmark data"
+git commit -m "refactor: rename pdmrg-gpu-opt to pdmrg-gpu-opt in benchmark data"
 ```
 
 ---
 
 ## Task 3: Create dmrg2-gpu-opt (two-site + NS + Davidson)
 
-This is the largest task. The two-site geometry matches pdmrg2-gpu exactly, so Newton-Schulz and Block-Davidson port almost directly — only the multi-stream infrastructure is removed.
+This is the largest task. The two-site geometry matches pdmrg-gpu-opt exactly, so Newton-Schulz and Block-Davidson port almost directly — only the multi-stream infrastructure is removed.
 
 **Files:**
 - Create: `dmrg2-gpu-opt/` directory with 6 files
-- Reference: `dmrg2-gpu/src/` (baseline to copy) and `pdmrg2-gpu/src/` (algorithms to port, now at `pdmrg-gpu-opt/src/`)
+- Reference: `dmrg2-gpu/src/` (baseline to copy) and `pdmrg-gpu-opt/src/` (algorithms to port, now at `pdmrg-gpu-opt/src/`)
 
 ### Step-by-step:
 
@@ -364,7 +364,7 @@ Start from `dmrg2-gpu/src/dmrg2_gpu_impl.h`. The key changes:
 
 **D) Add newton_schulz_left function:**
 
-Port from `pdmrg-gpu-opt/src/pdmrg_gpu_opt_impl.h` (was pdmrg2_gpu_impl.h lines 766-852). Changes:
+Port from `pdmrg-gpu-opt/src/pdmrg_gpu_opt_impl.h` (was pdmrg_gpu_opt_impl.h lines 766-852). Changes:
 - Remove `si` parameter → use `stream_` and `rocblas_h_` directly
 - Remove `auto& ws = workspaces_[si]` → use `d_ns_gram_`, `d_ns_U_new_`, `d_heff_result_` directly
 - Replace `handles_[si]` → `rocblas_h_`
@@ -788,7 +788,7 @@ Expected: builds successfully, executable `pdmrg_gpu_opt` created.
 ssh hotaisle@23.183.40.75 '~/pdmrg-gpu-opt/build/pdmrg_gpu_opt 8 50 3 --ns-split --davidson'
 ```
 
-Expected: Heisenberg L=8 energy error < 1e-10. (This is just the rename, so should work identically to pdmrg2-gpu.)
+Expected: Heisenberg L=8 energy error < 1e-10. (This is just the rename, so should work identically to pdmrg-gpu-opt.)
 
 - [ ] **Step 4: Build dmrg2-gpu-opt on remote**
 

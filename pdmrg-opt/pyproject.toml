@@ -3,14 +3,14 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pdmrg2"
+name = "pdmrg-opt"
 version = "0.1.0"
-description = "PDMRG2: PROTOTYPE-ONLY parallel DMRG with GPU hooks (not for production use)"
+description = "PDMRG-OPT: Parallel DMRG with two-site primitives and QR canonization (experimental)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "MIT"}
 authors = [
-    {name = "PDMRG2 Contributors"}
+    {name = "PDMRG Contributors"}
 ]
 keywords = ["dmrg", "tensor networks", "quantum physics", "mpi", "parallel computing", "gpu", "prototype"]
 classifiers = [
@@ -36,13 +36,13 @@ gpu = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/YOUR_USERNAME/pdmrg2"
-Documentation = "https://github.com/YOUR_USERNAME/pdmrg2/blob/main/README.md"
-Repository = "https://github.com/YOUR_USERNAME/pdmrg2"
-"Bug Tracker" = "https://github.com/YOUR_USERNAME/pdmrg2/issues"
+Homepage = "https://github.com/yye00/dmrg-implementations"
+Documentation = "https://github.com/yye00/dmrg-implementations/blob/main/pdmrg-opt/README.md"
+Repository = "https://github.com/yye00/dmrg-implementations"
+"Bug Tracker" = "https://github.com/yye00/dmrg-implementations/issues"
 
 [project.scripts]
-pdmrg2 = "pdmrg.__main__:main"
+pdmrg-opt = "pdmrg.__main__:main"
 
 [tool.setuptools]
 packages = ["pdmrg"]

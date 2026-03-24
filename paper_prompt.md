@@ -59,7 +59,7 @@ All GPU implementations use:
 
 ### 2.3 Implementation NOT included and why
 
-**pdmrg2 (Python)**: Prototype with Newton-Schulz + Block-Davidson in Python. Not validated for benchmarking — served as algorithm development testbed before GPU port.
+**pdmrg-opt (Python)**: Prototype with Newton-Schulz + Block-Davidson in Python. Not validated for benchmarking — served as algorithm development testbed before GPU port.
 
 ---
 
@@ -306,7 +306,7 @@ opt and parallel variants.
 | dmrg2-gpu (D2-GPU) | 9 | 14.1% | 2-site GPU, rocsolver SVD |
 | quimb-dmrg2 (Q-D2) | 3 | 4.7% | Python CPU, best of 1-12 threads |
 | All opt variants | 0 | 0% | dmrg-gpu-opt, dmrg2-gpu-opt, pdmrg-gpu-opt |
-| All parallel variants | 0 | 0% | pdmrg-gpu, pdmrg, pdmrg2 |
+| All parallel variants | 0 | 0% | pdmrg-gpu, pdmrg, pdmrg-opt |
 
 64 total configs compared (converged runs only).
 
@@ -365,7 +365,7 @@ GPU (dmrg-gpu), pdmrg-gpu-opt loses every config. Corrected table:
 
 ### 6.6 Full Detailed Wins Table (all configs, all implementations, wall time in seconds)
 
-Legend: D1=dmrg-gpu, D1o=dmrg-gpu-opt, D2=dmrg2-gpu, D2o=dmrg2-gpu-opt, PD=pdmrg-gpu, PDo=pdmrg-gpu-opt, Q1=quimb-dmrg1, Q2=quimb-dmrg2, Ppy=pdmrg(python), P2py=pdmrg2(python)
+Legend: D1=dmrg-gpu, D1o=dmrg-gpu-opt, D2=dmrg2-gpu, D2o=dmrg2-gpu-opt, PD=pdmrg-gpu, PDo=pdmrg-gpu-opt, Q1=quimb-dmrg1, Q2=quimb-dmrg2, Ppy=pdmrg(python), POpy=pdmrg-opt(python)
 
 ```
 Model           L  chi Winner   WinTime   D1-GPU   D1-OPT   D2-GPU   D2-OPT   PD-GPU   PD-OPT     Q-D1     Q-D2    PD-PY   PD2-PY
@@ -649,7 +649,7 @@ these systematically, as they reveal fundamental limitations of different approa
   matrices of size (chi·d², chi·d²) = (3200, 3200) — the Lanczos eigensolver needs
   hundreds of these per sweep site.
 
-- **Python PDMRG (pdmrg, pdmrg2)** at L>=64: Pure numpy tensordot cannot compete
+- **Python PDMRG (pdmrg, pdmrg-opt)** at L>=64: Pure numpy tensordot cannot compete
   with compiled GPU/CPU-BLAS codes. Each contraction goes through Python interpreter
   overhead. At L=100 chi=128, pdmrg takes 599s (2x over timeout).
 
@@ -757,7 +757,7 @@ The benchmark matrix is not uniform across all implementations:
   dmrg2-gpu, dmrg2-gpu-opt) tested at L={16,32,64,128} × chi={20,50,128,256} ×
   3 models = 192 configs. Full coverage.
 
-- **pdmrg/pdmrg2 (Python)** were not tested at chi>=128 or L>=64 because preliminary
+- **pdmrg/pdmrg-opt (Python)** were not tested at chi>=128 or L>=64 because preliminary
   runs showed they would all timeout (Python numpy is ~100x slower than GPU at these sizes).
 
 ---

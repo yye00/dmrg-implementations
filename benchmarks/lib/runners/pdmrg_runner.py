@@ -1,5 +1,5 @@
 """
-Runner for MPI-based parallel DMRG implementations: pdmrg, pdmrg2, pdmrg-cotengra, a2dmrg.
+Runner for MPI-based parallel DMRG implementations: pdmrg, pdmrg-opt, pdmrg-cotengra, a2dmrg.
 
 Launches via mpirun subprocess with a temporary worker script.
 """

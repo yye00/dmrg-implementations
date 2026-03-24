@@ -1,5 +1,5 @@
 """
-Runner for GPU DMRG implementations: dmrg-gpu, dmrg2-gpu, pdmrg-gpu, pdmrg2-gpu.
+Runner for GPU DMRG implementations: dmrg-gpu, dmrg2-gpu, pdmrg-gpu, pdmrg-gpu-opt.
 
 Invokes compiled C++/HIP executables via subprocess.
 """

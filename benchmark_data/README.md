@@ -4,7 +4,7 @@ This directory contains pre-generated, serialized benchmark problems for DMRG im
 
 ## Purpose
 
-All DMRG implementations (quimb DMRG1, quimb DMRG2, PDMRG, PDMRG2, A2DMRG) load **identical** inputs from disk to ensure fair comparison and reproducibility.
+All DMRG implementations (quimb DMRG1, quimb DMRG2, PDMRG, PDMRG-OPT, A2DMRG) load **identical** inputs from disk to ensure fair comparison and reproducibility.
 
 ## Directory Structure
 

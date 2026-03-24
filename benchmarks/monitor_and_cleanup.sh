@@ -187,19 +187,19 @@ else:
     print("GPU implementations have been updated to default to GPU (rocsolver) SVD.")
 
 # Hybrid results
-hybrid = [r for r in results if r.get("threads") and r.get("np") and r["impl"] in ("pdmrg","pdmrg2")]
+hybrid = [r for r in results if r.get("threads") and r.get("np") and r["impl"] in ("pdmrg","pdmrg-opt")]
 print(f"\n## Hybrid MPI+threads: {len(hybrid)} results")
 
 # What's missing
 print("\n## What Remains")
-print("- GPU benchmarks (pdmrg-gpu, pdmrg2-gpu) may need running/completion with GPU SVD")
+print("- GPU benchmarks (pdmrg-gpu, pdmrg-gpu-opt) may need running/completion with GPU SVD")
 print("- Any timed-out cases at large L/chi")
 print("- The chi>=65 Heisenberg divergence was a CPU SVD (OpenBLAS) bug; GPU SVD works correctly")
 
 print("\n## Key Findings")
 print("- **CPU SVD bug**: OpenBLAS LAPACK SVD causes divergence at chi>=65 in two-site DMRG")
 print("- **GPU SVD works**: rocsolver SVD has no such issue, now the default for all GPU implementations")
-print("- **Affected files**: dmrg2-gpu, pdmrg-gpu, pdmrg2-gpu all updated to `use_cpu_svd_ = false`")
+print("- **Affected files**: dmrg2-gpu, pdmrg-gpu, pdmrg-gpu-opt all updated to `use_cpu_svd_ = false`")
 DOCEOF
 
 log "Generated BENCHMARK_STATUS.md"
@@ -212,15 +212,15 @@ git add benchmarks/paper_results/results.json \
        dmrg2-gpu/src/test_dmrg2_gpu.cpp \
        pdmrg-gpu/src/pdmrg_gpu_impl.h \
        pdmrg-gpu/src/test_pdmrg_gpu.cpp \
-       pdmrg2-gpu/src/pdmrg2_gpu_impl.h \
-       pdmrg2-gpu/src/test_pdmrg2_gpu.cpp \
+       pdmrg-gpu-opt/src/pdmrg_gpu_opt_impl.h \
+       pdmrg-gpu-opt/src/test_pdmrg_gpu_opt.cpp \
        2>/dev/null || true
 
 if ! git diff --cached --quiet 2>/dev/null; then
     git commit -m "$(cat <<'COMMITEOF'
 feat(benchmarks): save benchmark results and switch GPU SVD default
 
-- All GPU implementations (dmrg2-gpu, pdmrg-gpu, pdmrg2-gpu) now default
+- All GPU implementations (dmrg2-gpu, pdmrg-gpu, pdmrg-gpu-opt) now default
   to GPU (rocsolver) SVD instead of CPU LAPACK SVD
 - CPU SVD (OpenBLAS) had a divergence bug at chi>=65 in two-site DMRG
 - GPU rocsolver SVD works correctly at all bond dimensions

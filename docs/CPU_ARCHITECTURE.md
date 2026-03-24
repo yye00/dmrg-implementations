@@ -5,18 +5,18 @@
 | Package | Algorithm | Reference |
 |---------|-----------|-----------|
 | `pdmrg/` | Real-Space Parallel DMRG | Stoudenmire & White 2013 |
-| `pdmrg2/` | Same + BLAS-3 GPU-prep methods | Stoudenmire & White 2013 |
+| `pdmrg-opt/` | Same + BLAS-3 GPU-prep methods | Stoudenmire & White 2013 |
 | `a2dmrg/` | Additive Two-Level DMRG | Grigori & Hassan 2025 |
 
 All three require `np >= 2` (parallel-only algorithms).
 
 ---
 
-## PDMRG vs PDMRG2 Differences
+## PDMRG vs PDMRG-OPT Differences
 
-PDMRG is the reference implementation. PDMRG2 is identical except for two BLAS-3 substitutions:
+PDMRG is the reference implementation. PDMRG-OPT is identical except for two BLAS-3 substitutions:
 
-| Component | PDMRG (reference) | PDMRG2 (GPU-prep) |
+| Component | PDMRG (reference) | PDMRG-OPT (GPU-prep) |
 |-----------|-------------------|-------------------|
 | Eigensolver | `scipy.sparse.linalg.eigsh` (Lanczos) | `block_davidson` with `eigsh` fallback |
 | Canonization | `np.linalg.qr` | `newton_schulz_polar` with QR fallback |
@@ -39,7 +39,7 @@ PDMRG is the reference implementation. PDMRG2 is identical except for two BLAS-3
 - Falls back to `np.linalg.qr` for wide matrices (m < n, chain boundaries)
 - Only affects gauge choice, not physics
 
-### What was removed from PDMRG2
+### What was removed from PDMRG-OPT
 - `rsvd_cholesky` — randomized SVD, errors compound across sweeps
 - Was never safe for boundary merges (V = Lambda^-1 inverts singular values)
 
@@ -119,7 +119,7 @@ For the GPU port, contraction paths should be verified with cotengra and potenti
 
 ## Algorithm Structure
 
-### PDMRG / PDMRG2 Sweep Pattern (Stoudenmire & White 2013)
+### PDMRG / PDMRG-OPT Sweep Pattern (Stoudenmire & White 2013)
 
 ```
 Phase 0: Serial warmup (quimb DMRG2 on rank 0)
@@ -183,7 +183,7 @@ pdmrg/pdmrg/
     distribute.py      — MPS distribution across ranks
     communication.py   — MPI exchange utilities
 
-pdmrg2/pdmrg/
+pdmrg-opt/pdmrg/
   (same structure as pdmrg, plus:)
   numerics/linalg_utils.py  — block_davidson, newton_schulz_polar
 

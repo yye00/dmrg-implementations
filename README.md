@@ -10,7 +10,7 @@ This repository contains **in-house MPI-parallel DMRG implementations** validate
 
 - **PDMRG**: Parallel two-site DMRG with MPI domain decomposition and boundary merge protocol
 - **A2DMRG**: Additive two-level DMRG with parallel warmup and coarse-space correction
-- **PDMRG2**: ⚠️ **Specification only** — GEMM-optimized CPU implementation (see `pdmrg2_gpu.md`)
+- **PDMRG-OPT**: ⚠️ **Specification only** — GEMM-optimized CPU implementation (see `pdmrg_gpu_opt.md`)
 - **PDMRG-GPU**: 🔬 **Experimental** — GPU-accelerated implementation using hipTensor/rocBLAS (see `pdmrg-gpu/`)
 - **DMRG-GPU**: GPU-native single-site DMRG using rocBLAS/rocSOLVER on AMD MI300X (see `dmrg-gpu/`)
 
@@ -48,7 +48,7 @@ All implementations achieve machine precision agreement (ΔE < 1e-14) on correct
 ├── reports/                 # Performance and analysis reports
 ├── debug/                   # Debugging utilities
 ├── IMPLEMENTATION_MATRIX.md # Comprehensive implementation taxonomy
-└── pdmrg2_gpu.md            # PDMRG2 CPU optimization specification
+└── pdmrg_gpu_opt.md            # PDMRG-OPT CPU optimization specification
 ```
 
 ## Known Issues and Current Status
@@ -113,9 +113,9 @@ a2dmrg/venv/bin/python run_a2dmrg_np1.py
 
 ## Development
 
-### PDMRG2 CPU Optimization Plan
+### PDMRG-OPT CPU Optimization Plan
 
-See `pdmrg2_gpu.md` for the PDMRG2 specification. **Note**: Despite the filename, this document describes **CPU-level GEMM optimizations**, not GPU implementation. It prepares the mathematical architecture for potential future GPU porting by replacing memory-bandwidth-bound operations (BLAS-2) with compute-bound operations (BLAS-3).
+See `pdmrg_gpu_opt.md` for the PDMRG-OPT specification. **Note**: Despite the filename, this document describes **CPU-level GEMM optimizations**, not GPU implementation. It prepares the mathematical architecture for potential future GPU porting by replacing memory-bandwidth-bound operations (BLAS-2) with compute-bound operations (BLAS-3).
 
 Key planned changes:
 - Block-Davidson (LOBPCG) local solver

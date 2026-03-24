@@ -39,13 +39,13 @@ IMPLEMENTATIONS = {
         "entry": "pdmrg.dmrg",
         "function": "pdmrg_main",
     },
-    "pdmrg2": {
+    "pdmrg-opt": {
         "type": "cpu-parallel",
-        "description": "Parallel DMRG two-site (numpy, MPI)",
+        "description": "Parallel DMRG with two-site primitives and QR canonization (numpy, MPI)",
         "supports_threads": True,
         "supports_np": True,
         "runner": "pdmrg",
-        "package": "pdmrg2",
+        "package": "pdmrg-opt",
         "entry": "pdmrg.dmrg",
         "function": "pdmrg_main",
     },
@@ -97,13 +97,13 @@ IMPLEMENTATIONS = {
         "runner": "gpu",
         "executable": "pdmrg-gpu/build/pdmrg_gpu",
     },
-    "pdmrg2-gpu": {
+    "pdmrg-gpu-opt": {
         "type": "gpu-parallel",
-        "description": "GPU parallel DMRG two-site (HIP streams)",
+        "description": "GPU parallel DMRG with Newton-Schulz + Block-Davidson (HIP streams)",
         "supports_threads": False,
         "supports_np": True,
         "runner": "gpu",
-        "executable": "pdmrg2-gpu/build/pdmrg2_gpu",
+        "executable": "pdmrg-gpu-opt/build/pdmrg_gpu_opt",
     },
 }
 

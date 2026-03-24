@@ -76,7 +76,7 @@ def a2dmrg_main(
 
     DEFAULT CONFIGURATION (2026-03-07):
     - warmup_sweeps=2 for practical convergence
-    - Matches PDMRG/PDMRG2 warmup configuration
+    - Matches PDMRG/PDMRG-OPT warmup configuration
     - Serial warmup improves initial state quality and convergence rate
     - Paper-faithful mode (warmup_sweeps=0) available via experimental_nonpaper flag
 

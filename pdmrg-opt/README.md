@@ -1,4 +1,4 @@
-# PDMRG2: Parallel DMRG (Two-Site Primitive Variant)
+# PDMRG-OPT: Parallel DMRG (Two-Site Primitive Variant)
 
 ## ⚠️ **PROTOTYPE-ONLY - NOT VALIDATED FOR BENCHMARKING**
 
@@ -22,7 +22,7 @@
 
 ## Overview
 
-PDMRG2 is an **experimental variant** of parallel DMRG that uses two-site DMRG primitives with QR canonization sweeps and boundary merges. This approach differs from the validated PDMRG implementation.
+PDMRG-OPT is an **experimental variant** of parallel DMRG that uses two-site DMRG primitives with QR canonization sweeps and boundary merges. This approach differs from the validated PDMRG implementation.
 
 **Implementation Details:**
 - Built on quimb's two-site DMRG primitives
@@ -67,7 +67,7 @@ pip install -e .
 
 **⚠️ REMINDER:** This is a prototype implementation. Use `../pdmrg/` or `../a2dmrg/` for validated results.
 
-**Note:** PDMRG2 requires `np >= 2` (parallel algorithm).
+**Note:** PDMRG-OPT requires `np >= 2` (parallel algorithm).
 
 ### Parallel Execution (minimum 2 processes)
 ```bash

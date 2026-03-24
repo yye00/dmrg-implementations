@@ -17,7 +17,7 @@ members = [
     "a2dmrg",
     "dmrg-implementations",
     "pdmrg",
-    "pdmrg2",
+    "pdmrg-opt",
 ]
 
 [[package]]
@@ -2115,9 +2115,9 @@ version = "0.1.0"
 source = { editable = "pdmrg" }
 
 [[package]]
-name = "pdmrg2"
+name = "pdmrg-opt"
 version = "0.1.0"
-source = { editable = "pdmrg2" }
+source = { editable = "pdmrg-opt" }
 
 [package.optional-dependencies]
 gpu = [

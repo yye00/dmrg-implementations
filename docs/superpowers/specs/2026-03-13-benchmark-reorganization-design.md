@@ -19,9 +19,9 @@ benchmarks/
 │   └── runners/
 │       ├── __init__.py
 │       ├── quimb_runner.py         # quimb DMRG1/2
-│       ├── pdmrg_runner.py         # pdmrg, pdmrg2, pdmrg-cotengra
+│       ├── pdmrg_runner.py         # pdmrg, pdmrg-opt, pdmrg-cotengra
 │       ├── a2dmrg_runner.py        # a2dmrg
-│       └── gpu_runner.py           # dmrg-gpu, dmrg2-gpu, pdmrg-gpu, pdmrg2-gpu
+│       └── gpu_runner.py           # dmrg-gpu, dmrg2-gpu, pdmrg-gpu, pdmrg-gpu-opt
 ├── data/
 │   ├── generate.py                 # Binary MPS/MPO generation (seed=42)
 │   ├── verify.py                   # Loader verification
@@ -63,13 +63,13 @@ IMPLEMENTATIONS = {
     "quimb-dmrg1":     {"type": "cpu-serial",   "supports_threads": True},
     "quimb-dmrg2":     {"type": "cpu-serial",   "supports_threads": True},
     "pdmrg":           {"type": "cpu-parallel",  "supports_np": True, "supports_threads": True},
-    "pdmrg2":          {"type": "cpu-parallel",  "supports_np": True, "supports_threads": True},
+    "pdmrg-opt":          {"type": "cpu-parallel",  "supports_np": True, "supports_threads": True},
     "pdmrg-cotengra":  {"type": "cpu-parallel",  "supports_np": True, "supports_threads": True},
     "a2dmrg":          {"type": "cpu-parallel",  "supports_np": True, "supports_threads": True},
     "dmrg-gpu":        {"type": "gpu-serial"},
     "dmrg2-gpu":       {"type": "gpu-serial"},
     "pdmrg-gpu":       {"type": "gpu-parallel",  "supports_np": True},
-    "pdmrg2-gpu":      {"type": "gpu-parallel",  "supports_np": True},
+    "pdmrg-gpu-opt":      {"type": "gpu-parallel",  "supports_np": True},
 }
 ```
 

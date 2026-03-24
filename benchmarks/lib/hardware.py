@@ -41,7 +41,7 @@ def get_venv_python(package_name):
     """Get path to venv Python for a given implementation package.
 
     Args:
-        package_name: e.g. 'pdmrg', 'pdmrg2', 'a2dmrg', 'pdmrg-cotengra'
+        package_name: e.g. 'pdmrg', 'pdmrg-opt', 'a2dmrg', 'pdmrg-cotengra'
     """
     root = get_repo_root()
     venv_path = os.path.join(root, package_name, "venv", "bin", "python")

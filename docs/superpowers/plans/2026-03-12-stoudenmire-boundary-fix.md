@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the O(L) full-chain coupling sweep in pdmrg-gpu and pdmrg2-gpu with O(P) boundary-only merge+optimize per Stoudenmire & White (arXiv:1301.3494), using staggered sweep patterns so boundary environments are always fresh.
+**Goal:** Replace the O(L) full-chain coupling sweep in pdmrg-gpu and pdmrg-gpu-opt with O(P) boundary-only merge+optimize per Stoudenmire & White (arXiv:1301.3494), using staggered sweep patterns so boundary environments are always fresh.
 
 **Architecture:** The current outer loop does parallel segment sweeps (O(L/P)) then a full-chain serial sweep (O(L)) to couple segments, negating parallelism. The fix uses a staggered sweep pattern: even segments sweep LR while odd sweep RL, then boundary bonds where neighbors meet are optimized, then directions reverse for the second set of boundaries. This ensures fresh L_env and R_env at each boundary when it's optimized.
 
@@ -18,8 +18,8 @@
 |------|--------|----------------|
 | `pdmrg-gpu/src/pdmrg_gpu.h` | Modify | Add `merge_and_optimize_boundaries()` declaration, remove `boundary_coupling_sweep` |
 | `pdmrg-gpu/src/pdmrg_gpu_impl.h` | Modify | Implement `merge_and_optimize_boundaries()`, rewrite `run()` outer loop with staggered sweeps |
-| `pdmrg2-gpu/src/pdmrg2_gpu.h` | Modify | Same header changes as pdmrg-gpu |
-| `pdmrg2-gpu/src/pdmrg2_gpu_impl.h` | Modify | Same impl changes as pdmrg-gpu |
+| `pdmrg-gpu-opt/src/pdmrg_gpu_opt.h` | Modify | Same header changes as pdmrg-gpu |
+| `pdmrg-gpu-opt/src/pdmrg_gpu_opt_impl.h` | Modify | Same impl changes as pdmrg-gpu |
 
 No new files needed — this is a focused refactor of the outer loop in both implementations.
 
@@ -305,16 +305,16 @@ Common failure modes:
 
 ---
 
-## Chunk 2: pdmrg2-gpu Implementation
+## Chunk 2: pdmrg-gpu-opt Implementation
 
-### Task 5: Add `merge_and_optimize_boundaries()` to pdmrg2-gpu header
+### Task 5: Add `merge_and_optimize_boundaries()` to pdmrg-gpu-opt header
 
 **Files:**
-- Modify: `pdmrg2-gpu/src/pdmrg2_gpu.h` (replace `boundary_coupling_sweep` declaration)
+- Modify: `pdmrg-gpu-opt/src/pdmrg_gpu_opt.h` (replace `boundary_coupling_sweep` declaration)
 
 - [ ] **Step 1: Find and replace the declaration**
 
-In `pdmrg2-gpu/src/pdmrg2_gpu.h`, replace:
+In `pdmrg-gpu-opt/src/pdmrg_gpu_opt.h`, replace:
 ```cpp
     double boundary_coupling_sweep(int W = 4);
 ```
@@ -325,10 +325,10 @@ with:
 
 ---
 
-### Task 6: Implement Stoudenmire coupling in pdmrg2-gpu
+### Task 6: Implement Stoudenmire coupling in pdmrg-gpu-opt
 
 **Files:**
-- Modify: `pdmrg2-gpu/src/pdmrg2_gpu_impl.h` (replace `boundary_coupling_sweep`, rewrite `run()` outer loop)
+- Modify: `pdmrg-gpu-opt/src/pdmrg_gpu_opt_impl.h` (replace `boundary_coupling_sweep`, rewrite `run()` outer loop)
 
 - [ ] **Step 1: Replace `boundary_coupling_sweep` with `merge_and_optimize_boundaries`**
 
@@ -341,7 +341,7 @@ Find the `boundary_coupling_sweep` method and replace it entirely with:
 // ============================================================================
 
 template<typename Scalar>
-double PDMRG2GPU<Scalar>::merge_and_optimize_boundaries(int parity) {
+double PDMRGGPUOpt<Scalar>::merge_and_optimize_boundaries(int parity) {
     double energy = 0.0;
     int si = 0;
 
@@ -366,7 +366,7 @@ double PDMRG2GPU<Scalar>::merge_and_optimize_boundaries(int parity) {
 
 In the `run()` method, find the section starting with `// === Main PDMRG loop ===` and replace through the end of the method.
 
-The new outer loop uses identical staggered sweep logic as pdmrg-gpu, but with `PDMRG2GPU` type in the parallel_sweep lambda:
+The new outer loop uses identical staggered sweep logic as pdmrg-gpu, but with `PDMRGGPUOpt` type in the parallel_sweep lambda:
 
 ```cpp
     // === Main PDMRG loop (Stoudenmire staggered sweeps) ===
@@ -390,7 +390,7 @@ The new outer loop uses identical staggered sweep logic as pdmrg-gpu, but with `
 
         for (int local_sw = 0; local_sw < n_local_sweeps; local_sw++) {
             // Half-sweep 1: even segments LR, odd segments RL
-            parallel_sweep([](PDMRG2GPU* self, int k) {
+            parallel_sweep([](PDMRGGPUOpt* self, int k) {
                 if (k % 2 == 0) self->segment_sweep_LR(k);
                 else             self->segment_sweep_RL(k);
             });
@@ -399,7 +399,7 @@ The new outer loop uses identical staggered sweep logic as pdmrg-gpu, but with `
             energy_ = merge_and_optimize_boundaries(0);
 
             // Half-sweep 2: even segments RL, odd segments LR
-            parallel_sweep([](PDMRG2GPU* self, int k) {
+            parallel_sweep([](PDMRGGPUOpt* self, int k) {
                 if (k % 2 == 0) self->segment_sweep_RL(k);
                 else             self->segment_sweep_LR(k);
             });
@@ -438,11 +438,11 @@ Keep the existing timing printout for parallel/coupling breakdown (adjust labels
 
 Keep the polish phase and total wall time printout from the existing code, unchanged.
 
-- [ ] **Step 3: Commit pdmrg2-gpu changes**
+- [ ] **Step 3: Commit pdmrg-gpu-opt changes**
 
 ```bash
-git add pdmrg2-gpu/src/pdmrg2_gpu.h pdmrg2-gpu/src/pdmrg2_gpu_impl.h
-git commit -m "feat(pdmrg2-gpu): Stoudenmire boundary coupling with staggered sweeps
+git add pdmrg-gpu-opt/src/pdmrg_gpu_opt.h pdmrg-gpu-opt/src/pdmrg_gpu_opt_impl.h
+git commit -m "feat(pdmrg-gpu-opt): Stoudenmire boundary coupling with staggered sweeps
 
 Same fix as pdmrg-gpu: replace O(L) full-chain coupling with O(P)
 boundary-only merge+optimize using staggered sweep pattern."
@@ -450,7 +450,7 @@ boundary-only merge+optimize using staggered sweep pattern."
 
 ---
 
-### Task 7: Build and test pdmrg2-gpu on remote MI300X
+### Task 7: Build and test pdmrg-gpu-opt on remote MI300X
 
 **Files:** None (build/test only)
 
@@ -461,31 +461,31 @@ git push origin main
 ssh hotaisle@23.183.40.82 'cd ~/dmrg-implementations && git pull'
 ```
 
-- [ ] **Step 2: Build pdmrg2-gpu**
+- [ ] **Step 2: Build pdmrg-gpu-opt**
 
 ```bash
-ssh hotaisle@23.183.40.82 'cd ~/dmrg-implementations/pdmrg2-gpu/build && cmake .. -DGPU_TARGETS=gfx942 && make -j$(nproc) 2>&1'
+ssh hotaisle@23.183.40.82 'cd ~/dmrg-implementations/pdmrg-gpu-opt/build && cmake .. -DGPU_TARGETS=gfx942 && make -j$(nproc) 2>&1'
 ```
 Expected: Clean compile.
 
 - [ ] **Step 3: Run Heisenberg L=8 chi=32 segments=2**
 
 ```bash
-ssh hotaisle@23.183.40.82 'cd ~/dmrg-implementations/pdmrg2-gpu/build && ./pdmrg2_gpu 8 32 20 --segments 2 --warmup 3'
+ssh hotaisle@23.183.40.82 'cd ~/dmrg-implementations/pdmrg-gpu-opt/build && ./pdmrg_gpu_opt 8 32 20 --segments 2 --warmup 3'
 ```
 Expected: Energy = -3.374932598688 (error < 1e-10)
 
 - [ ] **Step 4: Run Heisenberg L=32 chi=64 segments=4**
 
 ```bash
-ssh hotaisle@23.183.40.82 'cd ~/dmrg-implementations/pdmrg2-gpu/build && ./pdmrg2_gpu 32 64 20 --segments 4 --warmup 3'
+ssh hotaisle@23.183.40.82 'cd ~/dmrg-implementations/pdmrg-gpu-opt/build && ./pdmrg_gpu_opt 32 64 20 --segments 4 --warmup 3'
 ```
 Expected: Energy = -13.997315618007 (error < 1e-10)
 
 - [ ] **Step 5: Run Josephson L=6 chi=32 segments=2**
 
 ```bash
-ssh hotaisle@23.183.40.82 'cd ~/dmrg-implementations/pdmrg2-gpu/build && ./pdmrg2_gpu 6 32 20 --segments 2 --warmup 3 --josephson'
+ssh hotaisle@23.183.40.82 'cd ~/dmrg-implementations/pdmrg-gpu-opt/build && ./pdmrg_gpu_opt 6 32 20 --segments 2 --warmup 3 --josephson'
 ```
 Expected: Energy = -1.748843818181493 (error < 1e-10)
 
@@ -508,13 +508,13 @@ ssh hotaisle@23.183.40.82 'cd ~/dmrg-implementations/pdmrg-gpu/build && \
 
 Record: wall time, outer iterations to converge, parallel vs boundary coupling time breakdown.
 
-- [ ] **Step 2: Run pdmrg2-gpu scalability series**
+- [ ] **Step 2: Run pdmrg-gpu-opt scalability series**
 
 ```bash
-ssh hotaisle@23.183.40.82 'cd ~/dmrg-implementations/pdmrg2-gpu/build && \
-  echo "=== segments=2 ===" && ./pdmrg2_gpu 64 128 20 --segments 2 --warmup 3 && \
-  echo "=== segments=4 ===" && ./pdmrg2_gpu 64 128 20 --segments 4 --warmup 3 && \
-  echo "=== segments=8 ===" && ./pdmrg2_gpu 64 128 20 --segments 8 --warmup 3'
+ssh hotaisle@23.183.40.82 'cd ~/dmrg-implementations/pdmrg-gpu-opt/build && \
+  echo "=== segments=2 ===" && ./pdmrg_gpu_opt 64 128 20 --segments 2 --warmup 3 && \
+  echo "=== segments=4 ===" && ./pdmrg_gpu_opt 64 128 20 --segments 4 --warmup 3 && \
+  echo "=== segments=8 ===" && ./pdmrg_gpu_opt 64 128 20 --segments 8 --warmup 3'
 ```
 
 - [ ] **Step 3: Compare results**
@@ -535,11 +535,11 @@ The key metric: coupling phase should now be negligible (O(P) boundary bonds) vs
 - `d_R_envs_[bsite + 2]` — right environment PAST the boundary (from right segment's last RL sweep)
 - `d_WW_[bsite]` — fused two-site MPO (precomputed, always valid)
 
-### Difference between pdmrg-gpu and pdmrg2-gpu segment sweeps
+### Difference between pdmrg-gpu and pdmrg-gpu-opt segment sweeps
 
 **pdmrg-gpu segment sweeps** are minimal — just optimize+env_update in a loop. They rely on environments being pre-built (from warmup or previous iteration).
 
-**pdmrg2-gpu segment sweeps** are self-contained — they pre-canonicalize the segment via Newton-Schulz and rebuild all environments before sweeping. This makes them more robust but costlier.
+**pdmrg-gpu-opt segment sweeps** are self-contained — they pre-canonicalize the segment via Newton-Schulz and rebuild all environments before sweeping. This makes them more robust but costlier.
 
 Both use the exact same `merge_and_optimize_boundaries()` implementation since `optimize_bond()` handles the eigensolver difference internally (Lanczos vs Block-Davidson).
 

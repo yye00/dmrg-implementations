@@ -1,8 +1,8 @@
-# PDMRG2-GPU Implementation Prompt
+# PDMRG-OPT-GPU Implementation Prompt
 
 ## Objective
 
-Build `pdmrg2-gpu/`, a new GPU implementation of stream-parallel DMRG that ports the algorithmic improvements from the Python `pdmrg2/` codebase onto the proven GPU infrastructure of `pdmrg-gpu/` and `dmrg2-gpu/`. The two key algorithmic changes are:
+Build `pdmrg-gpu-opt/`, a new GPU implementation of stream-parallel DMRG that ports the algorithmic improvements from the Python `pdmrg-opt/` codebase onto the proven GPU infrastructure of `pdmrg-gpu/` and `dmrg2-gpu/`. The two key algorithmic changes are:
 
 1. **Newton-Schulz polar decomposition** replaces QR/SVD for MPS canonicalization
 2. **Block-Davidson eigensolver** replaces Lanczos for the ground-state optimization
@@ -18,7 +18,7 @@ The current SVD path:
 theta (chi*d × d*chi) → LAPACK dgesvd → U, S, Vh → truncate → MPS tensors
 ```
 
-The pdmrg2 approach replaces this with Newton-Schulz polar decomposition during canonicalization (not at the SVD split point, but during the sweep gauge shifts). Meanwhile, Block-Davidson replaces Lanczos for the eigensolver, converting the BLAS-2 dominated matvec loop into a BLAS-3 subspace projection.
+The pdmrg-opt approach replaces this with Newton-Schulz polar decomposition during canonicalization (not at the SVD split point, but during the sweep gauge shifts). Meanwhile, Block-Davidson replaces Lanczos for the eigensolver, converting the BLAS-2 dominated matvec loop into a BLAS-3 subspace projection.
 
 ## Hardware Target
 
@@ -29,13 +29,13 @@ The pdmrg2 approach replaces this with Newton-Schulz polar decomposition during 
 ## Repository Layout
 
 ```
-pdmrg2-gpu/
+pdmrg-gpu-opt/
 ├── CMakeLists.txt
 └── src/
-    ├── pdmrg2_gpu.h           # Class declaration
-    ├── pdmrg2_gpu_impl.h      # Full template implementation
+    ├── pdmrg_gpu_opt.h           # Class declaration
+    ├── pdmrg_gpu_opt_impl.h      # Full template implementation
     ├── scalar_traits.h        # Reuse from pdmrg-gpu + new kernels
-    └── test_pdmrg2_gpu.cpp    # Test harness (same as pdmrg-gpu)
+    └── test_pdmrg_gpu_opt.cpp    # Test harness (same as pdmrg-gpu)
 ```
 
 ## Existing Code to Reuse
@@ -57,7 +57,7 @@ From `dmrg2-gpu/src/`:
 
 ### Algorithm
 
-Replace QR/SVD-based canonicalization with iterative polar decomposition. The Python implementation is in `pdmrg2/pdmrg/numerics/linalg_utils.py`:
+Replace QR/SVD-based canonicalization with iterative polar decomposition. The Python implementation is in `pdmrg-opt/pdmrg/numerics/linalg_utils.py`:
 
 ```python
 def newton_schulz_polar(A, tol=1e-10):
@@ -112,7 +112,7 @@ Iteration k:
 
 **Where to use Newton-Schulz (replacing SVD/QR in current code):**
 1. **Segment sweep canonicalization**: After optimizing bond (site, site+1), we currently do SVD to split theta into MPS[site] and MPS[site+1]. Instead, reshape theta into the left-canonical shape and apply Newton-Schulz to get the isometric factor (U) and remainder (P). The SVD truncation step is replaced by truncating P's columns based on approximate singular values (the diagonal of P, which approximates S).
-2. **Pre-sweep gauge fixing**: `canonize_block()` in pdmrg2 right-canonizes all segment sites before a LR sweep and vice versa. Each site canonicalization is one Newton-Schulz call.
+2. **Pre-sweep gauge fixing**: `canonize_block()` in pdmrg-opt right-canonizes all segment sites before a LR sweep and vice versa. Each site canonicalization is one Newton-Schulz call.
 3. **Environment rebuild canonicalization**: Before rebuilding environments, ensure canonical form via Newton-Schulz.
 
 **Important: Newton-Schulz does NOT provide singular values.** For the bond optimization SVD split where we need truncation based on singular values, we have two options:
@@ -152,7 +152,7 @@ __global__ void scaled_identity_minus(Scalar* A, int n, Scalar alpha) {
 
 ### Algorithm
 
-Replace Lanczos with Block-Davidson (LOBPCG-style subspace expansion). The Python implementation is in `pdmrg2/pdmrg/numerics/linalg_utils.py`:
+Replace Lanczos with Block-Davidson (LOBPCG-style subspace expansion). The Python implementation is in `pdmrg-opt/pdmrg/numerics/linalg_utils.py`:
 
 ```python
 def block_davidson(matvec, dim, x_init, b=4, max_iter=30, tol=1e-10):
@@ -274,7 +274,7 @@ Block-Davidson may fail to converge for:
 
 ### Segment Sweep with Newton-Schulz Canonicalization
 
-The pdmrg2 Python code does the following before each segment sweep:
+The pdmrg-opt Python code does the following before each segment sweep:
 
 ```python
 # Before LR sweep: right-canonize all sites (polar decomposition)
@@ -352,7 +352,7 @@ Same as current pdmrg-gpu: full-chain env rebuild + LR + RL sweep on stream 0. B
 
 ### What Changes
 
-| Component | Current (pdmrg-gpu) | New (pdmrg2-gpu) | Expected Impact |
+| Component | Current (pdmrg-gpu) | New (pdmrg-gpu-opt) | Expected Impact |
 |-----------|---------------------|-------------------|-----------------|
 | Eigensolver | Lanczos (BLAS-2) | Block-Davidson (BLAS-3) | Neutral-to-positive: more total FLOPs but better GPU utilization |
 | Bond split | Full SVD (chi*d × d*chi) | Newton-Schulz + small SVD | **Major**: replaces the 97-98% bottleneck with GEMM iterations |
@@ -382,7 +382,7 @@ Even accounting for the small P-matrix SVD and data movement, this could be a **
 
 If Newton-Schulz eliminates 90% of the SVD cost (conservative estimate):
 
-| System | dmrg2-gpu | pdmrg-gpu (current) | pdmrg2-gpu (projected) |
+| System | dmrg2-gpu | pdmrg-gpu (current) | pdmrg-gpu-opt (projected) |
 |--------|-----------|----------------------|------------------------|
 | L=64 chi=128 | 27.0s | 24.1s | ~5-8s |
 | L=64 chi=256 | 141.7s | 119s | ~15-25s |
@@ -423,16 +423,16 @@ All optimizations must preserve accuracy to < 1e-10 on these tests:
 ```bash
 ssh hotaisle@23.183.40.82
 cd ~/dmrg-implementations && git pull
-cd pdmrg2-gpu/build && cmake .. -DGPU_TARGETS=gfx942 && make -j$(nproc)
+cd pdmrg-gpu-opt/build && cmake .. -DGPU_TARGETS=gfx942 && make -j$(nproc)
 
 # Correctness (all must show PASS with error < 1e-10):
-./pdmrg2_gpu 8 32 5 --segments 2 --warmup 3
-./pdmrg2_gpu 32 64 3 --segments 4 --warmup 3
-./pdmrg2_gpu 6 32 5 --segments 2 --warmup 3 --josephson
+./pdmrg_gpu_opt 8 32 5 --segments 2 --warmup 3
+./pdmrg_gpu_opt 32 64 3 --segments 4 --warmup 3
+./pdmrg_gpu_opt 6 32 5 --segments 2 --warmup 3 --josephson
 
 # Performance benchmarks (compare to dmrg2-gpu and pdmrg-gpu):
-./pdmrg2_gpu 64 128 2 --segments 8 --warmup 1 --local-sweeps 1
-./pdmrg2_gpu 64 256 2 --segments 8 --warmup 1 --local-sweeps 1
+./pdmrg_gpu_opt 64 128 2 --segments 8 --warmup 1 --local-sweeps 1
+./pdmrg_gpu_opt 64 256 2 --segments 8 --warmup 1 --local-sweeps 1
 
 # dmrg2-gpu baseline:
 cd ~/dmrg-implementations/dmrg2-gpu/build
@@ -443,8 +443,8 @@ cd ~/dmrg-implementations/dmrg2-gpu/build
 ## Success Criteria
 
 1. All correctness tests pass with error < 1e-10
-2. PDMRG2-GPU speedup over dmrg2-gpu at L=64 chi=128: target ≥ 2×
-3. PDMRG2-GPU speedup over dmrg2-gpu at L=64 chi=256: target ≥ 3×
+2. PDMRG-OPT-GPU speedup over dmrg2-gpu at L=64 chi=128: target ≥ 2×
+3. PDMRG-OPT-GPU speedup over dmrg2-gpu at L=64 chi=256: target ≥ 3×
 4. Newton-Schulz converges in ≤ 15 iterations for all test cases
 5. Block-Davidson converges for all test cases (with Lanczos fallback rate < 5%)
 
@@ -460,10 +460,10 @@ cd ~/dmrg-implementations/dmrg2-gpu/build
 
 ## Reference Files
 
-- `pdmrg2/pdmrg/numerics/linalg_utils.py` — Python Newton-Schulz + Block-Davidson
-- `pdmrg2/pdmrg/numerics/eigensolver.py` — Python eigensolver wrapper
-- `pdmrg2/pdmrg/mps/canonical.py` — Python Newton-Schulz canonicalization
-- `pdmrg2/pdmrg/parallel/merge.py` — Python boundary merge with accurate SVD
+- `pdmrg-opt/pdmrg/numerics/linalg_utils.py` — Python Newton-Schulz + Block-Davidson
+- `pdmrg-opt/pdmrg/numerics/eigensolver.py` — Python eigensolver wrapper
+- `pdmrg-opt/pdmrg/mps/canonical.py` — Python Newton-Schulz canonicalization
+- `pdmrg-opt/pdmrg/parallel/merge.py` — Python boundary merge with accurate SVD
 - `pdmrg-gpu/src/pdmrg_gpu_impl.h` — Current GPU PDMRG implementation
 - `pdmrg-gpu/OPTIMIZATION_REPORT.md` — Performance analysis and bottleneck identification
 - `dmrg2-gpu/src/dmrg2_gpu_impl.h` — Reference GPU two-site DMRG

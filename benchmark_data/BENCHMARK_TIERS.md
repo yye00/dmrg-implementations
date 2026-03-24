@@ -299,7 +299,7 @@ python correctness_suite.py --tier regular
 # Tests all methods vs golden references:
 # - quimb DMRG1, DMRG2
 # - PDMRG (np=1,2,4,8)
-# - PDMRG2 (np=1,2,4,8)
+# - PDMRG-OPT (np=1,2,4,8)
 # - A2DMRG (np=2,4,8)
 #
 # Reports machine precision (<1e-12) vs acceptance (<1e-10)
@@ -378,7 +378,7 @@ python benchmarks/scaling_suite.py --tier challenge --method pdmrg --max-np 32
 
 ### Known Issues
 
-1. **PDMRG2**: Complete API incompatibility - all tests fail with TypeError
+1. **PDMRG-OPT**: Complete API incompatibility - all tests fail with TypeError
 2. **A2DMRG**: Accuracy degrades on larger systems (1e-09 errors on L=48)
 3. **PDMRG Complex**: Load balancing inconsistent across np values
 4. **Golden Generation**: Extremely expensive for large complex systems

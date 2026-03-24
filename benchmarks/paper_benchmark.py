@@ -33,7 +33,7 @@ RESULTS_DIR = os.path.join(REPO, 'benchmarks', 'paper_results')
 DG_BIN = os.path.join(REPO, 'dmrg-gpu', 'build', 'dmrg_gpu')
 D2G_BIN = os.path.join(REPO, 'dmrg2-gpu', 'build', 'dmrg2_gpu')
 PG_BIN = os.path.join(REPO, 'pdmrg-gpu', 'build', 'pdmrg_gpu')
-P2G_BIN = os.path.join(REPO, 'pdmrg2-gpu', 'build', 'pdmrg2_gpu')
+P2G_BIN = os.path.join(REPO, 'pdmrg-gpu-opt', 'build', 'pdmrg_gpu_opt')
 
 TIMEOUT = 1800  # 30 minutes per run
 
@@ -312,12 +312,12 @@ print(f"TIME={{t1-t0:.3f}}")
 
 
 # ============================================================================
-# MPI PDMRG / PDMRG2 runners
+# MPI PDMRG / PDMRG-OPT runners
 # ============================================================================
 
 def run_mpi_pdmrg(L, chi, sweeps, np_val, model='heisenberg', nmax=2, impl='pdmrg', threads=1):
-    """Run MPI-based pdmrg or pdmrg2."""
-    pkg_dir = 'pdmrg' if impl == 'pdmrg' else 'pdmrg2'
+    """Run MPI-based pdmrg or pdmrg-opt."""
+    pkg_dir = 'pdmrg' if impl == 'pdmrg' else 'pdmrg-opt'
     env = {'PYTHONPATH': f'{REPO}/{pkg_dir}:{REPO}:' + os.environ.get('PYTHONPATH', ''),
            'OPENBLAS_NUM_THREADS': str(threads), 'OMP_NUM_THREADS': str(threads)}
 
@@ -445,7 +445,7 @@ def run_gpu_dmrg2(L, chi, sweeps, model='heisenberg', nmax=2):
 
 
 # ============================================================================
-# GPU PDMRG / PDMRG2 runners (multi-segment parallel)
+# GPU PDMRG / PDMRG-OPT runners (multi-segment parallel)
 # ============================================================================
 
 def run_gpu_pdmrg(L, chi, sweeps, segments, model='heisenberg', nmax=2):
@@ -480,8 +480,8 @@ def run_gpu_pdmrg(L, chi, sweeps, segments, model='heisenberg', nmax=2):
     return result
 
 
-def run_gpu_pdmrg2(L, chi, sweeps, segments, model='heisenberg', nmax=2):
-    """Run pdmrg2-gpu (multi-segment parallel, GPU SVD default)."""
+def run_gpu_pdmrg_opt(L, chi, sweeps, segments, model='heisenberg', nmax=2):
+    """Run pdmrg-gpu-opt (multi-segment parallel, GPU SVD default)."""
     if model == 'josephson':
         extra = f'--josephson --nmax {nmax}'
     elif model == 'tfim':
@@ -496,7 +496,7 @@ def run_gpu_pdmrg2(L, chi, sweeps, segments, model='heisenberg', nmax=2):
     outer = extract(out, r'Converged after (\d+) outer')
 
     result = {
-        'impl': 'pdmrg2-gpu',
+        'impl': 'pdmrg-gpu-opt',
         'model': model,
         'L': L, 'chi': chi, 'sweeps': sweeps,
         'segments': segments,
@@ -733,13 +733,13 @@ def run_all_benchmarks():
                 run_phase_result(r, impl_name, 'tfim', L, chi, key)
 
     # ------------------------------------------------------------------
-    # Phase 2: MPI pdmrg + pdmrg2
+    # Phase 2: MPI pdmrg + pdmrg-opt
     # ------------------------------------------------------------------
     log("=" * 80)
-    log("PHASE 2: MPI parallel DMRG (pdmrg + pdmrg2)")
+    log("PHASE 2: MPI parallel DMRG (pdmrg + pdmrg-opt)")
     log("=" * 80)
 
-    for impl in ['pdmrg', 'pdmrg2']:
+    for impl in ['pdmrg', 'pdmrg-opt']:
         # Heisenberg
         for L, chi, sweeps in HEISENBERG_SIZES:
             for np_val in MPI_NP:
@@ -786,13 +786,13 @@ def run_all_benchmarks():
                 run_phase_result(r, impl, 'tfim', L, chi, key)
 
     # ------------------------------------------------------------------
-    # Phase 3: GPU pdmrg-gpu + pdmrg2-gpu (multi-segment parallel)
+    # Phase 3: GPU pdmrg-gpu + pdmrg-gpu-opt (multi-segment parallel)
     # ------------------------------------------------------------------
     log("=" * 80)
-    log("PHASE 3: GPU parallel DMRG (pdmrg-gpu + pdmrg2-gpu)")
+    log("PHASE 3: GPU parallel DMRG (pdmrg-gpu + pdmrg-gpu-opt)")
     log("=" * 80)
 
-    for gpu_runner, impl_name in [(run_gpu_pdmrg, 'pdmrg-gpu'), (run_gpu_pdmrg2, 'pdmrg2-gpu')]:
+    for gpu_runner, impl_name in [(run_gpu_pdmrg, 'pdmrg-gpu'), (run_gpu_pdmrg_opt, 'pdmrg-gpu-opt')]:
         # Heisenberg
         for L, chi, sweeps in HEISENBERG_SIZES:
             for seg in GPU_SEGMENTS:
