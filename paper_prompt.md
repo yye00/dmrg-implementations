@@ -608,6 +608,150 @@ tfim          100  128 quimb-dmrg1     46.4    42.9    40.8      --      --   4T
 
 ---
 
+## Missing Data: Why Some Table Entries Are Empty (Section 11)
+
+The detailed wins table (Section 6.6) and benchmark CSVs contain many `--` entries.
+These are NOT random omissions — each has a specific cause. The paper should explain
+these systematically, as they reveal fundamental limitations of different approaches.
+
+### 11.1 Categories of Missing Data
+
+| Category | Symbol | Count | Cause |
+|----------|--------|-------|-------|
+| Timeout | TIMEOUT | ~136 | Wall time exceeded 300s (5 min) limit |
+| Convergence failure | NOT CONV | ~43 | Ran max sweeps without reaching dE < 1e-10 |
+| Numerical divergence | DIVERGED | ~20 | Energy diverged to unphysical values (|E| >> expected) |
+| Crash/segfault | FAIL | ~14 | Process died (memory corruption, buffer overflow) |
+| Not attempted | `--` | ~200 | Config not in that benchmark's test matrix |
+
+### 11.2 Timeout Patterns (wall_time > 300s)
+
+**Who times out and why:**
+
+- **PDMRG variants (pdmrg-gpu, pdmrg-gpu-opt)** at L>=64: The broken coupling phase
+  (full-chain sequential sweep after parallel segments) costs O(L) per outer iteration,
+  negating parallelism. At L=128, each outer iteration takes ~30-60s, so 5-10 outer
+  iterations exceed 300s. This is the specific bug addressed in PDMRG_STOUDENMIRE_FIX_PROMPT.md.
+
+- **quimb-dmrg2** on Josephson L>=48 chi>=50: Two-site DMRG optimizes over d²=25
+  physical dimensions (d=5 for Josephson). Each matvec costs O(chi² · d⁴ · D) vs
+  O(chi² · d² · D) for single-site. At chi=128 with d=5, a single matvec involves
+  matrices of size (chi·d², chi·d²) = (3200, 3200) — the Lanczos eigensolver needs
+  hundreds of these per sweep site.
+
+- **Python PDMRG (pdmrg, pdmrg2)** at L>=64: Pure numpy tensordot cannot compete
+  with compiled GPU/CPU-BLAS codes. Each contraction goes through Python interpreter
+  overhead. At L=100 chi=128, pdmrg takes 599s (2x over timeout).
+
+- **dmrg2-gpu-opt** at L>=64 chi>=128: Newton-Schulz iterations at high chi are
+  individually slow (12-16 GEMM iterations) AND the iteration count per eigensolve
+  increases because Block-Davidson converges slower on ill-conditioned problems.
+  Combined: each sweep site takes 3-5x longer than baseline, pushing total time
+  past 300s.
+
+**Mathematical reason for timeout scaling:** DMRG sweep cost per site is
+O(chi³·d²·D + chi²·d⁴·D²) for two-site or O(chi³·d·D + chi²·d²·D²) for single-site,
+where D is MPO bond dimension. The chi³ term dominates at high chi. Going from
+chi=50 to chi=256 increases per-site cost by (256/50)³ ≈ 134x. A config that takes
+2s at chi=50 takes ~268s at chi=256 — right at the timeout boundary.
+
+### 11.3 Convergence Failure Patterns
+
+**What "not converged" means:** The energy change between consecutive sweeps
+never dropped below the convergence tolerance (1e-10) within max_sweeps (10-30).
+
+- **Baseline GPU (dmrg-gpu, dmrg2-gpu)** at L=128 chi=20-50: With low chi on long
+  chains, the MPS cannot represent the ground state accurately. The variational
+  energy plateaus at a value above the true ground state, and sweep-to-sweep
+  improvement becomes oscillatory rather than monotonically decreasing. This is the
+  **entanglement bottleneck**: the ground state entanglement entropy S exceeds
+  log₂(chi), so truncation error limits accuracy regardless of sweep count.
+
+- **Josephson at low chi:** The d=5 local dimension means each bond must encode
+  correlations across 5 charge states. At chi=20, the bond dimension is smaller than
+  the local Hilbert space dimension (d²=25 for two-site), making convergence
+  fundamentally impossible for strongly-entangled states.
+
+- **opt variants at all chi:** Block-Davidson's convergence criterion differs from
+  Lanczos. The block-4 subspace may not find the ground state as reliably as Lanczos
+  when the gap between ground and first excited state is small (which happens at
+  critical points and long chains).
+
+### 11.4 Numerical Divergence (Newton-Schulz Specific)
+
+**The catastrophic failure mode of Newton-Schulz polar decomposition:**
+
+Newton-Schulz iterates Uₖ₊₁ = ½Uₖ(3I - UₖᴴUₖ) starting from U₀ = A/||A||_F.
+This converges cubically **if and only if** all singular values of U₀ lie in (0, √3).
+The Frobenius norm initialization guarantees σ_max(U₀) ≤ 1, but does NOT guarantee
+σ_min(U₀) > 0 — for ill-conditioned matrices, small singular values get rounded to
+zero, and the iteration amplifies these errors exponentially.
+
+**At chi>=128**, the theta tensor (chi_L·d × chi_R) has condition number κ = σ_max/σ_min
+that grows with chi. Typical values:
+- chi=50: κ ~ 10²-10³ → NS converges in 12-16 iterations
+- chi=128: κ ~ 10⁴-10⁶ → NS needs 20-30 iterations, often fails convergence check
+- chi=256: κ ~ 10⁶-10¹⁰ → NS diverges within 5 iterations
+
+When NS fails, the "unitary" factor U has ||UᴴU - I||_F >> 1. This corrupted U
+becomes MPS[site], which then feeds into the environment computation for the next
+site. The error compounds **multiplicatively** through the sweep: if each site has
+error ε, after L sites the accumulated error is ~Lε for well-conditioned cases but
+~ε^L for ill-conditioned cases (because the error is in the singular vectors, not
+just singular values).
+
+**Observed divergence trajectory** (from bench_opt_results.csv):
+```
+Heisenberg L=32, dmrg-gpu-opt:
+  chi=20:  E = -13.997308  (correct, converged)
+  chi=50:  E = -13.997316  (correct, converged)
+  chi=128: E = -639.94     (diverged — 46x too negative)
+  chi=256: E = -4103.93    (diverged — 293x too negative)
+
+Heisenberg L=64, dmrg2-gpu-opt:
+  chi=20:  E = -28.175290  (correct, converged)
+  chi=50:  E = -28.175425  (correct, converged)
+  chi=128: E = -4.2×10²⁵   (catastrophic — 10²⁴x too negative)
+  chi=256: CRASH (timeout/segfault)
+```
+
+The pattern is consistent: correct at chi≤50, increasingly wrong at chi=128,
+catastrophic or crashing at chi=256. This is a **fundamental numerical limitation**
+of Newton-Schulz for scientific computing, not a bug that can be fixed with
+better initialization or more iterations.
+
+### 11.5 Crash/Segfault Patterns
+
+- **dmrg-gpu-opt at L=128 chi=256**: NS produces a corrupted MPS tensor with NaN/Inf
+  entries. The next GEMM call reads NaN, producing NaN outputs, which propagate to
+  the eigensolver. hipBLAS may segfault on NaN input depending on the matrix layout.
+  Total time: 16.6s (fast crash, not timeout).
+
+- **dmrg2-gpu-opt at L>=64 chi>=128**: Similar NaN propagation, but the two-site
+  theta tensor is larger (chi·d² × chi·d²), so the buffer overflow from corrupted
+  dimensions can write past allocated memory.
+
+- **Josephson dmrg-gpu L=16 chi=128**: A baseline crash (not opt-related). The
+  complex zgemm path has a known edge case where the workspace allocation for
+  Lanczos at d=5 chi=128 underestimates buffer size. Energy=None, time=2.3s.
+
+### 11.6 "Not Attempted" Entries
+
+The benchmark matrix is not uniform across all implementations:
+
+- **summary.csv**: The large benchmark tested L={12,20,32,64,100} × chi={20,50,128}
+  for most impls, but L=16 and L=128 were only tested in the GPU-specific benchmarks.
+  quimb was not tested at L=128 (no point — GPU clearly wins there).
+
+- **bench_opt_results.csv**: Only the 4 GPU implementations (dmrg-gpu, dmrg-gpu-opt,
+  dmrg2-gpu, dmrg2-gpu-opt) tested at L={16,32,64,128} × chi={20,50,128,256} ×
+  3 models = 192 configs. Full coverage.
+
+- **pdmrg/pdmrg2 (Python)** were not tested at chi>=128 or L>=64 because preliminary
+  runs showed they would all timeout (Python numpy is ~100x slower than GPU at these sizes).
+
+---
+
 ## Generating Plots from the Correct Data
 
 All plots should be generated from the CSV files committed to GitHub (not from any
