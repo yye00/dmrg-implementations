@@ -57,6 +57,13 @@ private:
     std::vector<int> seg_last_;       // seg_last_[k] = last site of segment k (inclusive)
     std::vector<int> boundary_bonds_; // [n_segments-1] bond site at each boundary
 
+    // === Stoudenmire boundary state (V = Λ⁻¹ at each boundary) ===
+    struct BoundaryState {
+        std::vector<RealType> V;  // V = 1/S, length = chi at boundary bond
+        int chi;                  // current bond dimension at this boundary
+    };
+    std::vector<BoundaryState> boundary_states_;
+
     // === HIP streams and rocBLAS handles (one per segment) ===
     std::vector<hipStream_t> streams_;
     std::vector<rocblas_handle> handles_;
@@ -158,6 +165,8 @@ private:
     void segment_sweep_LR(int seg_idx);  // local L→R within segment
     void segment_sweep_RL(int seg_idx);  // local R→L within segment
     double merge_and_optimize_boundaries(int parity = -1);  // Stoudenmire boundary coupling
+    void form_theta_with_V(int site, int boundary_idx, int si);  // θ = ψ_L · diag(V) · ψ_R
+    void initialize_boundary_states();  // V = ones at startup
 
     // === Partitioning ===
     void partition_chain();

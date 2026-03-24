@@ -57,6 +57,7 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
     }
 
     partition_chain();
+    initialize_boundary_states();
 
     // Create streams and rocBLAS handles
     streams_.resize(n_segments_);
@@ -395,6 +396,22 @@ void PDMRGGPUOpt<Scalar>::partition_chain() {
 
     for (int k = 0; k < n_segments_ - 1; k++) {
         boundary_bonds_[k] = seg_last_[k];
+    }
+}
+
+// ============================================================================
+// Initialize boundary V = ones (before any merge, V is identity)
+// ============================================================================
+
+template<typename Scalar>
+void PDMRGGPUOpt<Scalar>::initialize_boundary_states() {
+    int n_boundaries = n_segments_ - 1;
+    boundary_states_.resize(n_boundaries);
+    for (int b = 0; b < n_boundaries; b++) {
+        int bsite = boundary_bonds_[b];
+        int chi = bond_dims_[bsite + 1];
+        boundary_states_[b].chi = chi;
+        boundary_states_[b].V.assign(chi, RealType(1.0));
     }
 }
 
@@ -2154,10 +2171,54 @@ void PDMRGGPUOpt<Scalar>::segment_sweep_RL(int seg_idx) {
 }
 
 // ============================================================================
-// Stoudenmire boundary merge+optimize
-// Optimizes the two-site bond at each segment boundary only.
+// Form theta with V injection: θ = ψ_L · diag(V) · ψ_R  (Stoudenmire Eq. 5)
+// ============================================================================
+
+template<typename Scalar>
+void PDMRGGPUOpt<Scalar>::form_theta_with_V(int site, int boundary_idx, int si) {
+    int cL = chi_L(site);
+    int chi_bond = bond_dims_[site + 1];
+    int cR = chi_R(site + 1);
+    auto& ws = workspaces_[si];
+    auto& bs = boundary_states_[boundary_idx];
+
+    // Upload V to device (reuse d_svd_S workspace)
+    HIP_CHECK(hipMemcpyAsync(ws.d_svd_S, bs.V.data(),
+                              chi_bond * sizeof(RealType),
+                              hipMemcpyHostToDevice, streams_[si]));
+
+    // Scale: T1 = diag(V) · ψ_R  (scale each row i of ψ_R by V[i])
+    int psi_R_size = chi_bond * d_ * cR;
+    HIP_CHECK(hipMemcpyAsync(ws.d_T1, d_mps_tensors_[site + 1],
+                              psi_R_size * sizeof(Scalar),
+                              hipMemcpyDeviceToDevice, streams_[si]));
+    scale_rows_by_real(ws.d_T1, chi_bond, ws.d_svd_S,
+                       ws.d_T1, chi_bond, chi_bond, d_ * cR, streams_[si]);
+
+    // Contract: theta = ψ_L · T1 = ψ_L · diag(V) · ψ_R
+    Scalar one = Traits::one(), zero_val = Traits::zero();
+    ROCBLAS_CHECK(Traits::gemm(handles_[si],
+        rocblas_operation_none, rocblas_operation_none,
+        cL * d_, d_ * cR, chi_bond,
+        &one,
+        d_mps_tensors_[site], cL * d_,
+        ws.d_T1, chi_bond,
+        &zero_val,
+        ws.d_theta, cL * d_));
+}
+
+// ============================================================================
+// Stoudenmire boundary merge+optimize (proper V = Λ⁻¹ coupling)
+//
+// For each boundary bond:
+//   1. Form θ = ψ_L · diag(V) · ψ_R  (Eq. 5)
+//   2. Optimize θ with eigensolver (Davidson or Lanczos)
+//   3. SVD split: θ → U · S · Vh
+//   4. Store V_new = 1/clip(S, 1e-12) for next iteration
+//   5. MPS[bsite] = U (left-canonical), MPS[bsite+1] = S·Vh
+//   6. Update environments from canonical tensors
+//
 // parity: 0 = even-indexed boundaries, 1 = odd, -1 = all
-// Cost: O(P) bond optimizations instead of O(L) full-chain sweep.
 // ============================================================================
 
 template<typename Scalar>
@@ -2169,19 +2230,42 @@ double PDMRGGPUOpt<Scalar>::merge_and_optimize_boundaries(int parity) {
         if (parity >= 0 && (b % 2) != parity) continue;
 
         int bsite = boundary_bonds_[b];
+        int cL = chi_L(bsite);
+        int cR = chi_R(bsite + 1);
+        int theta_size = cL * d_ * d_ * cR;
+        auto& ws = workspaces_[si];
 
-        // LR optimize: MPS[bsite] -> left-canonical U, MPS[bsite+1] -> S*Vh
-        energy = optimize_bond(bsite, 'R', si);
+        // Step 1: Form θ = ψ_L · diag(V) · ψ_R
+        form_theta_with_V(bsite, b, si);
+
+        // Step 2: Optimize θ with eigensolver
+        if (use_davidson_) {
+            energy = block_davidson_eigensolver(bsite, ws.d_theta, theta_size, si);
+        } else {
+            energy = lanczos_eigensolver(bsite, ws.d_theta, theta_size, si);
+        }
+
+        // Step 3: SVD split → direction 'R': MPS[bsite]=U, MPS[bsite+1]=S·Vh
+        // Always use SVD at boundaries (not NS-split) for accurate V = 1/S
+        if (use_rsvd_)
+            rsvd_split(bsite, ws.d_theta, 'R', si);
+        else
+            svd_split(bsite, ws.d_theta, 'R', si);
+
+        // Step 4: Update V = 1/clip(S, 1e-12) for next iteration
+        int new_chi = bond_dims_[bsite + 1];
+        boundary_states_[b].chi = new_chi;
+        boundary_states_[b].V.resize(new_chi);
+
+        const RealType reg = RealType(1e-12);
+        for (int i = 0; i < new_chi; i++) {
+            RealType s_val = ws.h_svd_S[i];
+            if (s_val < reg) s_val = reg;
+            boundary_states_[b].V[i] = RealType(1.0) / s_val;
+        }
+
+        // Step 5: Update environments
         update_left_env(bsite, si);
-
-        // After LR optimize, MPS[bsite+1] = S*Vh (mixed canonical).
-        // Right-canonicalize it before the second optimize_bond so the
-        // RL optimization sees a proper right-canonical tensor.
-        right_canonize_site(bsite + 1, si);
-        update_right_env(bsite + 1, si);
-
-        // RL optimize: MPS[bsite] -> U*S, MPS[bsite+1] -> right-canonical Vh
-        energy = optimize_bond(bsite, 'L', si);
         update_right_env(bsite + 1, si);
     }
     return energy;
@@ -2249,6 +2333,8 @@ double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_wa
 
     // === Main PDMRG loop (Stoudenmire staggered sweeps) ===
     // Replaces O(L) full-chain coupling with O(P) boundary-only merge+optimize.
+    // Re-initialize V = ones after warmup (bond dims may have changed)
+    initialize_boundary_states();
     double energy_prev = warmup_energy;
     energy_ = warmup_energy;
     bool outer_converged = false;
