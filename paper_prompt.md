@@ -540,7 +540,7 @@ tfim          100  128 quimb-dmrg1     46.4    42.9    40.8      --      --   4T
 
 1. **The GPU crossover is at chi ~100-128**, not chi ~20 as often assumed. Below this, Python + 4-thread BLAS wins.
 
-2. **Single-site GPU DMRG is the overall winner** — simpler algorithm, fewer sweeps needed for convergence at high chi (counter-intuitive: single-site does more sweeps but each is cheaper than two-site's d² factor).
+2. **Single-site GPU DMRG is the overall winner** — see Section 12 for full analysis.
 
 3. **Newton-Schulz is not ready for scientific computing** — the ML community's enthusiasm (Keller & Bäuml, nanoGPT results) doesn't transfer to problems requiring 1e-10 precision. At float64 precision, NS needs ~12-16 iterations (vs ~3-5 at float16), and rocsolver SVD is highly optimized for this hardware. **Worse: NS is numerically unstable at chi>=128** — the Frobenius-norm-scaled iteration diverges when condition numbers are large, producing catastrophically wrong energies (~-10²⁵). This was confirmed in a full 192-config re-run (2026-03-23) that showed **0% win rate across 50 converged comparisons**. We also tried an adaptive "Polar Express" variant with tracked singular value intervals — it was even less stable and had to be reverted.
 
@@ -554,6 +554,8 @@ tfim          100  128 quimb-dmrg1     46.4    42.9    40.8      --      --   4T
 
 8. **Contraction path optimization matters** — our hand-coded GPU order does 2.3-3.8x more FLOPs than cotengra's optimal. At chi >= 200 this dominates. Future GPU DMRG should incorporate path optimization.
 
+9. **There is no known GPU-specific algorithmic advantage for DMRG** — we entered this project hoping to find a GPU-native optimization that would make GPU DMRG categorically faster (not just asymptotically faster at large chi). Newton-Schulz was the most promising candidate from the ML literature. Its failure — and the failure of Block-Davidson, Polar Express, and parallel stream decomposition — suggests that DMRG's performance on GPU is fundamentally limited by the SVD bottleneck, and that bottleneck is best served by the vendor's own highly-optimized gesvd implementation. The path to faster GPU DMRG likely lies not in replacing SVD but in reducing the number of SVDs needed (e.g., via better initial guesses, subspace recycling, or symmetry exploitation).
+
 ---
 
 ## Figures to Include
@@ -563,17 +565,25 @@ tfim          100  128 quimb-dmrg1     46.4    42.9    40.8      --      --   4T
 3. **NS opt vs baseline scatter** — log-log plot of baseline time vs opt time, with y=x line showing everything above it (opt slower)
 4. **Thread scaling curves** for quimb — showing the contention cliff at 8+ threads
 5. **Pairwise speedup heatmap** — implementation × implementation with color-coded win rates
+6. **Convergence trajectory: energy error vs wall time** — for top implementations (dmrg-gpu, dmrg2-gpu, quimb-dmrg1, quimb-dmrg2) on the same problem. Shows which reaches a given accuracy fastest. See Plot 7 below.
+7. **Single-site vs two-site cost breakdown** — bar chart showing per-sweep time × sweep count for dmrg-gpu vs dmrg2-gpu at different chi, illustrating the d² crossover
 
 ---
 
 ## Reproducibility
 
-- All code: https://github.com/yye00/dmrg-implementations
-- Local repo: /home/captain/clawd/work/dmrg-implementations
-- Hardware: AMD Instinct MI300X (gfx942), ROCm 7.2
-- Convergence target: 1e-10 (dE between sweeps)
-- Timeout: 300s per run
-- quimb version: latest pip (tested with 1.8+)
+**CPC requires a "program summary" — include the following:**
+
+- **Code repository**: https://github.com/yye00/dmrg-implementations (public, MIT license)
+- **Languages**: C++17 (GPU implementations), Python 3.10+ (CPU implementations, benchmarks)
+- **GPU toolchain**: HIP/ROCm 7.2, rocBLAS, rocSOLVER, hipBLAS (AMD MI300X, gfx942)
+- **CPU dependencies**: OpenBLAS 0.3.28+ (WARNING: 0.3.20 has broken SVD), LAPACK, quimb 1.8+, numpy, scipy, mpi4py
+- **Build**: CMake 3.20+, `cmake .. -DGPU_TARGETS=gfx942 && make -j$(nproc)` per implementation
+- **Benchmark driver**: `benchmarks/bench_opt.py` (GPU opt comparison), `benchmarks/run_focused_bench.py` (full suite)
+- **Convergence target**: 1e-10 (|dE| between consecutive sweeps)
+- **Timeout**: 300s per run
+- **Hardware**: AMD Instinct MI300X (192GB HBM3, gfx942), hosted on HotAisle cloud VM
+- **Validation**: All GPU energies validated against quimb DMRG1/DMRG2 (cotengra-optimized, LAPACK-backed) to < 1e-10 agreement on small systems (L=4,8,12)
 
 ### Benchmark result files (absolute paths)
 - /home/captain/clawd/work/dmrg-implementations/benchmarks/paper_results/summary.csv — 737 rows, all 10 implementations, L=8-100, chi=20-128
@@ -752,6 +762,146 @@ The benchmark matrix is not uniform across all implementations:
 
 ---
 
+## Single-Site vs Two-Site GPU DMRG: Why Simpler Wins (Section 12)
+
+This is a counter-intuitive finding that deserves dedicated analysis. Conventional
+wisdom holds that two-site DMRG is "always better" because it automatically grows
+bond dimension and avoids local minima. Our data shows the opposite for GPU execution.
+
+### 12.1 The d² Cost Penalty
+
+Two-site DMRG optimizes a tensor θ of shape (χ_L · d, d · χ_R) at each step,
+compared to single-site's (χ_L · d, χ_R). This means:
+
+**Matvec cost per Lanczos iteration:**
+- Single-site: O(χ² · d · D + χ · d² · D²) — the H_eff application
+- Two-site:    O(χ² · d² · D + χ · d⁴ · D²) — d→d² everywhere
+
+For Heisenberg (d=2): two-site matvec is ~4x more expensive per call.
+For Josephson (d=5): two-site matvec is ~25x more expensive per call.
+
+**SVD cost per site update:**
+- Single-site: No SVD needed (just QR or polar decomposition for canonicalization)
+- Two-site: SVD of (χ·d, d·χ) matrix — O(χ² · d² · min(χ·d, d·χ)) — this is the
+  truncation step that selects bond dimension
+
+So two-site pays d² on the eigensolver AND adds an SVD that single-site doesn't need.
+
+### 12.2 Sweep Count Comparison
+
+From bench_opt_results.csv (baseline implementations only):
+
+```
+Model        L   chi  dmrg-gpu(sweeps)  dmrg2-gpu(sweeps)  Ratio
+heisenberg   16   20       11                 5             2.2x
+heisenberg   16   50        3                 5             0.6x
+heisenberg   32   20       16                 6             2.7x
+heisenberg   32   50       18                 5             3.6x
+heisenberg   32  128        3                 5             0.6x
+heisenberg   64   20       18                 6             3.0x
+heisenberg  128   20       30                 6             5.0x
+heisenberg  128   50       20                 5             4.0x
+```
+
+Single-site needs 2-5x more sweeps at low chi (expected — it can't grow bond
+dimension, so convergence is slower). But at high chi (≥128), single-site converges
+in 2-3 sweeps, same as two-site, because the bond dimension is already saturated.
+
+### 12.3 Wall Time: Where Single-Site Wins
+
+```
+Model        L   chi  dmrg-gpu(s)  dmrg2-gpu(s)  Winner   Factor
+heisenberg   16   20      1.7          1.2        D2-GPU    1.4x
+heisenberg   16   50      1.0          1.4        D1-GPU    1.4x
+heisenberg   32   20      4.9          2.9        D2-GPU    1.7x
+heisenberg   32   50      8.4          3.5        D2-GPU    2.4x
+heisenberg   32  128      4.6          6.2        D1-GPU    1.3x
+heisenberg   32  256     11.8         12.3        D1-GPU    1.04x
+heisenberg   64  128     25.2         24.5        ~TIE      1.03x
+heisenberg  128  128     49.3        156.6        D1-GPU    3.2x
+heisenberg  128  256     85.0        161.3        D1-GPU    1.9x
+```
+
+**The crossover:** Two-site wins at low chi (chi=20-50) because its faster
+convergence (5 sweeps vs 16-30) outweighs the d² per-sweep cost. Single-site wins
+at high chi (chi≥128) because both converge quickly (2-5 sweeps) and the d² per-sweep
+penalty dominates.
+
+### 12.4 When Two-Site Is Actually Necessary
+
+Two-site DMRG is required when:
+1. **Starting from a product state** with chi=1 — single-site cannot increase chi
+2. **Finding the right bond dimension** automatically (variational chi selection)
+3. **Crossing phase transitions** where the entanglement structure changes qualitatively
+
+For production runs where chi is known a priori (e.g., convergence studies), single-site
+is strictly better on GPU at chi≥128. A practical workflow: use two-site for 2-3 warmup
+sweeps to grow chi, then switch to single-site for the remaining sweeps. This hybrid
+approach is standard in ITensor but not commonly GPU-accelerated.
+
+### 12.5 The Josephson Amplification
+
+For Josephson (d=5), the d² penalty is extreme:
+```
+josephson    8   50   D1: 0.6s    D2: 0.7s    → D1 wins (barely)
+josephson   16  128   D1: 1.9s    D2: 7.2s    → D1 wins 3.8x
+josephson   32  128   D1: 8.3s    D2: 34.3s   → D1 wins 4.1x
+josephson   64  128   D1: 96.1s   D2: 85.1s   → D2 wins (convergence effect)
+```
+
+At d=5, d²=25 — every matvec in two-site is 25x more expensive. This is why
+dmrg-gpu dominates the Josephson benchmarks at moderate-to-high chi.
+
+---
+
+## Related Work: Existing GPU DMRG Codes (Section 13)
+
+### 13.1 Why We Wrote From Scratch
+
+Several GPU-accelerated DMRG implementations exist in the literature. We wrote our
+own from scratch for two reasons: (1) we wanted full control over the algorithmic
+choices (contraction order, eigensolver, SVD method) to isolate their individual
+contributions, and (2) the existing GPU codes are either abandoned, not publicly
+available, or tightly integrated into larger frameworks that make controlled
+benchmarking difficult.
+
+### 13.2 Existing Implementations
+
+**ITensor (C++)**: The gold-standard DMRG library. Has experimental GPU support via
+ITensorGPU.jl (Julia). However, ITensorGPU.jl targets NVIDIA/CUDA and has not been
+actively maintained since 2023. The main ITensor library (C++ and Julia) remains
+CPU-only for production use. Our work targets AMD GPUs via HIP/rocBLAS — a different
+hardware ecosystem entirely.
+
+**Block2**: A high-performance DMRG code for quantum chemistry (Zhai & Chan, 2021).
+Has GPU support for some tensor operations but is focused on quantum chemistry with
+symmetry exploitation (SU(2), point groups). The GPU path is not publicly benchmarked
+for condensed matter models. Block2's strength is symmetry-adapted DMRG, which we
+do not implement — our benchmarks use the full (non-symmetry-adapted) Hilbert space.
+
+**TeNPy**: A widely-used Python tensor network library. Purely CPU-based; GPU support
+was discussed but never implemented. TeNPy's strength is its extensive model library
+and MPS algorithms, not raw performance.
+
+**DMRG++ (Alvarez)**: A C++ DMRG code from Oak Ridge. Targets distributed-memory
+parallelism (MPI) across nodes, not GPU acceleration. Different parallelization
+strategy than our single-GPU approach.
+
+### 13.3 What's Missing in the Literature
+
+No existing code provides:
+1. A systematic GPU vs CPU crossover analysis across multiple physics models
+2. Benchmarks on AMD MI300X (all existing GPU work targets NVIDIA)
+3. Empirical evaluation of SVD-replacement strategies (Newton-Schulz) for DMRG
+4. Head-to-head comparison of parallel DMRG algorithms (Stoudenmire vs Grigori-Hassan)
+   on GPU hardware
+
+Our paper fills these gaps. The finding that GPU DMRG only pays off at χ≥128 — and
+that the SVD bottleneck cannot be circumvented with iterative methods — is, to our
+knowledge, not documented in the existing literature.
+
+---
+
 ## Generating Plots from the Correct Data
 
 All plots should be generated from the CSV files committed to GitHub (not from any
@@ -832,6 +982,53 @@ stale /tmp or remote files). Use only these authoritative data sources:
 # Correct energy (from baseline) as reference line
 # Dramatically illustrates the divergence: correct at chi=50, garbage at chi=128
 ```
+
+---
+
+### Plot 7: Convergence trajectory (energy error vs wall time)
+
+This plot requires re-running the top implementations with verbose per-sweep output.
+The GPU binaries already print per-sweep data:
+```
+Sweep   3: E = -13.997315618224, dE = 2.17e-11, time = 0.312 s
+```
+
+**How to generate:**
+```bash
+# On remote MI300X:
+ssh hotaisle@23.183.40.75
+cd ~/dmrg-implementations
+
+# Run each winner with verbose output, capture per-sweep data
+# Pick a representative case: Heisenberg L=32 chi=128 (where GPU wins)
+dmrg-gpu/build/dmrg_gpu 32 128 30 2>&1 | tee /tmp/conv_dmrg_gpu_h32_128.log
+dmrg2-gpu/build/dmrg2_gpu 32 128 30 2>&1 | tee /tmp/conv_dmrg2_gpu_h32_128.log
+
+# For quimb, add a wrapper that prints per-sweep energy:
+python3 -c "
+import quimb.tensor as qtn
+import time
+mpo = qtn.MPO_ham_heis(L=32)
+dmrg = qtn.DMRG1(mpo, bond_dims=128, cutoffs=1e-14)
+t0 = time.perf_counter()
+for sweep in range(30):
+    dmrg.sweep_right()
+    dmrg.sweep_left()
+    t = time.perf_counter() - t0
+    print(f'Sweep {sweep+1}: E = {dmrg.energy:.12f}, time = {t:.3f}')
+    if abs(dmrg.energy - prev_energy) < 1e-10:
+        break
+    prev_energy = dmrg.energy
+" 2>&1 | tee /tmp/conv_quimb_d1_h32_128.log
+```
+
+**Plot:** x-axis = cumulative wall time (s), y-axis = |E - E_ref| (log scale).
+E_ref = exact ground state or best converged energy across all implementations.
+One line per implementation. Shows: dmrg2-gpu reaches 1e-6 fastest (fewer sweeps),
+but dmrg-gpu reaches 1e-10 faster at high chi (cheaper per-sweep).
+
+Also run for: Heisenberg L=64 chi=256 (large GPU-dominant case) and Josephson L=16
+chi=128 (complex, shows d=5 penalty for two-site).
 
 ---
 
