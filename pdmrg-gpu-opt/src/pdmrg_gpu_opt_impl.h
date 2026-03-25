@@ -68,6 +68,29 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
         ROCBLAS_CHECK(rocblas_set_stream(handles_[k], streams_[k]));
     }
 
+    // Worker stream pool: n_workers covers max(d*d, D_mpo) independent GEMMs
+    n_workers_ = std::max(d * d, D_mpo);
+    worker_streams_.resize(n_segments_);
+    worker_handles_.resize(n_segments_);
+    for (int k = 0; k < n_segments_; k++) {
+        worker_streams_[k].resize(n_workers_);
+        worker_handles_[k].resize(n_workers_);
+        for (int w = 0; w < n_workers_; w++) {
+            HIP_CHECK(hipStreamCreate(&worker_streams_[k][w]));
+            ROCBLAS_CHECK(rocblas_create_handle(&worker_handles_[k][w]));
+            ROCBLAS_CHECK(rocblas_set_stream(worker_handles_[k][w], worker_streams_[k][w]));
+        }
+    }
+    worker_done_events_.resize(n_segments_);
+    step_done_events_.resize(n_segments_);
+    for (int k = 0; k < n_segments_; k++) {
+        worker_done_events_[k].resize(n_workers_);
+        for (int w = 0; w < n_workers_; w++) {
+            HIP_CHECK(hipEventCreateWithFlags(&worker_done_events_[k][w], hipEventDisableTiming));
+        }
+        HIP_CHECK(hipEventCreateWithFlags(&step_done_events_[k], hipEventDisableTiming));
+    }
+
     int dd = d_ * d_;
 
     // MPS tensors
@@ -339,6 +362,13 @@ void PDMRGGPUOpt<Scalar>::free_gpu_resources() {
         if (ws.d_rsvd_U_full) hipFree(ws.d_rsvd_U_full);
     }
 
+    for (auto& wh : worker_handles_)
+        for (auto& h : wh) rocblas_destroy_handle(h);
+    for (auto& ws_vec : worker_streams_)
+        for (auto& s : ws_vec) hipStreamDestroy(s);
+    for (auto& ev_vec : worker_done_events_)
+        for (auto& e : ev_vec) hipEventDestroy(e);
+    for (auto& e : step_done_events_) hipEventDestroy(e);
     for (auto& h : handles_) rocblas_destroy_handle(h);
     for (auto& s : streams_) hipStreamDestroy(s);
 }
@@ -584,26 +614,41 @@ void PDMRGGPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
         &zero_val,
         T2, cL * cR));
 
-    // Step 3: Batched GEMMs — T2 × R_env (d² batches per MPO index)
+    // Step 3: Independent GEMMs dispatched on worker streams — one worker per (s1p,s2p) pair
+    // Each worker loops over n (accumulates with beta trick); workers write to distinct output slices
     {
         int cL_cR = cL * cR;
-        for (int n = 0; n < D; n++) {
-            Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
+        // Record event after Steps 1+2 complete on the main stream so workers can wait
+        HIP_CHECK(hipEventRecord(step_done_events_[si], streams_[si]));
 
-            hipLaunchKernelGGL(setup_step3_ptrs<Scalar>, dim3(1), dim3(dd), 0, streams_[si],
-                               ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
-                               T2, R_env, d_result,
-                               cL, cR, d, dd, n, cL_cR, dd);
+        int n_active = 0;
+        for (int b = 0; b < dd; b++) {
+            int wi = b % n_workers_;
+            auto& wh = worker_handles_[si][wi];
+            auto& ws_stream = worker_streams_[si][wi];
+            int s1p = b / d, s2p = b % d;
 
-            ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
-                rocblas_operation_none, rocblas_operation_none,
-                cL, cR, cR,
-                &one,
-                (const Scalar**)ws.d_batch_A, cL,
-                (const Scalar**)ws.d_batch_B, cR * D,
-                &beta,
-                ws.d_batch_C, cL * dd,
-                dd));
+            // Worker waits for Steps 1+2 to finish
+            HIP_CHECK(hipStreamWaitEvent(ws_stream, step_done_events_[si], 0));
+
+            for (int n = 0; n < D; n++) {
+                Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
+                ROCBLAS_CHECK(Traits::gemm(wh,
+                    rocblas_operation_none, rocblas_operation_none,
+                    cL, cR, cR,
+                    &one,
+                    T2 + ((size_t)n * dd + b) * cL_cR, cL,
+                    R_env + (size_t)n * cR,              cR * D,
+                    &beta,
+                    d_result + s1p * cL + (size_t)s2p * cL * d, cL * dd));
+            }
+
+            HIP_CHECK(hipEventRecord(worker_done_events_[si][wi], ws_stream));
+            n_active = std::max(n_active, wi + 1);
+        }
+        // Main stream waits for all workers to finish
+        for (int w = 0; w < n_active; w++) {
+            HIP_CHECK(hipStreamWaitEvent(streams_[si], worker_done_events_[si][w], 0));
         }
     }
 }
@@ -654,23 +699,40 @@ void PDMRGGPUOpt<Scalar>::update_left_env(int site, int si) {
         &zero_val,
         U, chi_in * chi_out));
 
-    // Batched Step 3: D batches per physical index sp, accumulating over sp
-    for (int sp = 0; sp < d; sp++) {
-        Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+    // Step 3: Independent GEMMs dispatched on worker streams — one worker per wp (MPO index)
+    // Each worker loops over sp (accumulates with beta trick); workers write to distinct L_new slices
+    {
+        // Record event after Steps 1+2 complete on the main stream so workers can wait
+        HIP_CHECK(hipEventRecord(step_done_events_[si], streams_[si]));
 
-        hipLaunchKernelGGL(setup_lenv_step3_ptrs<Scalar>, dim3(1), dim3(D), 0, streams_[si],
-                           ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
-                           U, A, L_new, chi_in, chi_out, d, sp, D);
+        int n_active = 0;
+        for (int wp = 0; wp < D; wp++) {
+            int wi = wp % n_workers_;
+            auto& wh = worker_handles_[si][wi];
+            auto& ws_stream = worker_streams_[si][wi];
 
-        ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
-            Traits::op_h, rocblas_operation_none,
-            chi_out, chi_out, chi_in,
-            &one,
-            (const Scalar**)ws.d_batch_A, chi_in,
-            (const Scalar**)ws.d_batch_B, chi_in * d,
-            &beta,
-            ws.d_batch_C, chi_out * D,
-            D));
+            // Worker waits for Steps 1+2 to finish
+            HIP_CHECK(hipStreamWaitEvent(ws_stream, step_done_events_[si], 0));
+
+            for (int sp = 0; sp < d; sp++) {
+                Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+                ROCBLAS_CHECK(Traits::gemm(wh,
+                    Traits::op_h, rocblas_operation_none,
+                    chi_out, chi_out, chi_in,
+                    &one,
+                    U + (size_t)(wp * d + sp) * chi_in * chi_out, chi_in,
+                    A + (size_t)sp * chi_in,                        chi_in * d,
+                    &beta,
+                    L_new + (size_t)wp * chi_out, chi_out * D));
+            }
+
+            HIP_CHECK(hipEventRecord(worker_done_events_[si][wi], ws_stream));
+            n_active = std::max(n_active, wi + 1);
+        }
+        // Main stream waits for all workers to finish
+        for (int w = 0; w < n_active; w++) {
+            HIP_CHECK(hipStreamWaitEvent(streams_[si], worker_done_events_[si][w], 0));
+        }
     }
 
     if constexpr (Traits::is_complex) {
@@ -724,23 +786,40 @@ void PDMRGGPUOpt<Scalar>::update_right_env(int site, int si) {
         &zero_val,
         U, chi_out * chi_in));
 
-    // Batched Step 3: D batches per physical index sp, accumulating over sp
-    for (int sp = 0; sp < d; sp++) {
-        Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+    // Step 3: Independent GEMMs dispatched on worker streams — one worker per w (MPO index)
+    // Each worker loops over sp (accumulates with beta trick); workers write to distinct R_new slices
+    {
+        // Record event after Steps 1+2 complete on the main stream so workers can wait
+        HIP_CHECK(hipEventRecord(step_done_events_[si], streams_[si]));
 
-        hipLaunchKernelGGL(setup_renv_step3_ptrs<Scalar>, dim3(1), dim3(D), 0, streams_[si],
-                           ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
-                           U, A, R_new, chi_in, chi_out, d, sp, D);
+        int n_active = 0;
+        for (int w = 0; w < D; w++) {
+            int wi = w % n_workers_;
+            auto& wh = worker_handles_[si][wi];
+            auto& ws_stream = worker_streams_[si][wi];
 
-        ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
-            rocblas_operation_none, Traits::op_h,
-            chi_out, chi_out, chi_in,
-            &one,
-            (const Scalar**)ws.d_batch_A, chi_out,
-            (const Scalar**)ws.d_batch_B, chi_out * d,
-            &beta,
-            ws.d_batch_C, chi_out * D,
-            D));
+            // Worker waits for Steps 1+2 to finish
+            HIP_CHECK(hipStreamWaitEvent(ws_stream, step_done_events_[si], 0));
+
+            for (int sp = 0; sp < d; sp++) {
+                Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+                ROCBLAS_CHECK(Traits::gemm(wh,
+                    rocblas_operation_none, Traits::op_h,
+                    chi_out, chi_out, chi_in,
+                    &one,
+                    U + (size_t)(w * d + sp) * chi_out * chi_in, chi_out,
+                    A + (size_t)sp * chi_out,                     chi_out * d,
+                    &beta,
+                    R_new + (size_t)w * chi_out, chi_out * D));
+            }
+
+            HIP_CHECK(hipEventRecord(worker_done_events_[si][wi], ws_stream));
+            n_active = std::max(n_active, wi + 1);
+        }
+        // Main stream waits for all workers to finish
+        for (int w = 0; w < n_active; w++) {
+            HIP_CHECK(hipStreamWaitEvent(streams_[si], worker_done_events_[si][w], 0));
+        }
     }
 }
 

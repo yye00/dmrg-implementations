@@ -70,6 +70,13 @@ private:
     std::vector<hipStream_t> streams_;
     std::vector<rocblas_handle> handles_;
 
+    // === Worker stream pool for concurrent independent GEMMs ===
+    int n_workers_;
+    std::vector<std::vector<hipStream_t>> worker_streams_;     // [segment][worker]
+    std::vector<std::vector<rocblas_handle>> worker_handles_;  // [segment][worker]
+    std::vector<std::vector<hipEvent_t>> worker_done_events_;  // [segment][worker]
+    std::vector<hipEvent_t> step_done_events_;                 // [segment]
+
     // === GPU tensors ===
     std::vector<Scalar*> d_mps_tensors_;
     std::vector<Scalar*> d_mpo_tensors_;

@@ -69,6 +69,31 @@ PDMRGGPU<Scalar>::PDMRGGPU(int L, int d, int chi_max, int D_mpo, int n_segments,
         ROCBLAS_CHECK(rocblas_set_stream(handles_[k], streams_[k]));
     }
 
+    // Worker stream pool for concurrent Step 3 GEMMs
+    // Need max(d², D) workers per segment for apply_heff (d² independent outputs)
+    // and update_left/right_env (D independent outputs)
+    n_workers_ = std::max(d * d, D_mpo);
+    worker_streams_.resize(n_segments_);
+    worker_handles_.resize(n_segments_);
+    for (int k = 0; k < n_segments_; k++) {
+        worker_streams_[k].resize(n_workers_);
+        worker_handles_[k].resize(n_workers_);
+        for (int w = 0; w < n_workers_; w++) {
+            HIP_CHECK(hipStreamCreate(&worker_streams_[k][w]));
+            ROCBLAS_CHECK(rocblas_create_handle(&worker_handles_[k][w]));
+            ROCBLAS_CHECK(rocblas_set_stream(worker_handles_[k][w], worker_streams_[k][w]));
+        }
+    }
+    worker_done_events_.resize(n_segments_);
+    step_done_events_.resize(n_segments_);
+    for (int k = 0; k < n_segments_; k++) {
+        worker_done_events_[k].resize(n_workers_);
+        for (int w = 0; w < n_workers_; w++) {
+            HIP_CHECK(hipEventCreateWithFlags(&worker_done_events_[k][w], hipEventDisableTiming));
+        }
+        HIP_CHECK(hipEventCreateWithFlags(&step_done_events_[k], hipEventDisableTiming));
+    }
+
     int dd = d_ * d_;
 
     // MPS tensors
@@ -316,6 +341,14 @@ void PDMRGGPU<Scalar>::free_gpu_resources() {
 
     for (auto& h : handles_) rocblas_destroy_handle(h);
     for (auto& s : streams_) hipStreamDestroy(s);
+
+    for (auto& wh : worker_handles_)
+        for (auto& h : wh) rocblas_destroy_handle(h);
+    for (auto& ws_vec : worker_streams_)
+        for (auto& s : ws_vec) hipStreamDestroy(s);
+    for (auto& ev_vec : worker_done_events_)
+        for (auto& e : ev_vec) hipEventDestroy(e);
+    for (auto& e : step_done_events_) hipEventDestroy(e);
 }
 
 // ============================================================================
@@ -562,20 +595,39 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
         T2, cL * cR));
 
     // Step 3: Loop of GEMMs — T2 × R_env
-    for (int s1p = 0; s1p < d; s1p++) {
-        for (int s2p = 0; s2p < d; s2p++) {
-            for (int n = 0; n < D; n++) {
-                Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
-                int ws_out = n * dd + s1p * d + s2p;
-                ROCBLAS_CHECK(Traits::gemm(handles_[si],
-                    rocblas_operation_none, rocblas_operation_none,
-                    cL, cR, cR,
-                    &one,
-                    T2 + ws_out * cL * cR, cL,
-                    R_env + n * cR, cR * D,
-                    &beta,
-                    d_result + s1p * cL + s2p * cL * d, cL * dd));
+    // Dispatch independent (s1p, s2p) pairs on separate worker streams.
+    // The inner n loop accumulates (beta trick) and must stay sequential per worker.
+    {
+        // Wait for Step 2 to complete on segment stream before workers read T2
+        HIP_CHECK(hipEventRecord(step_done_events_[si], streams_[si]));
+        int worker_idx = 0;
+        for (int s1p = 0; s1p < d; s1p++) {
+            for (int s2p = 0; s2p < d; s2p++) {
+                int wi = worker_idx % n_workers_;
+                auto& wh = worker_handles_[si][wi];
+                auto& ws_stream = worker_streams_[si][wi];
+                // Worker waits for Step 2
+                HIP_CHECK(hipStreamWaitEvent(ws_stream, step_done_events_[si], 0));
+                for (int n = 0; n < D; n++) {
+                    Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
+                    int ws_out = n * dd + s1p * d + s2p;
+                    ROCBLAS_CHECK(Traits::gemm(wh,
+                        rocblas_operation_none, rocblas_operation_none,
+                        cL, cR, cR,
+                        &one,
+                        T2 + ws_out * cL * cR, cL,
+                        R_env + n * cR, cR * D,
+                        &beta,
+                        d_result + s1p * cL + s2p * cL * d, cL * dd));
+                }
+                // Record completion so segment stream can wait
+                HIP_CHECK(hipEventRecord(worker_done_events_[si][wi], ws_stream));
+                worker_idx++;
             }
+        }
+        // Segment stream waits for all workers to finish
+        for (int w = 0; w < std::min(worker_idx, n_workers_); w++) {
+            HIP_CHECK(hipStreamWaitEvent(streams_[si], worker_done_events_[si][w], 0));
         }
     }
 }
@@ -629,18 +681,30 @@ void PDMRGGPU<Scalar>::update_left_env(int site, int si) {
         U, chi_in * chi_out));
 
     // Step 3: L_new_w'[b,b'] = sum_{a',s'} conj(U[a',ws',b])^H * A[a',s',b']
-    for (int wp = 0; wp < D; wp++) {
-        for (int sp = 0; sp < d; sp++) {
-            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(handles_[si],
-                Traits::op_h, rocblas_operation_none,
-                chi_out, chi_out, chi_in,
-                &one,
-                U + ws_out * chi_in * chi_out, chi_in,
-                A + sp * chi_in, chi_in * d,
-                &beta,
-                L_new + wp * chi_out, chi_out * D));
+    // Dispatch independent wp iterations on separate worker streams (sp accumulates).
+    {
+        HIP_CHECK(hipEventRecord(step_done_events_[si], streams_[si]));
+        for (int wp = 0; wp < D; wp++) {
+            int wi = wp % n_workers_;
+            auto& wh = worker_handles_[si][wi];
+            auto& ws_stream = worker_streams_[si][wi];
+            HIP_CHECK(hipStreamWaitEvent(ws_stream, step_done_events_[si], 0));
+            for (int sp = 0; sp < d; sp++) {
+                Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+                int ws_out = wp * d + sp;
+                ROCBLAS_CHECK(Traits::gemm(wh,
+                    Traits::op_h, rocblas_operation_none,
+                    chi_out, chi_out, chi_in,
+                    &one,
+                    U + ws_out * chi_in * chi_out, chi_in,
+                    A + sp * chi_in, chi_in * d,
+                    &beta,
+                    L_new + wp * chi_out, chi_out * D));
+            }
+            HIP_CHECK(hipEventRecord(worker_done_events_[si][wi], ws_stream));
+        }
+        for (int w = 0; w < std::min(D, n_workers_); w++) {
+            HIP_CHECK(hipStreamWaitEvent(streams_[si], worker_done_events_[si][w], 0));
         }
     }
 
@@ -698,18 +762,30 @@ void PDMRGGPU<Scalar>::update_right_env(int site, int si) {
         U, chi_out * chi_in));
 
     // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
-    for (int w = 0; w < D; w++) {
-        for (int sp = 0; sp < d; sp++) {
-            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            int ws_out = w * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(handles_[si],
-                rocblas_operation_none, Traits::op_h,
-                chi_out, chi_out, chi_in,
-                &one,
-                U + ws_out * chi_out * chi_in, chi_out,
-                A + sp * chi_out, chi_out * d,
-                &beta,
-                R_new + w * chi_out, chi_out * D));
+    // Dispatch independent w iterations on separate worker streams (sp accumulates).
+    {
+        HIP_CHECK(hipEventRecord(step_done_events_[si], streams_[si]));
+        for (int w = 0; w < D; w++) {
+            int wi = w % n_workers_;
+            auto& wh = worker_handles_[si][wi];
+            auto& ws_stream = worker_streams_[si][wi];
+            HIP_CHECK(hipStreamWaitEvent(ws_stream, step_done_events_[si], 0));
+            for (int sp = 0; sp < d; sp++) {
+                Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+                int ws_out = w * d + sp;
+                ROCBLAS_CHECK(Traits::gemm(wh,
+                    rocblas_operation_none, Traits::op_h,
+                    chi_out, chi_out, chi_in,
+                    &one,
+                    U + ws_out * chi_out * chi_in, chi_out,
+                    A + sp * chi_out, chi_out * d,
+                    &beta,
+                    R_new + w * chi_out, chi_out * D));
+            }
+            HIP_CHECK(hipEventRecord(worker_done_events_[si][wi], ws_stream));
+        }
+        for (int w = 0; w < std::min(D, n_workers_); w++) {
+            HIP_CHECK(hipStreamWaitEvent(streams_[si], worker_done_events_[si][w], 0));
         }
     }
 }
