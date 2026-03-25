@@ -55,6 +55,19 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
     ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
 
+    // Worker stream pool for concurrent Step 3 GEMMs
+    n_workers_ = std::max(d * d, D_mpo);
+    worker_streams_.resize(n_workers_);
+    worker_handles_.resize(n_workers_);
+    worker_done_events_.resize(n_workers_);
+    for (int w = 0; w < n_workers_; w++) {
+        HIP_CHECK(hipStreamCreate(&worker_streams_[w]));
+        ROCBLAS_CHECK(rocblas_create_handle(&worker_handles_[w]));
+        ROCBLAS_CHECK(rocblas_set_stream(worker_handles_[w], worker_streams_[w]));
+        HIP_CHECK(hipEventCreateWithFlags(&worker_done_events_[w], hipEventDisableTiming));
+    }
+    HIP_CHECK(hipEventCreateWithFlags(&step_done_event_, hipEventDisableTiming));
+
     // Contraction intermediates
     int t_max = D_mpo_ * d_ * chi_max_ * chi_max_;
     HIP_CHECK(hipMalloc(&d_T1_, t_max * sizeof(Scalar)));
@@ -158,6 +171,13 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
 
     rocblas_destroy_handle(rocblas_h_);
     hipStreamDestroy(stream_);
+
+    for (int w = 0; w < n_workers_; w++) {
+        hipEventDestroy(worker_done_events_[w]);
+        rocblas_destroy_handle(worker_handles_[w]);
+        hipStreamDestroy(worker_streams_[w]);
+    }
+    hipEventDestroy(step_done_event_);
 }
 
 // ============================================================================
@@ -320,11 +340,16 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
         U, cL * cR));
 
     // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
-    for (int wp = 0; wp < D; wp++) {
-        Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
-        for (int sp = 0; sp < d; sp++) {
+    // sp iterations are INDEPENDENT (different output locations), wp ACCUMULATES.
+    // Dispatch each sp on a separate worker stream.
+    HIP_CHECK(hipEventRecord(step_done_event_, stream_));
+    for (int sp = 0; sp < d; sp++) {
+        int wi = sp % n_workers_;
+        HIP_CHECK(hipStreamWaitEvent(worker_streams_[wi], step_done_event_, 0));
+        for (int wp = 0; wp < D; wp++) {
+            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
             int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            ROCBLAS_CHECK(Traits::gemm(worker_handles_[wi],
                 rocblas_operation_none, rocblas_operation_none,
                 cL, cR, cR,
                 &one,
@@ -333,6 +358,10 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
                 &beta,
                 d_result + sp * cL, cL * d));
         }
+        HIP_CHECK(hipEventRecord(worker_done_events_[wi], worker_streams_[wi]));
+    }
+    for (int w = 0; w < std::min(d, n_workers_); w++) {
+        HIP_CHECK(hipStreamWaitEvent(stream_, worker_done_events_[w], 0));
     }
 }
 
@@ -391,15 +420,15 @@ void DMRGGPU<Scalar>::update_left_env(int site) {
         U, chi_in * chi_out));
 
     // Step 3: L_new_w'[b,b'] = sum_{a',s'} U[a',ws',b] * conj(A[a',s',b'])
-    //
-    // gemm(op_h, N, U, A) computes U^H * A = conj(desired result) for complex.
-    // For real, U^T * A is correct directly.
-    // For complex, we conjugate L_new after the loop.
+    // wp iterations are INDEPENDENT, sp accumulates. Dispatch wp on worker streams.
+    HIP_CHECK(hipEventRecord(step_done_event_, stream_));
     for (int wp = 0; wp < D; wp++) {
+        int wi = wp % n_workers_;
+        HIP_CHECK(hipStreamWaitEvent(worker_streams_[wi], step_done_event_, 0));
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
             int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            ROCBLAS_CHECK(Traits::gemm(worker_handles_[wi],
                 Traits::op_h, rocblas_operation_none,
                 chi_out, chi_out, chi_in,
                 &one,
@@ -408,6 +437,10 @@ void DMRGGPU<Scalar>::update_left_env(int site) {
                 &beta,
                 L_new + wp * chi_out, chi_out * D));
         }
+        HIP_CHECK(hipEventRecord(worker_done_events_[wi], worker_streams_[wi]));
+    }
+    for (int w = 0; w < std::min(D, n_workers_); w++) {
+        HIP_CHECK(hipStreamWaitEvent(stream_, worker_done_events_[w], 0));
     }
 
     // For complex: L_new = conj(U^H * A) = U^T * conj(A), the correct bra contraction
@@ -471,12 +504,15 @@ void DMRGGPU<Scalar>::update_right_env(int site) {
         U, chi_out * chi_in));
 
     // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
-    // For complex: use conjugate transpose (op_h) on A for <bra|
+    // w iterations are INDEPENDENT, sp accumulates. Dispatch w on worker streams.
+    HIP_CHECK(hipEventRecord(step_done_event_, stream_));
     for (int w = 0; w < D; w++) {
+        int wi = w % n_workers_;
+        HIP_CHECK(hipStreamWaitEvent(worker_streams_[wi], step_done_event_, 0));
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
             int ws_out = w * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            ROCBLAS_CHECK(Traits::gemm(worker_handles_[wi],
                 rocblas_operation_none, Traits::op_h,
                 chi_out, chi_out, chi_in,
                 &one,
@@ -485,6 +521,10 @@ void DMRGGPU<Scalar>::update_right_env(int site) {
                 &beta,
                 R_new + w * chi_out, chi_out * D));
         }
+        HIP_CHECK(hipEventRecord(worker_done_events_[wi], worker_streams_[wi]));
+    }
+    for (int w = 0; w < std::min(D, n_workers_); w++) {
+        HIP_CHECK(hipStreamWaitEvent(stream_, worker_done_events_[w], 0));
     }
 }
 
