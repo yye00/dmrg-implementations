@@ -323,43 +323,72 @@ void DMRGGPU<Scalar>::ht_contract(
     HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &descD,
         rankD, extD, NULL, dtype, 256));
 
-    hiptensorOperationDescriptor_t opDesc;
-    HT_CHECK(hiptensorCreateContraction(ht_handle_, &opDesc,
-        descA, modesA, HIPTENSOR_OP_IDENTITY,
-        descB, modesB, HIPTENSOR_OP_IDENTITY,
-        descD, modesD, HIPTENSOR_OP_IDENTITY,
-        descD, modesD, ctype));
+    // Build cache key from shape + mode signature
+    std::vector<int64_t> key;
+    key.reserve(3 + rankA*2 + rankB*2 + rankD*2);
+    key.push_back(rankA);
+    for (int i = 0; i < rankA; i++) key.push_back(extA[i]);
+    for (int i = 0; i < rankA; i++) key.push_back(modesA[i]);
+    key.push_back(rankB);
+    for (int i = 0; i < rankB; i++) key.push_back(extB[i]);
+    for (int i = 0; i < rankB; i++) key.push_back(modesB[i]);
+    key.push_back(rankD);
+    for (int i = 0; i < rankD; i++) key.push_back(extD[i]);
+    for (int i = 0; i < rankD; i++) key.push_back(modesD[i]);
 
-    hiptensorPlanPreference_t pref;
-    HT_CHECK(hiptensorCreatePlanPreference(ht_handle_, &pref,
-        HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_NONE));
+    auto it = ht_plan_cache_.find(key);
+    if (it == ht_plan_cache_.end()) {
+        // Cache miss: create all objects and keep them alive
+        HtPlanEntry entry;
+        HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &entry.descA,
+            rankA, extA, NULL, dtype, 256));
+        HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &entry.descB,
+            rankB, extB, NULL, dtype, 256));
+        HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &entry.descD,
+            rankD, extD, NULL, dtype, 256));
 
-    uint64_t worksize = 0;
-    HT_CHECK(hiptensorEstimateWorkspaceSize(ht_handle_, opDesc,
-        pref, HIPTENSOR_WORKSPACE_DEFAULT, &worksize));
+        HT_CHECK(hiptensorCreateContraction(ht_handle_, &entry.opDesc,
+            entry.descA, modesA, HIPTENSOR_OP_IDENTITY,
+            entry.descB, modesB, HIPTENSOR_OP_IDENTITY,
+            entry.descD, modesD, HIPTENSOR_OP_IDENTITY,
+            entry.descD, modesD, ctype));
 
-    if (worksize > ht_workspace_size_) {
-        if (ht_workspace_) hipFree(ht_workspace_);
-        HIP_CHECK(hipMalloc(&ht_workspace_, worksize));
-        ht_workspace_size_ = worksize;
+        hiptensorPlanPreference_t pref;
+        HT_CHECK(hiptensorCreatePlanPreference(ht_handle_, &pref,
+            HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_NONE));
+
+        uint64_t worksize = 0;
+        HT_CHECK(hiptensorEstimateWorkspaceSize(ht_handle_, entry.opDesc,
+            pref, HIPTENSOR_WORKSPACE_DEFAULT, &worksize));
+
+        if (worksize > ht_workspace_size_) {
+            if (ht_workspace_) hipFree(ht_workspace_);
+            HIP_CHECK(hipMalloc(&ht_workspace_, worksize));
+            ht_workspace_size_ = worksize;
+        }
+
+        HT_CHECK(hiptensorCreatePlan(ht_handle_, &entry.plan, entry.opDesc, pref, ht_workspace_size_));
+        hiptensorDestroyPlanPreference(pref);
+
+        it = ht_plan_cache_.emplace(std::move(key), entry).first;
+
+        // Destroy the local descriptors we created above (they were only for lookup)
+        hiptensorDestroyTensorDescriptor(descD);
+        hiptensorDestroyTensorDescriptor(descB);
+        hiptensorDestroyTensorDescriptor(descA);
+    } else {
+        // Cache hit: destroy the local descriptors we don't need
+        hiptensorDestroyTensorDescriptor(descD);
+        hiptensorDestroyTensorDescriptor(descB);
+        hiptensorDestroyTensorDescriptor(descA);
     }
-
-    hiptensorPlan_t plan;
-    HT_CHECK(hiptensorCreatePlan(ht_handle_, &plan, opDesc, pref, ht_workspace_size_));
 
     Scalar alpha = Traits::one();
     Scalar beta = Traits::zero();
-    HT_CHECK(hiptensorContract(ht_handle_, plan,
+    HT_CHECK(hiptensorContract(ht_handle_, it->second.plan,
         &alpha, A_data, B_data,
         &beta, D_data, D_data,
         ht_workspace_, ht_workspace_size_, stream_));
-
-    hiptensorDestroyPlan(plan);
-    hiptensorDestroyPlanPreference(pref);
-    hiptensorDestroyOperationDescriptor(opDesc);
-    hiptensorDestroyTensorDescriptor(descD);
-    hiptensorDestroyTensorDescriptor(descB);
-    hiptensorDestroyTensorDescriptor(descA);
 }
 
 template<typename Scalar>
