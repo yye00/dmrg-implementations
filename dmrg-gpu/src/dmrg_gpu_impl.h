@@ -330,51 +330,22 @@ void DMRGGPU<Scalar>::ht_contract(
         descD, modesD, HIPTENSOR_OP_IDENTITY,
         descD, modesD, ctype));
 
-    // Build cache key from shape signature
-    std::vector<int64_t> key;
-    key.reserve(3 + rankA*2 + rankB*2 + rankD*2);
-    key.push_back(rankA);
-    for (int i = 0; i < rankA; i++) key.push_back(extA[i]);
-    for (int i = 0; i < rankA; i++) key.push_back(modesA[i]);
-    key.push_back(rankB);
-    for (int i = 0; i < rankB; i++) key.push_back(extB[i]);
-    for (int i = 0; i < rankB; i++) key.push_back(modesB[i]);
-    key.push_back(rankD);
-    for (int i = 0; i < rankD; i++) key.push_back(extD[i]);
-    for (int i = 0; i < rankD; i++) key.push_back(modesD[i]);
+    hiptensorPlanPreference_t pref;
+    HT_CHECK(hiptensorCreatePlanPreference(ht_handle_, &pref,
+        HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_NONE));
+
+    uint64_t worksize = 0;
+    HT_CHECK(hiptensorEstimateWorkspaceSize(ht_handle_, opDesc,
+        pref, HIPTENSOR_WORKSPACE_DEFAULT, &worksize));
+
+    if (worksize > ht_workspace_size_) {
+        if (ht_workspace_) hipFree(ht_workspace_);
+        HIP_CHECK(hipMalloc(&ht_workspace_, worksize));
+        ht_workspace_size_ = worksize;
+    }
 
     hiptensorPlan_t plan;
-    auto it = ht_plan_cache_.find(key);
-    if (it != ht_plan_cache_.end()) {
-        plan = it->second.plan;
-    } else {
-        hiptensorPlanPreference_t pref;
-        HT_CHECK(hiptensorCreatePlanPreference(ht_handle_, &pref,
-            HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_NONE));
-
-        uint64_t worksize = 0;
-        HT_CHECK(hiptensorEstimateWorkspaceSize(ht_handle_, opDesc,
-            pref, HIPTENSOR_WORKSPACE_DEFAULT, &worksize));
-
-        if (worksize > ht_workspace_size_) {
-            if (ht_workspace_) hipFree(ht_workspace_);
-            HIP_CHECK(hipMalloc(&ht_workspace_, worksize));
-            ht_workspace_size_ = worksize;
-        }
-
-        HT_CHECK(hiptensorCreatePlan(ht_handle_, &plan, opDesc, pref, ht_workspace_size_));
-        hiptensorDestroyPlanPreference(pref);
-
-        HtPlanEntry entry;
-        entry.plan = plan;
-        entry.opDesc = opDesc;
-        entry.descA = descA;
-        entry.descB = descB;
-        entry.descD = descD;
-        ht_plan_cache_.emplace(std::move(key), entry);
-        opDesc = nullptr;  // transferred ownership to cache
-        descA = descB = descD = nullptr;
-    }
+    HT_CHECK(hiptensorCreatePlan(ht_handle_, &plan, opDesc, pref, ht_workspace_size_));
 
     Scalar alpha = Traits::one();
     Scalar beta = Traits::zero();
@@ -383,11 +354,12 @@ void DMRGGPU<Scalar>::ht_contract(
         &beta, D_data, D_data,
         ht_workspace_, ht_workspace_size_, stream_));
 
-    // Destroy only if not transferred to cache
-    if (descD) hiptensorDestroyTensorDescriptor(descD);
-    if (descB) hiptensorDestroyTensorDescriptor(descB);
-    if (descA) hiptensorDestroyTensorDescriptor(descA);
-    if (opDesc) hiptensorDestroyOperationDescriptor(opDesc);
+    hiptensorDestroyPlan(plan);
+    hiptensorDestroyPlanPreference(pref);
+    hiptensorDestroyOperationDescriptor(opDesc);
+    hiptensorDestroyTensorDescriptor(descD);
+    hiptensorDestroyTensorDescriptor(descB);
+    hiptensorDestroyTensorDescriptor(descA);
 }
 
 template<typename Scalar>
