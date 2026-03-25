@@ -368,10 +368,12 @@ void DMRGGPU<Scalar>::ht_contract(
     // Execute contraction using cached plan
     Scalar alpha = Traits::one();
     Scalar beta = Traits::zero();
+    HIP_CHECK(hipStreamSynchronize(stream_));  // sync before contract
     HT_CHECK(hiptensorContract(ht_handle_, it->second.plan,
         &alpha, A_data, B_data,
         &beta, D_data, D_data,
         ht_workspace_, ht_workspace_size_, stream_));
+    HIP_CHECK(hipStreamSynchronize(stream_));  // sync after contract
 }
 
 template<typename Scalar>
