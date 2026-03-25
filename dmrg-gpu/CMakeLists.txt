@@ -29,7 +29,7 @@ list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH})
 find_package(hip REQUIRED)
 find_package(rocblas REQUIRED)
 find_package(rocsolver REQUIRED)
-find_package(hiptensor REQUIRED)
+find_package(hiptensor REQUIRED COMPONENTS hiptensor)
 
 # Find LAPACK/BLAS
 # Prefer local OpenBLAS 0.3.28+ (system OpenBLAS 0.3.20 has broken dgesvd for tall-skinny matrices)
