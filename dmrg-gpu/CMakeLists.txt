@@ -29,7 +29,6 @@ list(APPEND CMAKE_PREFIX_PATH ${ROCM_PATH})
 find_package(hip REQUIRED)
 find_package(rocblas REQUIRED)
 find_package(rocsolver REQUIRED)
-find_package(hiptensor REQUIRED COMPONENTS hiptensor)
 
 # Find LAPACK/BLAS
 # Prefer local OpenBLAS 0.3.28+ (system OpenBLAS 0.3.20 has broken dgesvd for tall-skinny matrices)
@@ -71,7 +70,6 @@ target_link_libraries(dmrg_gpu
     hip::device
     roc::rocblas
     roc::rocsolver
-    hiptensor::hiptensor
     ${LAPACK_LIBRARIES}
 )
 
@@ -82,5 +80,5 @@ message(STATUS "==============================================")
 message(STATUS "GPU-Native DMRG Build Configuration")
 message(STATUS "==============================================")
 message(STATUS "GPU targets: ${GPU_TARGETS}")
-message(STATUS "Backend: hipTensor contractions + rocBLAS (Lanczos/SVD)")
+message(STATUS "Backend: rocBLAS GEMM (no hipTensor)")
 message(STATUS "==============================================")

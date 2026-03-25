@@ -3,7 +3,6 @@
 
 #include <hip/hip_runtime.h>
 #include <rocblas/rocblas.h>
-#include <hiptensor/hiptensor.h>
 #include <vector>
 #include "scalar_traits.h"
 
@@ -12,10 +11,11 @@
  *
  * Templated on Scalar: double (real) or hipDoubleComplex (complex128).
  *
- * ALL tensor contractions on GPU via hipTensor.
+ * ALL tensor contractions on GPU via rocBLAS gemm.
  * ALL linear algebra on GPU via rocBLAS/rocSOLVER.
  * Only CPU work: control flow, convergence checks on scalars,
- *                small tridiagonal eigensolve (Lanczos, ~100 elements).
+ *                small tridiagonal eigensolve (Lanczos, ~100 elements),
+ *                loops over small MPO bond dimension (D=5, d=2) to dispatch GEMMs.
  */
 template<typename Scalar>
 class DMRGGPU {
@@ -77,16 +77,10 @@ private:
     int theta_size_max_;
     int max_lanczos_iter_;
 
-    // Batched GEMM pointer arrays (on device) — kept for SVD absorption GEMMs
+    // Batched GEMM pointer arrays (on device)
     Scalar** d_batch_A_;
     Scalar** d_batch_B_;
     Scalar** d_batch_C_;
-
-    // hipTensor handle and workspace
-    hiptensorHandle_t ht_handle_;
-    void* ht_workspace_;
-    uint64_t ht_workspace_size_;
-    Scalar* d_conj_buf_;  // scratch for conjugated MPS in complex env updates
 
     // SVD workspace (pre-allocated at max size)
     Scalar* d_svd_A_;
@@ -119,13 +113,6 @@ private:
 
     void allocate_mps_tensor(int site, int cL, int cR);
     void free_gpu_resources();
-
-    // hipTensor contraction helper
-    void ht_contract(
-        const Scalar* A_data, int rankA, const int64_t* extA, const int32_t* modesA,
-        const Scalar* B_data, int rankB, const int64_t* extB, const int32_t* modesB,
-        Scalar* D_data, int rankD, const int64_t* extD, const int32_t* modesD);
-    void make_conjugate(const Scalar* src, Scalar* dst, int n);
 };
 
 // Include template implementation
