@@ -5,7 +5,6 @@
 #include <rocblas/rocblas.h>
 #include <hiptensor/hiptensor.h>
 #include <vector>
-#include <map>
 #include "scalar_traits.h"
 
 /**
@@ -88,14 +87,6 @@ private:
     void* ht_workspace_;
     uint64_t ht_workspace_size_;
     Scalar* d_conj_buf_;  // scratch for conjugated MPS in complex env updates
-
-    // hipTensor plan cache: avoids re-creating plans for repeated tensor shapes
-    struct HtPlanEntry {
-        hiptensorPlan_t plan;
-        hiptensorOperationDescriptor_t opDesc;
-        hiptensorTensorDescriptor_t descA, descB, descD;
-    };
-    std::map<std::vector<int64_t>, HtPlanEntry> ht_plan_cache_;
 
     // SVD workspace (pre-allocated at max size)
     Scalar* d_svd_A_;
