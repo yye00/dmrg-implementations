@@ -311,7 +311,26 @@ void DMRGGPU<Scalar>::ht_contract(
     const Scalar* B_data, int rankB, const int64_t* extB, const int32_t* modesB,
     Scalar* D_data, int rankD, const int64_t* extD, const int32_t* modesD)
 {
-    // Build cache key: [rankA, extA..., modesA..., rankB, extB..., modesB..., rankD, extD..., modesD...]
+    hiptensorDataType_t dtype = Traits::is_complex ? HIPTENSOR_C_64F : HIPTENSOR_R_64F;
+    hiptensorComputeDescriptor_t ctype = Traits::is_complex
+        ? HIPTENSOR_COMPUTE_DESC_C64F : HIPTENSOR_COMPUTE_DESC_64F;
+
+    hiptensorTensorDescriptor_t descA, descB, descD;
+    HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &descA,
+        rankA, extA, NULL, dtype, 256));
+    HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &descB,
+        rankB, extB, NULL, dtype, 256));
+    HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &descD,
+        rankD, extD, NULL, dtype, 256));
+
+    hiptensorOperationDescriptor_t opDesc;
+    HT_CHECK(hiptensorCreateContraction(ht_handle_, &opDesc,
+        descA, modesA, HIPTENSOR_OP_IDENTITY,
+        descB, modesB, HIPTENSOR_OP_IDENTITY,
+        descD, modesD, HIPTENSOR_OP_IDENTITY,
+        descD, modesD, ctype));
+
+    // Build cache key from shape signature
     std::vector<int64_t> key;
     key.reserve(3 + rankA*2 + rankB*2 + rankD*2);
     key.push_back(rankA);
@@ -324,33 +343,17 @@ void DMRGGPU<Scalar>::ht_contract(
     for (int i = 0; i < rankD; i++) key.push_back(extD[i]);
     for (int i = 0; i < rankD; i++) key.push_back(modesD[i]);
 
+    hiptensorPlan_t plan;
     auto it = ht_plan_cache_.find(key);
-    if (it == ht_plan_cache_.end()) {
-        // Cache miss: create descriptors + plan
-        hiptensorDataType_t dtype = Traits::is_complex ? HIPTENSOR_C_64F : HIPTENSOR_R_64F;
-        hiptensorComputeDescriptor_t ctype = Traits::is_complex
-            ? HIPTENSOR_COMPUTE_DESC_C64F : HIPTENSOR_COMPUTE_DESC_64F;
-
-        HtPlanEntry entry;
-        HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &entry.descA,
-            rankA, extA, NULL, dtype, 256));
-        HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &entry.descB,
-            rankB, extB, NULL, dtype, 256));
-        HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &entry.descD,
-            rankD, extD, NULL, dtype, 256));
-
-        HT_CHECK(hiptensorCreateContraction(ht_handle_, &entry.opDesc,
-            entry.descA, modesA, HIPTENSOR_OP_IDENTITY,
-            entry.descB, modesB, HIPTENSOR_OP_IDENTITY,
-            entry.descD, modesD, HIPTENSOR_OP_IDENTITY,
-            entry.descD, modesD, ctype));
-
+    if (it != ht_plan_cache_.end()) {
+        plan = it->second.plan;
+    } else {
         hiptensorPlanPreference_t pref;
         HT_CHECK(hiptensorCreatePlanPreference(ht_handle_, &pref,
             HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_NONE));
 
         uint64_t worksize = 0;
-        HT_CHECK(hiptensorEstimateWorkspaceSize(ht_handle_, entry.opDesc,
+        HT_CHECK(hiptensorEstimateWorkspaceSize(ht_handle_, opDesc,
             pref, HIPTENSOR_WORKSPACE_DEFAULT, &worksize));
 
         if (worksize > ht_workspace_size_) {
@@ -359,21 +362,32 @@ void DMRGGPU<Scalar>::ht_contract(
             ht_workspace_size_ = worksize;
         }
 
-        HT_CHECK(hiptensorCreatePlan(ht_handle_, &entry.plan, entry.opDesc, pref, ht_workspace_size_));
+        HT_CHECK(hiptensorCreatePlan(ht_handle_, &plan, opDesc, pref, ht_workspace_size_));
         hiptensorDestroyPlanPreference(pref);
 
-        it = ht_plan_cache_.emplace(std::move(key), entry).first;
+        HtPlanEntry entry;
+        entry.plan = plan;
+        entry.opDesc = opDesc;
+        entry.descA = descA;
+        entry.descB = descB;
+        entry.descD = descD;
+        ht_plan_cache_.emplace(std::move(key), entry);
+        opDesc = nullptr;  // transferred ownership to cache
+        descA = descB = descD = nullptr;
     }
 
-    // Execute contraction using cached plan
     Scalar alpha = Traits::one();
     Scalar beta = Traits::zero();
-    HIP_CHECK(hipStreamSynchronize(stream_));  // sync before contract
-    HT_CHECK(hiptensorContract(ht_handle_, it->second.plan,
+    HT_CHECK(hiptensorContract(ht_handle_, plan,
         &alpha, A_data, B_data,
         &beta, D_data, D_data,
         ht_workspace_, ht_workspace_size_, stream_));
-    HIP_CHECK(hipStreamSynchronize(stream_));  // sync after contract
+
+    // Destroy only if not transferred to cache
+    if (descD) hiptensorDestroyTensorDescriptor(descD);
+    if (descB) hiptensorDestroyTensorDescriptor(descB);
+    if (descA) hiptensorDestroyTensorDescriptor(descA);
+    if (opDesc) hiptensorDestroyOperationDescriptor(opDesc);
 }
 
 template<typename Scalar>
