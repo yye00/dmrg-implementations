@@ -28,6 +28,17 @@
         } \
     } while(0)
 
+#define HT_CHECK(call) \
+    do { \
+        hiptensorStatus_t ht_status = call; \
+        if (ht_status != HIPTENSOR_STATUS_SUCCESS) { \
+            std::cerr << "hipTensor error in " << __FILE__ << ":" << __LINE__ \
+                      << " - status " << (int)ht_status << ": " \
+                      << hiptensorGetErrorString(ht_status) << std::endl; \
+            throw std::runtime_error("hipTensor error"); \
+        } \
+    } while(0)
+
 // Profiling counters (reset per sweep pair)
 static double prof_lanczos_ms = 0, prof_svd_ms = 0, prof_env_ms = 0;
 static int prof_lanczos_iters = 0, prof_site_count = 0;
@@ -104,6 +115,16 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_batch_B_, batch_max * sizeof(Scalar*)));
     HIP_CHECK(hipMalloc(&d_batch_C_, batch_max * sizeof(Scalar*)));
 
+    // hipTensor handle and workspace
+    HT_CHECK(hiptensorCreate(&ht_handle_));
+    ht_workspace_ = nullptr;
+    ht_workspace_size_ = 0;
+    // Pre-allocate a generous workspace (resize if needed)
+    ht_workspace_size_ = (size_t)D_mpo_ * d_ * chi_max_ * chi_max_ * sizeof(Scalar) * 2;
+    HIP_CHECK(hipMalloc(&ht_workspace_, ht_workspace_size_));
+    // Conjugate buffer for complex env updates
+    HIP_CHECK(hipMalloc(&d_conj_buf_, chi_max_ * d_ * chi_max_ * sizeof(Scalar)));
+
     // SVD workspace
     int svd_max_dim = chi_max_ * d_;
     HIP_CHECK(hipMalloc(&d_svd_A_,    theta_size_max_ * sizeof(Scalar)));
@@ -148,6 +169,9 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
     if (d_batch_A_) hipFree(d_batch_A_);
     if (d_batch_B_) hipFree(d_batch_B_);
     if (d_batch_C_) hipFree(d_batch_C_);
+    if (ht_workspace_) hipFree(ht_workspace_);
+    if (d_conj_buf_) hipFree(d_conj_buf_);
+    hiptensorDestroy(ht_handle_);
     if (d_svd_A_) hipFree(d_svd_A_);
     if (d_svd_U_) hipFree(d_svd_U_);
     if (d_svd_S_) hipFree(d_svd_S_);
@@ -269,70 +293,135 @@ void DMRGGPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
 }
 
 // ============================================================================
-// GEMM-based tensor contractions
+// hipTensor contraction helper
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPU<Scalar>::ht_contract(
+    const Scalar* A_data, int rankA, const int64_t* extA, const int32_t* modesA,
+    const Scalar* B_data, int rankB, const int64_t* extB, const int32_t* modesB,
+    Scalar* D_data, int rankD, const int64_t* extD, const int32_t* modesD)
+{
+    hiptensorDataType_t dtype = Traits::is_complex ? HIPTENSOR_C_64F : HIPTENSOR_R_64F;
+    hiptensorComputeDescriptor_t ctype = Traits::is_complex
+        ? HIPTENSOR_COMPUTE_DESC_C64F : HIPTENSOR_COMPUTE_DESC_64F;
+
+    // Create tensor descriptors (v2 API: Create/Destroy pattern)
+    hiptensorTensorDescriptor_t descA, descB, descD;
+    HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &descA,
+        rankA, extA, NULL, dtype, 256));
+    HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &descB,
+        rankB, extB, NULL, dtype, 256));
+    HT_CHECK(hiptensorCreateTensorDescriptor(ht_handle_, &descD,
+        rankD, extD, NULL, dtype, 256));
+
+    // Create contraction descriptor: D = alpha * A * B + beta * C
+    // C = D (in-place, beta=0 so C is ignored)
+    hiptensorOperationDescriptor_t opDesc;
+    HT_CHECK(hiptensorCreateContraction(ht_handle_, &opDesc,
+        descA, modesA, HIPTENSOR_OP_IDENTITY,
+        descB, modesB, HIPTENSOR_OP_IDENTITY,
+        descD, modesD, HIPTENSOR_OP_IDENTITY,
+        descD, modesD, ctype));
+
+    // Create plan preference
+    hiptensorPlanPreference_t pref;
+    HT_CHECK(hiptensorCreatePlanPreference(ht_handle_, &pref,
+        HIPTENSOR_ALGO_DEFAULT, HIPTENSOR_JIT_MODE_NONE));
+
+    // Estimate workspace
+    uint64_t worksize = 0;
+    HT_CHECK(hiptensorEstimateWorkspaceSize(ht_handle_, opDesc,
+        pref, HIPTENSOR_WORKSPACE_DEFAULT, &worksize));
+
+    if (worksize > ht_workspace_size_) {
+        if (ht_workspace_) hipFree(ht_workspace_);
+        HIP_CHECK(hipMalloc(&ht_workspace_, worksize));
+        ht_workspace_size_ = worksize;
+    }
+
+    // Create execution plan
+    hiptensorPlan_t plan;
+    HT_CHECK(hiptensorCreatePlan(ht_handle_, &plan, opDesc, pref, ht_workspace_size_));
+
+    // Execute contraction
+    Scalar alpha = Traits::one();
+    Scalar beta = Traits::zero();
+    HT_CHECK(hiptensorContract(ht_handle_, plan,
+        &alpha, A_data, B_data,
+        &beta, D_data, D_data,
+        ht_workspace_, ht_workspace_size_, stream_));
+
+    // Cleanup (RAII would be better, but keep it simple)
+    hiptensorDestroyPlan(plan);
+    hiptensorDestroyPlanPreference(pref);
+    hiptensorDestroyOperationDescriptor(opDesc);
+    hiptensorDestroyTensorDescriptor(descD);
+    hiptensorDestroyTensorDescriptor(descB);
+    hiptensorDestroyTensorDescriptor(descA);
+}
+
+template<typename Scalar>
+void DMRGGPU<Scalar>::make_conjugate(const Scalar* src, Scalar* dst, int n) {
+    if constexpr (Traits::is_complex) {
+        HIP_CHECK(hipMemcpyAsync(dst, src, n * sizeof(Scalar),
+                                  hipMemcpyDeviceToDevice, stream_));
+        conjugate_inplace(dst, n, stream_);
+    } else {
+        HIP_CHECK(hipMemcpyAsync(dst, src, n * sizeof(Scalar),
+                                  hipMemcpyDeviceToDevice, stream_));
+    }
+}
+
+// ============================================================================
+// hipTensor-based tensor contractions
 // ============================================================================
 
 template<typename Scalar>
 void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_result) {
-    int cL = chi_L(site);
-    int cR = chi_R(site);
-    int D = D_mpo_, d = d_;
-    Scalar one = Traits::one(), zero_val = Traits::zero();
+    int64_t cL = chi_L(site);
+    int64_t cR = chi_R(site);
+    int64_t D = D_mpo_, d = d_;
 
-    Scalar* L_env = d_L_envs_[site];
-    Scalar* R_env = d_R_envs_[site + 1];
-    Scalar* W_mat = d_W_left_[site];
-    Scalar* V = d_T1_;
-    Scalar* U = d_T2_;
-
-    // Step 1: V_ws[a',b] = L_w^T[a',a] * theta_s[a,b]  (batched GEMM)
+    // Mode labels: a=ket-left, p=bra-left, w=mpo-in, q=mpo-out,
+    //              s=phys-ket, t=phys-bra, b=ket-right, r=bra-right
+    // Step 1: T1[p, w, s, b] = sum_a L[a, w, p] * theta[a, s, b]
     {
-        Scalar* h_A[D * d], *h_B[D * d], *h_C[D * d];
-        for (int w = 0; w < D; w++)
-            for (int s = 0; s < d; s++) {
-                int ws = w * d + s;
-                h_A[ws] = L_env + w * cL;
-                h_B[ws] = const_cast<Scalar*>(d_theta_in) + s * cL;
-                h_C[ws] = V + ws * cL * cR;
-            }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-            Traits::op_t, rocblas_operation_none,
-            cL, cR, cL,
-            &one,
-            (const Scalar**)d_batch_A_, cL * D,
-            (const Scalar**)d_batch_B_, cL * d,
-            &zero_val,
-            d_batch_C_, cL,
-            D * d));
+        int64_t extL[] = {cL, D, cL};
+        int32_t modesL[] = {'a', 'w', 'p'};
+        int64_t extTh[] = {cL, d, cR};
+        int32_t modesTh[] = {'a', 's', 'b'};
+        int64_t extT1[] = {cL, D, d, cR};
+        int32_t modesT1[] = {'p', 'w', 's', 'b'};
+        ht_contract(d_L_envs_[site], 3, extL, modesL,
+                    d_theta_in, 3, extTh, modesTh,
+                    d_T1_, 4, extT1, modesT1);
     }
 
-    // Step 2: U = V * W_matrix
-    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-        rocblas_operation_none, rocblas_operation_none,
-        cL * cR, d * D, D * d,
-        &one,
-        V, cL * cR,
-        W_mat, D * d,
-        &zero_val,
-        U, cL * cR));
+    // Step 2: T2[p, b, t, q] = sum_{w,s} T1[p, w, s, b] * W[w, s, t, q]
+    {
+        int64_t extT1[] = {cL, D, d, cR};
+        int32_t modesT1[] = {'p', 'w', 's', 'b'};
+        int64_t extW[] = {D, d, d, D};
+        int32_t modesW[] = {'w', 's', 't', 'q'};
+        int64_t extT2[] = {cL, cR, d, D};
+        int32_t modesT2[] = {'p', 'b', 't', 'q'};
+        ht_contract(d_T1_, 4, extT1, modesT1,
+                    d_mpo_tensors_[site], 4, extW, modesW,
+                    d_T2_, 4, extT2, modesT2);
+    }
 
-    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
-    for (int wp = 0; wp < D; wp++) {
-        Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
-        for (int sp = 0; sp < d; sp++) {
-            int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-                rocblas_operation_none, rocblas_operation_none,
-                cL, cR, cR,
-                &one,
-                U + ws_out * cL * cR, cL,
-                R_env + wp * cR, cR * D,
-                &beta,
-                d_result + sp * cL, cL * d));
-        }
+    // Step 3: result[p, t, r] = sum_{b,q} T2[p, b, t, q] * R[b, q, r]
+    {
+        int64_t extT2[] = {cL, cR, d, D};
+        int32_t modesT2[] = {'p', 'b', 't', 'q'};
+        int64_t extR[] = {cR, D, cR};
+        int32_t modesR[] = {'b', 'q', 'r'};
+        int64_t extRes[] = {cL, d, cR};
+        int32_t modesRes[] = {'p', 't', 'r'};
+        ht_contract(d_T2_, 4, extT2, modesT2,
+                    d_R_envs_[site + 1], 3, extR, modesR,
+                    d_result, 3, extRes, modesRes);
     }
 }
 
@@ -342,77 +431,57 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
 
 template<typename Scalar>
 void DMRGGPU<Scalar>::update_left_env(int site) {
-    int chi_in = bond_dims_[site];
-    int chi_out = bond_dims_[site + 1];
-    int D = D_mpo_, d = d_;
-    Scalar one = Traits::one(), zero_val = Traits::zero();
+    int64_t chi_in = bond_dims_[site];
+    int64_t chi_out = bond_dims_[site + 1];
+    int64_t D = D_mpo_, d = d_;
 
     ensure_L_env_alloc(site + 1, chi_out);
 
-    Scalar* L_env = d_L_envs_[site];
-    Scalar* A = d_mps_tensors_[site];
-    Scalar* W_mat = d_W_left_[site];
-    Scalar* L_new = d_L_envs_[site + 1];
-    Scalar* V = d_T1_;
-    Scalar* U = d_T2_;
-
-    // Step 1: V_ws[a',b] = L_w^T[a',a] * A_s[a,b]  (batched GEMM)
+    // Step 1: T1[p, w, s, b] = sum_a L[a, w, p] * A[a, s, b]
     {
-        Scalar* h_A[D * d], *h_B[D * d], *h_C[D * d];
-        for (int w = 0; w < D; w++)
-            for (int s = 0; s < d; s++) {
-                int ws = w * d + s;
-                h_A[ws] = L_env + w * chi_in;
-                h_B[ws] = A + s * chi_in;
-                h_C[ws] = V + ws * chi_in * chi_out;
-            }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-            Traits::op_t, rocblas_operation_none,
-            chi_in, chi_out, chi_in,
-            &one,
-            (const Scalar**)d_batch_A_, chi_in * D,
-            (const Scalar**)d_batch_B_, chi_in * d,
-            &zero_val,
-            d_batch_C_, chi_in,
-            D * d));
+        int64_t extL[] = {chi_in, D, chi_in};
+        int32_t modesL[] = {'a', 'w', 'p'};
+        int64_t extA[] = {chi_in, d, chi_out};
+        int32_t modesA[] = {'a', 's', 'b'};
+        int64_t extT1[] = {chi_in, D, d, chi_out};
+        int32_t modesT1[] = {'p', 'w', 's', 'b'};
+        ht_contract(d_L_envs_[site], 3, extL, modesL,
+                    d_mps_tensors_[site], 3, extA, modesA,
+                    d_T1_, 4, extT1, modesT1);
     }
 
-    // Step 2: U = V * W_matrix
-    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-        rocblas_operation_none, rocblas_operation_none,
-        chi_in * chi_out, d * D, D * d,
-        &one,
-        V, chi_in * chi_out,
-        W_mat, D * d,
-        &zero_val,
-        U, chi_in * chi_out));
+    // Step 2: T2[p, b, t, q] = sum_{w,s} T1[p, w, s, b] * W[w, s, t, q]
+    {
+        int64_t extT1[] = {chi_in, D, d, chi_out};
+        int32_t modesT1[] = {'p', 'w', 's', 'b'};
+        int64_t extW[] = {D, d, d, D};
+        int32_t modesW[] = {'w', 's', 't', 'q'};
+        int64_t extT2[] = {chi_in, chi_out, d, D};
+        int32_t modesT2[] = {'p', 'b', 't', 'q'};
+        ht_contract(d_T1_, 4, extT1, modesT1,
+                    d_mpo_tensors_[site], 4, extW, modesW,
+                    d_T2_, 4, extT2, modesT2);
+    }
 
-    // Step 3: L_new_w'[b,b'] = sum_{a',s'} U[a',ws',b] * conj(A[a',s',b'])
-    //
-    // gemm(op_h, N, U, A) computes U^H * A = conj(desired result) for complex.
-    // For real, U^T * A is correct directly.
-    // For complex, we conjugate L_new after the loop.
-    for (int wp = 0; wp < D; wp++) {
-        for (int sp = 0; sp < d; sp++) {
-            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-                Traits::op_h, rocblas_operation_none,
-                chi_out, chi_out, chi_in,
-                &one,
-                U + ws_out * chi_in * chi_out, chi_in,
-                A + sp * chi_in, chi_in * d,
-                &beta,
-                L_new + wp * chi_out, chi_out * D));
+    // Step 3: L_new[b, q, r] = sum_{p,t} T2[p, b, t, q] * conj(A)[p, t, r]
+    {
+        int a_size = chi_in * d * chi_out;
+        const Scalar* A_bra;
+        if constexpr (Traits::is_complex) {
+            make_conjugate(d_mps_tensors_[site], d_conj_buf_, a_size);
+            A_bra = d_conj_buf_;
+        } else {
+            A_bra = d_mps_tensors_[site];
         }
-    }
-
-    // For complex: L_new = conj(U^H * A) = U^T * conj(A), the correct bra contraction
-    if constexpr (Traits::is_complex) {
-        conjugate_inplace(L_new, chi_out * D * chi_out, stream_);
+        int64_t extT2[] = {chi_in, chi_out, d, D};
+        int32_t modesT2[] = {'p', 'b', 't', 'q'};
+        int64_t extAbar[] = {chi_in, d, chi_out};
+        int32_t modesAbar[] = {'p', 't', 'r'};
+        int64_t extLnew[] = {chi_out, D, chi_out};
+        int32_t modesLnew[] = {'b', 'q', 'r'};
+        ht_contract(d_T2_, 4, extT2, modesT2,
+                    A_bra, 3, extAbar, modesAbar,
+                    d_L_envs_[site + 1], 3, extLnew, modesLnew);
     }
 }
 
@@ -422,69 +491,57 @@ void DMRGGPU<Scalar>::update_left_env(int site) {
 
 template<typename Scalar>
 void DMRGGPU<Scalar>::update_right_env(int site) {
-    int chi_in = bond_dims_[site + 1];
-    int chi_out = bond_dims_[site];
-    int D = D_mpo_, d = d_;
-    Scalar one = Traits::one(), zero_val = Traits::zero();
+    int64_t chi_in = bond_dims_[site + 1];
+    int64_t chi_out = bond_dims_[site];
+    int64_t D = D_mpo_, d = d_;
 
     ensure_R_env_alloc(site, chi_out);
 
-    Scalar* A = d_mps_tensors_[site];
-    Scalar* R_env = d_R_envs_[site + 1];
-    Scalar* W_mat = d_W_right_[site];
-    Scalar* R_new = d_R_envs_[site];
-    Scalar* V = d_T1_;
-    Scalar* U = d_T2_;
-
-    // Step 1: V_ws[a,b'] = A_s[a,b] * R_w'[b,b']  (batched GEMM)
+    // Step 1: T1[a, s, q, r] = sum_b A[a, s, b] * R[b, q, r]
     {
-        Scalar* h_A[D * d], *h_B[D * d], *h_C[D * d];
-        for (int wp = 0; wp < D; wp++)
-            for (int s = 0; s < d; s++) {
-                int ws = wp * d + s;
-                h_A[ws] = A + s * chi_out;
-                h_B[ws] = R_env + wp * chi_in;
-                h_C[ws] = V + ws * chi_out * chi_in;
-            }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-            rocblas_operation_none, rocblas_operation_none,
-            chi_out, chi_in, chi_in,
-            &one,
-            (const Scalar**)d_batch_A_, chi_out * d,
-            (const Scalar**)d_batch_B_, chi_in * D,
-            &zero_val,
-            d_batch_C_, chi_out,
-            D * d));
+        int64_t extA[] = {chi_out, d, chi_in};
+        int32_t modesA[] = {'a', 's', 'b'};
+        int64_t extR[] = {chi_in, D, chi_in};
+        int32_t modesR[] = {'b', 'q', 'r'};
+        int64_t extT1[] = {chi_out, d, D, chi_in};
+        int32_t modesT1[] = {'a', 's', 'q', 'r'};
+        ht_contract(d_mps_tensors_[site], 3, extA, modesA,
+                    d_R_envs_[site + 1], 3, extR, modesR,
+                    d_T1_, 4, extT1, modesT1);
     }
 
-    // Step 2: U = V * W_matrix
-    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-        rocblas_operation_none, rocblas_operation_none,
-        chi_out * chi_in, d * D, D * d,
-        &one,
-        V, chi_out * chi_in,
-        W_mat, D * d,
-        &zero_val,
-        U, chi_out * chi_in));
+    // Step 2: T2[a, r, w, t] = sum_{s,q} W[w, s, t, q] * T1[a, s, q, r]
+    {
+        int64_t extW[] = {D, d, d, D};
+        int32_t modesW[] = {'w', 's', 't', 'q'};
+        int64_t extT1[] = {chi_out, d, D, chi_in};
+        int32_t modesT1[] = {'a', 's', 'q', 'r'};
+        int64_t extT2[] = {chi_out, chi_in, D, d};
+        int32_t modesT2[] = {'a', 'r', 'w', 't'};
+        ht_contract(d_mpo_tensors_[site], 4, extW, modesW,
+                    d_T1_, 4, extT1, modesT1,
+                    d_T2_, 4, extT2, modesT2);
+    }
 
-    // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
-    // For complex: use conjugate transpose (op_h) on A for <bra|
-    for (int w = 0; w < D; w++) {
-        for (int sp = 0; sp < d; sp++) {
-            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            int ws_out = w * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-                rocblas_operation_none, Traits::op_h,
-                chi_out, chi_out, chi_in,
-                &one,
-                U + ws_out * chi_out * chi_in, chi_out,
-                A + sp * chi_out, chi_out * d,
-                &beta,
-                R_new + w * chi_out, chi_out * D));
+    // Step 3: R_new[a, w, p] = sum_{r,t} T2[a, r, w, t] * conj(A)[p, t, r]
+    {
+        int a_size = chi_out * d * chi_in;
+        const Scalar* A_bra;
+        if constexpr (Traits::is_complex) {
+            make_conjugate(d_mps_tensors_[site], d_conj_buf_, a_size);
+            A_bra = d_conj_buf_;
+        } else {
+            A_bra = d_mps_tensors_[site];
         }
+        int64_t extT2[] = {chi_out, chi_in, D, d};
+        int32_t modesT2[] = {'a', 'r', 'w', 't'};
+        int64_t extAbar[] = {chi_out, d, chi_in};
+        int32_t modesAbar[] = {'p', 't', 'r'};
+        int64_t extRnew[] = {chi_out, D, chi_out};
+        int32_t modesRnew[] = {'a', 'w', 'p'};
+        ht_contract(d_T2_, 4, extT2, modesT2,
+                    A_bra, 3, extAbar, modesAbar,
+                    d_R_envs_[site], 3, extRnew, modesRnew);
     }
 }
 
@@ -894,7 +951,7 @@ double DMRGGPU<Scalar>::sweep_right_to_left() {
 template<typename Scalar>
 double DMRGGPU<Scalar>::run(int n_sweeps) {
     const char* type_name = Traits::is_complex ? "complex128" : "float64";
-    printf("=== GPU-Native DMRG (rocBLAS GEMM, %s) ===\n", type_name);
+    printf("=== GPU-Native DMRG (hipTensor + rocBLAS, %s) ===\n", type_name);
     printf("L = %d, d = %d, chi_max = %d, D_mpo = %d\n", L_, d_, chi_max_, D_mpo_);
     printf("Running %d sweeps...\n\n", n_sweeps);
 
