@@ -136,17 +136,24 @@ private:
 
     bool use_cpu_svd_;
     bool use_rsvd_;
+    bool lanczos_use_1site_;  // when true, Lanczos calls apply_heff_single_site
     int rsvd_oversampling_;
     int theta_size_max_;
     int max_lanczos_iter_;
 
     // === Core methods (stream-aware: si = stream index) ===
+    // Two-site (for main PDMRG sweeps and boundary merge)
     void form_theta_two_site(int site, int si);
     void apply_heff_two_site(int site, const Scalar* d_in, Scalar* d_out, int si);
     double lanczos_eigensolver(int site, Scalar* d_theta, int theta_size, int si);
     void svd_split(int site, Scalar* d_theta, char direction, int si);
     void rsvd_split(int site, Scalar* d_theta, char direction, int si);
     double optimize_bond(int site, char direction, int si);
+
+    // Single-site (for warmup and polish — cheaper eigsh problem)
+    void apply_heff_single_site(int site, const Scalar* d_in, Scalar* d_out, int si);
+    void svd_split_single_site(int site, Scalar* d_theta, char direction, int si);
+    double optimize_site_single(int site, char direction, int si);
 
     // === Environment updates (stream-aware) ===
     void update_left_env(int site, int si);
@@ -160,8 +167,10 @@ private:
     void allocate_mps_tensor(int site, int cL, int cR);
 
     // === Sweep methods ===
-    double sweep_LR_full();        // full-chain L→R (warmup), stream 0
-    double sweep_RL_full();        // full-chain R→L (warmup), stream 0
+    double sweep_LR_full();        // full-chain L→R two-site, stream 0
+    double sweep_RL_full();        // full-chain R→L two-site, stream 0
+    double sweep_LR_full_1site();  // full-chain L→R single-site (warmup/polish), stream 0
+    double sweep_RL_full_1site();  // full-chain R→L single-site (warmup/polish), stream 0
     void segment_sweep_LR(int seg_idx);  // local L→R within segment
     void segment_sweep_RL(int seg_idx);  // local R→L within segment
     double merge_and_optimize_boundaries(int parity = -1);  // Stoudenmire boundary coupling

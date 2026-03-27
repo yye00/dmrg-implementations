@@ -109,6 +109,7 @@ PDMRGGPU<Scalar>::PDMRGGPU(int L, int d, int chi_max, int D_mpo, int n_segments,
     max_lanczos_iter_ = std::min(100, theta_size_max_);
     use_cpu_svd_ = false;
     use_rsvd_ = false;
+    lanczos_use_1site_ = false;
     rsvd_oversampling_ = 20;
 
     allocate_stream_workspaces();
@@ -790,7 +791,10 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
 
         // w = H|v_i> (apply_heff uses host pointer mode internally)
-        apply_heff_two_site(site, d_vi, ws.d_heff_result, si);
+        if (lanczos_use_1site_)
+            apply_heff_single_site(site, d_vi, ws.d_heff_result, si);
+        else
+            apply_heff_two_site(site, d_vi, ws.d_heff_result, si);
 
         // Switch to device pointer mode for scalar operations
         ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
@@ -1302,7 +1306,277 @@ double PDMRGGPU<Scalar>::optimize_bond(int site, char direction, int si) {
 }
 
 // ============================================================================
-// Full-chain sweep methods (for warmup, use stream 0)
+// Single-site apply_heff: H_eff|θ⟩ for one MPS tensor
+// Same 3-step GEMM as dmrg-gpu: L_env × θ × W × R_env
+// theta shape: (cL, d, cR), result shape: (cL, d, cR)
+// ============================================================================
+
+template<typename Scalar>
+void PDMRGGPU<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta_in,
+                                               Scalar* d_result, int si) {
+    int cL = chi_L(site);
+    int cR = chi_R(site);
+    int D = D_mpo_, d = d_;
+    Scalar one = Traits::one(), zero_val = Traits::zero();
+    auto& ws = workspaces_[si];
+
+    Scalar* L_env = d_L_envs_[site];
+    Scalar* R_env = d_R_envs_[site + 1];
+    Scalar* W_mat = d_W_left_[site];
+    Scalar* V = ws.d_T1;
+    Scalar* U = ws.d_T2;
+
+    // Step 1: V_ws[a',b] = L_w^T[a',a] * theta_s[a,b]  (D*d batched GEMMs)
+    {
+        int batch_count = D * d;
+        Scalar* h_A[256], *h_B[256], *h_C[256]; // D*d ≤ 256 for practical MPOs
+        for (int w = 0; w < D; w++)
+            for (int s = 0; s < d; s++) {
+                int ws = w * d + s;
+                h_A[ws] = L_env + w * cL;
+                h_B[ws] = const_cast<Scalar*>(d_theta_in) + s * cL;
+                h_C[ws] = V + ws * cL * cR;
+            }
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, h_A, batch_count * sizeof(Scalar*),
+                                  hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, h_B, batch_count * sizeof(Scalar*),
+                                  hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, h_C, batch_count * sizeof(Scalar*),
+                                  hipMemcpyHostToDevice, streams_[si]));
+        ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
+            Traits::op_t, rocblas_operation_none,
+            cL, cR, cL,
+            &one,
+            (const Scalar**)ws.d_batch_A, cL * D,
+            (const Scalar**)ws.d_batch_B, cL * d,
+            &zero_val,
+            ws.d_batch_C, cL,
+            batch_count));
+    }
+
+    // Step 2: U = V * W_matrix  (single dense GEMM)
+    ROCBLAS_CHECK(Traits::gemm(handles_[si],
+        rocblas_operation_none, rocblas_operation_none,
+        cL * cR, d * D, D * d,
+        &one,
+        V, cL * cR,
+        W_mat, D * d,
+        &zero_val,
+        U, cL * cR));
+
+    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']  (d*D GEMMs)
+    for (int wp = 0; wp < D; wp++) {
+        Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
+        for (int sp = 0; sp < d; sp++) {
+            int ws_out = wp * d + sp;
+            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                rocblas_operation_none, rocblas_operation_none,
+                cL, cR, cR,
+                &one,
+                U + ws_out * cL * cR, cL,
+                R_env + wp * cR, cR * D,
+                &beta,
+                d_result + sp * cL, cL * d));
+        }
+    }
+}
+
+// ============================================================================
+// Single-site SVD split: decompose theta and shift canonical center
+// Direction 'R': theta(cL*d, cR) → U=MPS[site], S*Vh absorbed into MPS[site+1]
+// Direction 'L': theta(cL, d*cR) → Vh=MPS[site], U*S absorbed into MPS[site-1]
+// ============================================================================
+
+template<typename Scalar>
+void PDMRGGPU<Scalar>::svd_split_single_site(int site, Scalar* d_theta, char direction, int si) {
+    int cL = chi_L(site);
+    int cR = chi_R(site);
+    auto& ws = workspaces_[si];
+
+    int m, n_svd;
+    if (direction == 'R') { m = cL * d_; n_svd = cR; }
+    else                  { m = cL;      n_svd = d_ * cR; }
+    int full_k = std::min(m, n_svd);
+    int k = std::min(full_k, chi_max_);
+
+    Scalar* h_U_data = nullptr;
+    RealType* h_S_data = nullptr;
+    Scalar* h_Vh_data = nullptr;
+
+    // CPU SVD (default path, faster for chi < 200)
+    if (use_cpu_svd_) {
+        HIP_CHECK(hipMemcpyAsync(ws.h_svd_A.data(), d_theta, m * n_svd * sizeof(Scalar),
+                                  hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
+
+        int lwork = (int)ws.h_svd_work.size();
+        int info;
+        const char jobu = 'S', jobvt = 'S';
+        Traits::lapack_gesvd(&jobu, &jobvt, &m, &n_svd, ws.h_svd_A.data(), &m,
+                ws.h_svd_S.data(), ws.h_svd_U.data(), &m, ws.h_svd_Vh.data(), &full_k,
+                ws.h_svd_work.data(), &lwork,
+                ws.h_svd_rwork.empty() ? nullptr : ws.h_svd_rwork.data(), &info);
+
+        h_U_data = ws.h_svd_U.data();
+        h_S_data = ws.h_svd_S.data();
+        h_Vh_data = ws.h_svd_Vh.data();
+    } else {
+        HIP_CHECK(hipMemcpyAsync(ws.d_svd_A, d_theta, m * n_svd * sizeof(Scalar),
+                                  hipMemcpyDeviceToDevice, streams_[si]));
+        Traits::rocsolver_gesvd(handles_[si],
+            rocblas_svect_singular, rocblas_svect_singular,
+            m, n_svd,
+            ws.d_svd_A, m,
+            ws.d_svd_S,
+            ws.d_svd_U, m,
+            ws.d_svd_Vh, full_k,
+            ws.d_svd_E,
+            rocblas_outofplace,
+            ws.d_svd_info);
+        HIP_CHECK(hipMemcpy(ws.h_svd_S.data(), ws.d_svd_S, full_k * sizeof(RealType), hipMemcpyDeviceToHost));
+        h_S_data = ws.h_svd_S.data();
+    }
+
+    // Truncation
+    int new_k = k;
+    for (int i = 0; i < new_k; i++) {
+        if (h_S_data[i] < 1e-14) { new_k = i; break; }
+    }
+    if (new_k == 0) new_k = 1;
+
+    Scalar one = Traits::one(), zero_val = Traits::zero();
+
+    if (direction == 'R') {
+        int new_chi_R = new_k;
+
+        if (use_cpu_svd_) {
+            // Upload U[:, :new_k] as MPS[site]
+            allocate_mps_tensor(site, cL, new_chi_R);
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], h_U_data,
+                        m * new_k * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+
+            // Compute S*Vh on CPU, then absorb into MPS[site+1] via GEMM
+            for (int j = 0; j < n_svd; j++)
+                for (int i = 0; i < new_k; i++)
+                    ws.h_svd_tmp[i + j * new_k] = Traits::scale_by_real(h_S_data[i], h_Vh_data[i + j * full_k]);
+
+            HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, ws.h_svd_tmp.data(),
+                        new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+        } else {
+            // GPU path: U and Vh already on device
+            allocate_mps_tensor(site, cL, new_chi_R);
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.d_svd_U,
+                        (size_t)m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
+            // Scale rows of Vh by S → ws.d_svd_work
+            scale_rows_by_real(ws.d_svd_Vh, full_k, ws.d_svd_S,
+                               ws.d_svd_work, new_k, new_k, n_svd, streams_[si]);
+        }
+
+        // Absorb S*Vh into MPS[site+1]: new = (S*Vh) @ old_MPS[site+1]
+        if (site + 1 < L_) {
+            int next_cR = chi_R(site + 1);
+            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                rocblas_operation_none, rocblas_operation_none,
+                new_k, d_ * next_cR, cR, &one,
+                ws.d_svd_work, new_k,
+                d_mps_tensors_[site + 1], cR, &zero_val,
+                ws.d_T1, new_k));
+            allocate_mps_tensor(site + 1, new_chi_R, next_cR);
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], ws.d_T1,
+                        (size_t)new_k * d_ * next_cR * sizeof(Scalar),
+                        hipMemcpyDeviceToDevice, streams_[si]));
+        }
+        bond_dims_[site + 1] = new_chi_R;
+
+    } else {  // direction == 'L'
+        int new_chi_L = new_k;
+
+        if (use_cpu_svd_) {
+            // Upload Vh[:new_k, :] as MPS[site]
+            allocate_mps_tensor(site, new_chi_L, cR);
+            if (new_k == full_k) {
+                HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], h_Vh_data,
+                            full_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+            } else {
+                for (int j = 0; j < n_svd; j++)
+                    for (int i = 0; i < new_chi_L; i++)
+                        ws.h_svd_tmp[i + j * new_chi_L] = h_Vh_data[i + j * full_k];
+                HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.h_svd_tmp.data(),
+                            new_chi_L * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+            }
+
+            // Compute U*S on CPU
+            for (int j = 0; j < new_k; j++)
+                for (int i = 0; i < m; i++)
+                    ws.h_svd_tmp[i + j * m] = Traits::scale_by_real(h_S_data[j], h_U_data[i + j * m]);
+
+            HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, ws.h_svd_tmp.data(),
+                        m * new_k * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+        } else {
+            // GPU path
+            allocate_mps_tensor(site, new_chi_L, cR);
+            if (new_k == full_k) {
+                HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.d_svd_Vh,
+                            (size_t)full_k * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
+            } else {
+                HIP_CHECK(hipMemcpy2DAsync(
+                    d_mps_tensors_[site], new_k * sizeof(Scalar),
+                    ws.d_svd_Vh, full_k * sizeof(Scalar),
+                    new_k * sizeof(Scalar), n_svd,
+                    hipMemcpyDeviceToDevice, streams_[si]));
+            }
+            // Scale columns of U by S → ws.d_svd_work
+            scale_columns_by_real(ws.d_svd_U, m, ws.d_svd_S,
+                                  ws.d_svd_work, m, m, new_k, streams_[si]);
+        }
+
+        // Absorb U*S into MPS[site-1]: new = old_MPS[site-1] @ (U*S)
+        if (site > 0) {
+            int prev_cL = chi_L(site - 1);
+            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                rocblas_operation_none, rocblas_operation_none,
+                prev_cL * d_, new_k, cL, &one,
+                d_mps_tensors_[site - 1], prev_cL * d_,
+                ws.d_svd_work, m, &zero_val,
+                ws.d_T1, prev_cL * d_));
+            allocate_mps_tensor(site - 1, prev_cL, new_chi_L);
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site - 1], ws.d_T1,
+                        (size_t)prev_cL * d_ * new_k * sizeof(Scalar),
+                        hipMemcpyDeviceToDevice, streams_[si]));
+        }
+        bond_dims_[site] = new_chi_L;
+    }
+
+    ws.heff_cached_site = -1;
+}
+
+// ============================================================================
+// Single-site optimization: form theta → Lanczos → SVD split
+// ============================================================================
+
+template<typename Scalar>
+double PDMRGGPU<Scalar>::optimize_site_single(int site, char direction, int si) {
+    int cL = chi_L(site);
+    int cR = chi_R(site);
+    int theta_size = cL * d_ * cR;
+    auto& ws = workspaces_[si];
+
+    // form_theta: just copy MPS[site] to workspace
+    HIP_CHECK(hipMemcpyAsync(ws.d_theta, d_mps_tensors_[site],
+                              theta_size * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
+
+    // Use single-site matvec in Lanczos
+    lanczos_use_1site_ = true;
+    double energy = lanczos_eigensolver(site, ws.d_theta, theta_size, si);
+    lanczos_use_1site_ = false;
+
+    svd_split_single_site(site, ws.d_theta, direction, si);
+
+    return energy;
+}
+
+// ============================================================================
+// Full-chain sweep methods (two-site, for main PDMRG sweeps)
 // ============================================================================
 
 template<typename Scalar>
@@ -1311,8 +1585,6 @@ double PDMRGGPU<Scalar>::sweep_LR_full() {
     for (int site = 0; site < L_ - 1; site++) {
         energy = optimize_bond(site, 'R', 0);
         update_left_env(site, 0);
-        // A7: No explicit sync needed — CPU SVD path forces sync via D2H copy,
-        // and pageable H2D uploads are staged (effectively synchronous).
     }
     return energy;
 }
@@ -1323,7 +1595,58 @@ double PDMRGGPU<Scalar>::sweep_RL_full() {
     for (int site = L_ - 2; site >= 0; site--) {
         energy = optimize_bond(site, 'L', 0);
         update_right_env(site + 1, 0);
-        // A7: No explicit sync needed — see above.
+    }
+    return energy;
+}
+
+// ============================================================================
+// Full-chain single-site sweep methods (for warmup and polish)
+// ============================================================================
+
+template<typename Scalar>
+double PDMRGGPU<Scalar>::sweep_LR_full_1site() {
+    double energy = 0.0;
+    for (int site = 0; site < L_ - 1; site++) {
+        energy = optimize_site_single(site, 'R', 0);
+        update_left_env(site, 0);
+    }
+    // Last site: optimize without SVD (endpoint)
+    {
+        int cL = chi_L(L_ - 1);
+        int cR = chi_R(L_ - 1);
+        int theta_size = cL * d_ * cR;
+        auto& ws = workspaces_[0];
+        HIP_CHECK(hipMemcpyAsync(ws.d_theta, d_mps_tensors_[L_ - 1],
+                                  theta_size * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[0]));
+        lanczos_use_1site_ = true;
+        energy = lanczos_eigensolver(L_ - 1, ws.d_theta, theta_size, 0);
+        lanczos_use_1site_ = false;
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[L_ - 1], ws.d_theta,
+                                  theta_size * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[0]));
+    }
+    return energy;
+}
+
+template<typename Scalar>
+double PDMRGGPU<Scalar>::sweep_RL_full_1site() {
+    double energy = 0.0;
+    for (int site = L_ - 1; site >= 1; site--) {
+        energy = optimize_site_single(site, 'L', 0);
+        update_right_env(site, 0);
+    }
+    // First site: optimize without SVD (endpoint)
+    {
+        int cL = chi_L(0);
+        int cR = chi_R(0);
+        int theta_size = cL * d_ * cR;
+        auto& ws = workspaces_[0];
+        HIP_CHECK(hipMemcpyAsync(ws.d_theta, d_mps_tensors_[0],
+                                  theta_size * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[0]));
+        lanczos_use_1site_ = true;
+        energy = lanczos_eigensolver(0, ws.d_theta, theta_size, 0);
+        lanczos_use_1site_ = false;
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[0], ws.d_theta,
+                                  theta_size * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[0]));
     }
     return energy;
 }
@@ -1504,15 +1827,15 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     std::cout << "  Environment build: " << std::fixed << std::setprecision(3)
               << std::chrono::duration<double>(t_envs - t_start).count() << " s" << std::endl;
 
-    // B2: Adaptive warmup — converge with full-chain sweeps, early exit when dE < tol
-    std::cout << "Running up to " << n_warmup << " warmup sweeps (full-chain dmrg2)..." << std::endl;
+    // B2: Adaptive warmup — single-site sweeps (cheaper eigsh: chi*d vs chi*d²)
+    std::cout << "Running up to " << n_warmup << " warmup sweeps (full-chain dmrg1)..." << std::endl;
     double warmup_energy = 0.0;
     double prev_warmup_energy = 1e30;
     int actual_warmup = 0;
     for (int sw = 0; sw < n_warmup; sw++) {
         auto t_sw = std::chrono::high_resolution_clock::now();
-        sweep_LR_full();
-        warmup_energy = sweep_RL_full();
+        sweep_LR_full_1site();
+        warmup_energy = sweep_RL_full_1site();
         auto t_sw_end = std::chrono::high_resolution_clock::now();
         double dE = std::abs(warmup_energy - prev_warmup_energy);
         std::cout << "  Warmup " << sw << ": E = " << std::setprecision(12) << warmup_energy
