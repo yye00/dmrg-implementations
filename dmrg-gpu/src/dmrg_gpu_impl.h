@@ -736,18 +736,13 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, &inv_norm, d_theta, 1));
     HIP_CHECK(hipMemcpy(d_lanczos_v, d_theta, n * sizeof(Scalar), hipMemcpyDeviceToDevice));
 
-    // Set up HIP Graph for apply_heff replay
-    setup_heff_graph(site);
-
     double prev_energy = 1e30;
     int iter;
     for (iter = 0; iter < max_iter; iter++) {
         Scalar* d_vi = d_lanczos_v + iter * n;
 
-        // w = H|v_i>  (copy to staging buffer, replay graph)
-        HIP_CHECK(hipMemcpyAsync(d_theta_staging_, d_vi, n * sizeof(Scalar),
-                                  hipMemcpyDeviceToDevice, stream_));
-        HIP_CHECK(hipGraphLaunch(heff_graph_exec_, stream_));
+        // w = H|v_i>
+        apply_heff(site, d_vi, d_heff_result_);
 
         // alpha_i = <v_i|w> (real for Hermitian H)
         Scalar alpha_result;
