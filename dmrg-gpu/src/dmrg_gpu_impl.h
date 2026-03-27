@@ -60,6 +60,18 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     heff_graph_exec_ = nullptr;
     heff_graph_site_ = -1;
 
+    // Device pointer mode handle for graph capture
+    ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_device_));
+    ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_device_, stream_));
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_device_, rocblas_pointer_mode_device));
+
+    // Persistent device-side scalars for graph capture
+    HIP_CHECK(hipMalloc(&d_scalar_one_, sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_scalar_zero_, sizeof(Scalar)));
+    Scalar h_one = Traits::one(), h_zero = Traits::zero();
+    HIP_CHECK(hipMemcpy(d_scalar_one_, &h_one, sizeof(Scalar), hipMemcpyHostToDevice));
+    HIP_CHECK(hipMemcpy(d_scalar_zero_, &h_zero, sizeof(Scalar), hipMemcpyHostToDevice));
+
     // Contraction intermediates
     int t_max = D_mpo_ * d_ * chi_max_ * chi_max_;
     HIP_CHECK(hipMalloc(&d_T1_, t_max * sizeof(Scalar)));
@@ -191,7 +203,10 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
     // HIP Graph
     if (heff_graph_exec_) hipGraphExecDestroy(heff_graph_exec_);
     if (heff_graph_) hipGraphDestroy(heff_graph_);
+    if (d_scalar_one_) hipFree(d_scalar_one_);
+    if (d_scalar_zero_) hipFree(d_scalar_zero_);
 
+    rocblas_destroy_handle(rocblas_h_device_);
     rocblas_destroy_handle(rocblas_h_);
     hipStreamDestroy(stream_);
 }
@@ -388,42 +403,53 @@ void DMRGGPU<Scalar>::apply_heff_graph(int site) {
     int cL = chi_L(site);
     int cR = chi_R(site);
     int D = D_mpo_, d = d_;
-    Scalar one = Traits::one(), zero_val = Traits::zero();
+
+    // Uses rocblas_h_device_ with device pointer mode — all alpha/beta are device pointers.
+    // d_scalar_one_ and d_scalar_zero_ are persistent device memory.
 
     Scalar* V = d_T1_;
     Scalar* U = d_T2_;
 
     // Step 1: batched GEMM (pointer arrays already on device from setup_heff_graph)
-    ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+    ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_device_,
         Traits::op_t, rocblas_operation_none,
         cL, cR, cL,
-        &one,
+        d_scalar_one_,
         (const Scalar**)d_batch_A_, cL * D,
         (const Scalar**)d_batch_B_, cL * d,
-        &zero_val,
+        d_scalar_zero_,
         d_batch_C_, cL,
         D * d));
 
     // Step 2: dense GEMM
-    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+    ROCBLAS_CHECK(Traits::gemm(rocblas_h_device_,
         rocblas_operation_none, rocblas_operation_none,
         cL * cR, d * D, D * d,
-        &one,
+        d_scalar_one_,
         V, cL * cR,
         d_W_left_[site], D * d,
-        &zero_val,
+        d_scalar_zero_,
         U, cL * cR));
 
     // Step 3: D batched calls (pointer arrays already on device)
-    for (int wp = 0; wp < D; wp++) {
-        Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+    // wp=0: beta=zero, wp>0: beta=one (accumulate)
+    ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_device_,
+        rocblas_operation_none, rocblas_operation_none,
+        cL, cR, cR,
+        d_scalar_one_,
+        (const Scalar**)(d_step3_A_), cL,
+        (const Scalar**)(d_step3_B_), cR * D,
+        d_scalar_zero_,
+        d_step3_C_, cL * d,
+        d));
+    for (int wp = 1; wp < D; wp++) {
+        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_device_,
             rocblas_operation_none, rocblas_operation_none,
             cL, cR, cR,
-            &one,
+            d_scalar_one_,
             (const Scalar**)(d_step3_A_ + wp * d), cL,
             (const Scalar**)(d_step3_B_ + wp * d), cR * D,
-            &beta,
+            d_scalar_one_,  // beta=1 for accumulation
             d_step3_C_ + wp * d, cL * d,
             d));
     }

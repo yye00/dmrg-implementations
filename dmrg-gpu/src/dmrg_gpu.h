@@ -63,7 +63,8 @@ private:
 
     // GPU handles
     hipStream_t stream_;
-    rocblas_handle rocblas_h_;
+    rocblas_handle rocblas_h_;         // host pointer mode (non-graph calls)
+    rocblas_handle rocblas_h_device_;  // device pointer mode (graph capture)
 
     // Contraction intermediates
     Scalar* d_T1_;
@@ -101,6 +102,10 @@ private:
     hipGraph_t heff_graph_;
     hipGraphExec_t heff_graph_exec_;
     int heff_graph_site_;  // cached site (invalidate on change)
+
+    // Persistent device-side scalars for graph capture (host pointers go stale on replay)
+    Scalar* d_scalar_one_;   // = 1.0
+    Scalar* d_scalar_zero_;  // = 0.0
 
     // SVD workspace (pre-allocated at max size)
     Scalar* d_svd_A_;
