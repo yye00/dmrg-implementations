@@ -65,29 +65,42 @@ private:
     hipStream_t stream_;
     rocblas_handle rocblas_h_;
 
-    // Worker stream pool for concurrent Step 3 GEMMs
-    int n_workers_;
-    std::vector<hipStream_t> worker_streams_;
-    std::vector<rocblas_handle> worker_handles_;
-    std::vector<hipEvent_t> worker_done_events_;
-    hipEvent_t step_done_event_;
-
     // Contraction intermediates
     Scalar* d_T1_;
     Scalar* d_T2_;
 
     // Lanczos workspace (pre-allocated)
     Scalar* d_theta_;
+    Scalar* d_theta_staging_;  // Fixed-address staging buffer for graph capture
     Scalar* d_heff_result_;
     Scalar* d_lanczos_v_;
     Scalar* d_ritz_coeffs_;  // Ritz coefficients converted to Scalar for gemv
     int theta_size_max_;
     int max_lanczos_iter_;
 
-    // Batched GEMM pointer arrays (on device)
+    // Batched GEMM pointer arrays (on device) — Step 1
     Scalar** d_batch_A_;
     Scalar** d_batch_B_;
     Scalar** d_batch_C_;
+
+    // Batched GEMM pointer arrays (on device) — Step 3
+    // Layout: [wp=0: d ptrs][wp=1: d ptrs]...[wp=D-1: d ptrs]
+    Scalar** d_step3_A_;
+    Scalar** d_step3_B_;
+    Scalar** d_step3_C_;
+
+    // Pinned host pointer arrays (persistent for graph capture)
+    Scalar** h_pin_A_;    // Step 1: D*d entries
+    Scalar** h_pin_B_;
+    Scalar** h_pin_C_;
+    Scalar** h_pin_A3_;   // Step 3: D*d entries
+    Scalar** h_pin_B3_;
+    Scalar** h_pin_C3_;
+
+    // HIP Graph for apply_heff replay in Lanczos
+    hipGraph_t heff_graph_;
+    hipGraphExec_t heff_graph_exec_;
+    int heff_graph_site_;  // cached site (invalidate on change)
 
     // SVD workspace (pre-allocated at max size)
     Scalar* d_svd_A_;
@@ -112,6 +125,8 @@ private:
     double optimize_site(int site, char direction);
     void form_theta(int site, Scalar* d_theta);
     void apply_heff(int site, const Scalar* d_theta, Scalar* d_result);
+    void apply_heff_graph(int site);  // GEMMs only, pointers pre-uploaded
+    void setup_heff_graph(int site);  // Capture apply_heff as HIP Graph
     double lanczos_eigensolver(int site, Scalar* d_theta);
     void svd_and_update_mps(int site, Scalar* d_theta, char direction);
 
