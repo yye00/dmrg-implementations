@@ -559,28 +559,20 @@ void DMRGGPU<Scalar>::update_left_env(int site) {
         U, chi_in * chi_out));
 
     // Step 3: L_new_w'[b,b'] = sum_{s'} U^H[ws',b] * A[s',b']
-    // wp INDEPENDENT (batch), sp ACCUMULATES (sequential loop).
-    // d batched calls, batch_count=D each.
-    for (int sp = 0; sp < d; sp++) {
-        Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-        for (int wp = 0; wp < D; wp++) {
+    // wp INDEPENDENT, sp ACCUMULATES.
+    for (int wp = 0; wp < D; wp++) {
+        for (int sp = 0; sp < d; sp++) {
+            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
             int ws_out = wp * d + sp;
-            h_pin_A3_[wp] = U + ws_out * chi_in * chi_out;
-            h_pin_B3_[wp] = A + sp * chi_in;
-            h_pin_C3_[wp] = L_new + wp * chi_out;
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                Traits::op_h, rocblas_operation_none,
+                chi_out, chi_out, chi_in,
+                &one,
+                U + ws_out * chi_in * chi_out, chi_in,
+                A + sp * chi_in, chi_in * d,
+                &beta,
+                L_new + wp * chi_out, chi_out * D));
         }
-        HIP_CHECK(hipMemcpyAsync(d_step3_A_, h_pin_A3_, D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_step3_B_, h_pin_B3_, D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_step3_C_, h_pin_C3_, D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-            Traits::op_h, rocblas_operation_none,
-            chi_out, chi_out, chi_in,
-            &one,
-            (const Scalar**)d_step3_A_, chi_in,
-            (const Scalar**)d_step3_B_, chi_in * d,
-            &beta,
-            d_step3_C_, chi_out * D,
-            D));
     }
 
     // For complex: L_new = conj(U^H * A) = U^T * conj(A), the correct bra contraction
@@ -643,28 +635,20 @@ void DMRGGPU<Scalar>::update_right_env(int site) {
         U, chi_out * chi_in));
 
     // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
-    // w INDEPENDENT (batch), sp ACCUMULATES (sequential loop).
-    // d batched calls, batch_count=D each.
-    for (int sp = 0; sp < d; sp++) {
-        Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-        for (int w = 0; w < D; w++) {
+    // w INDEPENDENT, sp ACCUMULATES.
+    for (int w = 0; w < D; w++) {
+        for (int sp = 0; sp < d; sp++) {
+            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
             int ws_out = w * d + sp;
-            h_pin_A3_[w] = U + ws_out * chi_out * chi_in;
-            h_pin_B3_[w] = A + sp * chi_out;
-            h_pin_C3_[w] = R_new + w * chi_out;
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                rocblas_operation_none, Traits::op_h,
+                chi_out, chi_out, chi_in,
+                &one,
+                U + ws_out * chi_out * chi_in, chi_out,
+                A + sp * chi_out, chi_out * d,
+                &beta,
+                R_new + w * chi_out, chi_out * D));
         }
-        HIP_CHECK(hipMemcpyAsync(d_step3_A_, h_pin_A3_, D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_step3_B_, h_pin_B3_, D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_step3_C_, h_pin_C3_, D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-            rocblas_operation_none, Traits::op_h,
-            chi_out, chi_out, chi_in,
-            &one,
-            (const Scalar**)d_step3_A_, chi_out,
-            (const Scalar**)d_step3_B_, chi_out * d,
-            &beta,
-            d_step3_C_, chi_out * D,
-            D));
     }
 }
 
