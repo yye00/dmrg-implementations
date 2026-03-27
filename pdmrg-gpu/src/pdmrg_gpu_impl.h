@@ -928,12 +928,11 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         // Convergence check every 3 iterations after iter >= 4
         // This is the ONLY sync point in the inner loop
         if (iter >= 4 && iter % 3 == 0) {
-            HIP_CHECK(hipStreamSynchronize(streams_[si]));
-
-            // Bulk copy alpha and beta from device to host
+            // Bulk copy alpha and beta from device to host (stream-local, not device-wide)
             int n_copy = iter + 1;
-            HIP_CHECK(hipMemcpy(h_alpha.data(), ws.d_alpha_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost));
-            HIP_CHECK(hipMemcpy(h_beta.data(), ws.d_beta_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpyAsync(h_alpha.data(), ws.d_alpha_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(h_beta.data(), ws.d_beta_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
+            HIP_CHECK(hipStreamSynchronize(streams_[si]));
             last_synced_iter = iter;
 
             // Check if any beta was near zero (invariant subspace found)
@@ -976,8 +975,9 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
 
     // Copy any remaining alpha/beta values we haven't synced yet
     if (last_synced_iter < niter - 1) {
-        HIP_CHECK(hipMemcpy(h_alpha.data(), ws.d_alpha_dev, niter * sizeof(double), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(h_beta.data(), ws.d_beta_dev, niter * sizeof(double), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpyAsync(h_alpha.data(), ws.d_alpha_dev, niter * sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(h_beta.data(), ws.d_beta_dev, niter * sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
     }
 
     // Solve tridiagonal eigenvalue problem on CPU
@@ -1078,7 +1078,8 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
             ws.d_svd_info);
 
         // GPU SVD: U, S, Vh already on device. Only download S for truncation check.
-        HIP_CHECK(hipMemcpy(ws.h_svd_S.data(), ws.d_svd_S, full_k * sizeof(RealType), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpyAsync(ws.h_svd_S.data(), ws.d_svd_S, full_k * sizeof(RealType), hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
         h_S_data = ws.h_svd_S.data();
         gpu_svd_path = true;
     }
