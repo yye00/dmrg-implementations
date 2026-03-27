@@ -69,31 +69,6 @@ PDMRGGPU<Scalar>::PDMRGGPU(int L, int d, int chi_max, int D_mpo, int n_segments,
         ROCBLAS_CHECK(rocblas_set_stream(handles_[k], streams_[k]));
     }
 
-    // Worker stream pool for concurrent Step 3 GEMMs
-    // Need max(d², D) workers per segment for apply_heff (d² independent outputs)
-    // and update_left/right_env (D independent outputs)
-    n_workers_ = std::max(d * d, D_mpo);
-    worker_streams_.resize(n_segments_);
-    worker_handles_.resize(n_segments_);
-    for (int k = 0; k < n_segments_; k++) {
-        worker_streams_[k].resize(n_workers_);
-        worker_handles_[k].resize(n_workers_);
-        for (int w = 0; w < n_workers_; w++) {
-            HIP_CHECK(hipStreamCreate(&worker_streams_[k][w]));
-            ROCBLAS_CHECK(rocblas_create_handle(&worker_handles_[k][w]));
-            ROCBLAS_CHECK(rocblas_set_stream(worker_handles_[k][w], worker_streams_[k][w]));
-        }
-    }
-    worker_done_events_.resize(n_segments_);
-    step_done_events_.resize(n_segments_);
-    for (int k = 0; k < n_segments_; k++) {
-        worker_done_events_[k].resize(n_workers_);
-        for (int w = 0; w < n_workers_; w++) {
-            HIP_CHECK(hipEventCreateWithFlags(&worker_done_events_[k][w], hipEventDisableTiming));
-        }
-        HIP_CHECK(hipEventCreateWithFlags(&step_done_events_[k], hipEventDisableTiming));
-    }
-
     int dd = d_ * d_;
 
     // MPS tensors
@@ -341,14 +316,6 @@ void PDMRGGPU<Scalar>::free_gpu_resources() {
 
     for (auto& h : handles_) rocblas_destroy_handle(h);
     for (auto& s : streams_) hipStreamDestroy(s);
-
-    for (auto& wh : worker_handles_)
-        for (auto& h : wh) rocblas_destroy_handle(h);
-    for (auto& ws_vec : worker_streams_)
-        for (auto& s : ws_vec) hipStreamDestroy(s);
-    for (auto& ev_vec : worker_done_events_)
-        for (auto& e : ev_vec) hipEventDestroy(e);
-    for (auto& e : step_done_events_) hipEventDestroy(e);
 }
 
 // ============================================================================
@@ -595,39 +562,20 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
         T2, cL * cR));
 
     // Step 3: Loop of GEMMs — T2 × R_env
-    // Dispatch independent (s1p, s2p) pairs on separate worker streams.
-    // The inner n loop accumulates (beta trick) and must stay sequential per worker.
-    {
-        // Wait for Step 2 to complete on segment stream before workers read T2
-        HIP_CHECK(hipEventRecord(step_done_events_[si], streams_[si]));
-        int worker_idx = 0;
-        for (int s1p = 0; s1p < d; s1p++) {
-            for (int s2p = 0; s2p < d; s2p++) {
-                int wi = worker_idx % n_workers_;
-                auto& wh = worker_handles_[si][wi];
-                auto& ws_stream = worker_streams_[si][wi];
-                // Worker waits for Step 2
-                HIP_CHECK(hipStreamWaitEvent(ws_stream, step_done_events_[si], 0));
-                for (int n = 0; n < D; n++) {
-                    Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
-                    int ws_out = n * dd + s1p * d + s2p;
-                    ROCBLAS_CHECK(Traits::gemm(wh,
-                        rocblas_operation_none, rocblas_operation_none,
-                        cL, cR, cR,
-                        &one,
-                        T2 + ws_out * cL * cR, cL,
-                        R_env + n * cR, cR * D,
-                        &beta,
-                        d_result + s1p * cL + s2p * cL * d, cL * dd));
-                }
-                // Record completion so segment stream can wait
-                HIP_CHECK(hipEventRecord(worker_done_events_[si][wi], ws_stream));
-                worker_idx++;
+    for (int s1p = 0; s1p < d; s1p++) {
+        for (int s2p = 0; s2p < d; s2p++) {
+            for (int n = 0; n < D; n++) {
+                Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
+                int ws_out = n * dd + s1p * d + s2p;
+                ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                    rocblas_operation_none, rocblas_operation_none,
+                    cL, cR, cR,
+                    &one,
+                    T2 + ws_out * cL * cR, cL,
+                    R_env + n * cR, cR * D,
+                    &beta,
+                    d_result + s1p * cL + s2p * cL * d, cL * dd));
             }
-        }
-        // Segment stream waits for all workers to finish
-        for (int w = 0; w < std::min(worker_idx, n_workers_); w++) {
-            HIP_CHECK(hipStreamWaitEvent(streams_[si], worker_done_events_[si][w], 0));
         }
     }
 }
@@ -681,30 +629,18 @@ void PDMRGGPU<Scalar>::update_left_env(int site, int si) {
         U, chi_in * chi_out));
 
     // Step 3: L_new_w'[b,b'] = sum_{a',s'} conj(U[a',ws',b])^H * A[a',s',b']
-    // Dispatch independent wp iterations on separate worker streams (sp accumulates).
-    {
-        HIP_CHECK(hipEventRecord(step_done_events_[si], streams_[si]));
-        for (int wp = 0; wp < D; wp++) {
-            int wi = wp % n_workers_;
-            auto& wh = worker_handles_[si][wi];
-            auto& ws_stream = worker_streams_[si][wi];
-            HIP_CHECK(hipStreamWaitEvent(ws_stream, step_done_events_[si], 0));
-            for (int sp = 0; sp < d; sp++) {
-                Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-                int ws_out = wp * d + sp;
-                ROCBLAS_CHECK(Traits::gemm(wh,
-                    Traits::op_h, rocblas_operation_none,
-                    chi_out, chi_out, chi_in,
-                    &one,
-                    U + ws_out * chi_in * chi_out, chi_in,
-                    A + sp * chi_in, chi_in * d,
-                    &beta,
-                    L_new + wp * chi_out, chi_out * D));
-            }
-            HIP_CHECK(hipEventRecord(worker_done_events_[si][wi], ws_stream));
-        }
-        for (int w = 0; w < std::min(D, n_workers_); w++) {
-            HIP_CHECK(hipStreamWaitEvent(streams_[si], worker_done_events_[si][w], 0));
+    for (int wp = 0; wp < D; wp++) {
+        for (int sp = 0; sp < d; sp++) {
+            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+            int ws_out = wp * d + sp;
+            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                Traits::op_h, rocblas_operation_none,
+                chi_out, chi_out, chi_in,
+                &one,
+                U + ws_out * chi_in * chi_out, chi_in,
+                A + sp * chi_in, chi_in * d,
+                &beta,
+                L_new + wp * chi_out, chi_out * D));
         }
     }
 
@@ -762,30 +698,18 @@ void PDMRGGPU<Scalar>::update_right_env(int site, int si) {
         U, chi_out * chi_in));
 
     // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
-    // Dispatch independent w iterations on separate worker streams (sp accumulates).
-    {
-        HIP_CHECK(hipEventRecord(step_done_events_[si], streams_[si]));
-        for (int w = 0; w < D; w++) {
-            int wi = w % n_workers_;
-            auto& wh = worker_handles_[si][wi];
-            auto& ws_stream = worker_streams_[si][wi];
-            HIP_CHECK(hipStreamWaitEvent(ws_stream, step_done_events_[si], 0));
-            for (int sp = 0; sp < d; sp++) {
-                Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-                int ws_out = w * d + sp;
-                ROCBLAS_CHECK(Traits::gemm(wh,
-                    rocblas_operation_none, Traits::op_h,
-                    chi_out, chi_out, chi_in,
-                    &one,
-                    U + ws_out * chi_out * chi_in, chi_out,
-                    A + sp * chi_out, chi_out * d,
-                    &beta,
-                    R_new + w * chi_out, chi_out * D));
-            }
-            HIP_CHECK(hipEventRecord(worker_done_events_[si][wi], ws_stream));
-        }
-        for (int w = 0; w < std::min(D, n_workers_); w++) {
-            HIP_CHECK(hipStreamWaitEvent(streams_[si], worker_done_events_[si][w], 0));
+    for (int w = 0; w < D; w++) {
+        for (int sp = 0; sp < d; sp++) {
+            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+            int ws_out = w * d + sp;
+            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                rocblas_operation_none, Traits::op_h,
+                chi_out, chi_out, chi_in,
+                &one,
+                U + ws_out * chi_out * chi_in, chi_out,
+                A + sp * chi_out, chi_out * d,
+                &beta,
+                R_new + w * chi_out, chi_out * D));
         }
     }
 }
@@ -928,11 +852,12 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         // Convergence check every 3 iterations after iter >= 4
         // This is the ONLY sync point in the inner loop
         if (iter >= 4 && iter % 3 == 0) {
-            // Bulk copy alpha and beta from device to host (stream-local, not device-wide)
-            int n_copy = iter + 1;
-            HIP_CHECK(hipMemcpyAsync(h_alpha.data(), ws.d_alpha_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
-            HIP_CHECK(hipMemcpyAsync(h_beta.data(), ws.d_beta_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
             HIP_CHECK(hipStreamSynchronize(streams_[si]));
+
+            // Bulk copy alpha and beta from device to host
+            int n_copy = iter + 1;
+            HIP_CHECK(hipMemcpy(h_alpha.data(), ws.d_alpha_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpy(h_beta.data(), ws.d_beta_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost));
             last_synced_iter = iter;
 
             // Check if any beta was near zero (invariant subspace found)
@@ -975,9 +900,8 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
 
     // Copy any remaining alpha/beta values we haven't synced yet
     if (last_synced_iter < niter - 1) {
-        HIP_CHECK(hipMemcpyAsync(h_alpha.data(), ws.d_alpha_dev, niter * sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(h_beta.data(), ws.d_beta_dev, niter * sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
-        HIP_CHECK(hipStreamSynchronize(streams_[si]));
+        HIP_CHECK(hipMemcpy(h_alpha.data(), ws.d_alpha_dev, niter * sizeof(double), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(h_beta.data(), ws.d_beta_dev, niter * sizeof(double), hipMemcpyDeviceToHost));
     }
 
     // Solve tridiagonal eigenvalue problem on CPU
@@ -1078,8 +1002,7 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
             ws.d_svd_info);
 
         // GPU SVD: U, S, Vh already on device. Only download S for truncation check.
-        HIP_CHECK(hipMemcpyAsync(ws.h_svd_S.data(), ws.d_svd_S, full_k * sizeof(RealType), hipMemcpyDeviceToHost, streams_[si]));
-        HIP_CHECK(hipStreamSynchronize(streams_[si]));
+        HIP_CHECK(hipMemcpy(ws.h_svd_S.data(), ws.d_svd_S, full_k * sizeof(RealType), hipMemcpyDeviceToHost));
         h_S_data = ws.h_svd_S.data();
         gpu_svd_path = true;
     }

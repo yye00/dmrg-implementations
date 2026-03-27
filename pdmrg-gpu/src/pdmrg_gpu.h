@@ -68,14 +68,6 @@ private:
     std::vector<hipStream_t> streams_;
     std::vector<rocblas_handle> handles_;
 
-    // === Worker stream pool for concurrent independent GEMMs ===
-    // Each segment gets n_workers_ streams for parallel Step 3 dispatch
-    int n_workers_;
-    std::vector<std::vector<hipStream_t>> worker_streams_;    // [segment][worker]
-    std::vector<std::vector<rocblas_handle>> worker_handles_;  // [segment][worker]
-    std::vector<std::vector<hipEvent_t>> worker_done_events_;  // [segment][worker] — pre-allocated
-    std::vector<hipEvent_t> step_done_events_;  // [segment] — one per segment for step2→worker sync
-
     // === Global GPU data (shared across streams) ===
     std::vector<Scalar*> d_mps_tensors_;
     std::vector<Scalar*> d_mpo_tensors_;

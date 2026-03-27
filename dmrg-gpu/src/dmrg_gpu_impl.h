@@ -55,23 +55,6 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
     ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
 
-    // HIP Graph state
-    heff_graph_ = nullptr;
-    heff_graph_exec_ = nullptr;
-    heff_graph_site_ = -1;
-
-    // Device pointer mode handle for graph capture
-    ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_device_));
-    ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_device_, stream_));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_device_, rocblas_pointer_mode_device));
-
-    // Persistent device-side scalars for graph capture
-    HIP_CHECK(hipMalloc(&d_scalar_one_, sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_scalar_zero_, sizeof(Scalar)));
-    Scalar h_one = Traits::one(), h_zero = Traits::zero();
-    HIP_CHECK(hipMemcpy(d_scalar_one_, &h_one, sizeof(Scalar), hipMemcpyHostToDevice));
-    HIP_CHECK(hipMemcpy(d_scalar_zero_, &h_zero, sizeof(Scalar), hipMemcpyHostToDevice));
-
     // Contraction intermediates
     int t_max = D_mpo_ * d_ * chi_max_ * chi_max_;
     HIP_CHECK(hipMalloc(&d_T1_, t_max * sizeof(Scalar)));
@@ -111,30 +94,15 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     theta_size_max_ = chi_max_ * d_ * chi_max_;
     max_lanczos_iter_ = std::min(100, theta_size_max_);
     HIP_CHECK(hipMalloc(&d_theta_, theta_size_max_ * sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_theta_staging_, theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_heff_result_, theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_lanczos_v_, (size_t)max_lanczos_iter_ * theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_ritz_coeffs_, max_lanczos_iter_ * sizeof(Scalar)));
 
-    // Batched GEMM pointer arrays — Step 1 (D*d entries)
-    int batch1_max = D_mpo_ * d_;
-    HIP_CHECK(hipMalloc(&d_batch_A_, batch1_max * sizeof(Scalar*)));
-    HIP_CHECK(hipMalloc(&d_batch_B_, batch1_max * sizeof(Scalar*)));
-    HIP_CHECK(hipMalloc(&d_batch_C_, batch1_max * sizeof(Scalar*)));
-
-    // Batched GEMM pointer arrays — Step 3 (D*d entries, one set per wp)
-    int batch3_max = D_mpo_ * d_;
-    HIP_CHECK(hipMalloc(&d_step3_A_, batch3_max * sizeof(Scalar*)));
-    HIP_CHECK(hipMalloc(&d_step3_B_, batch3_max * sizeof(Scalar*)));
-    HIP_CHECK(hipMalloc(&d_step3_C_, batch3_max * sizeof(Scalar*)));
-
-    // Pinned host pointer arrays (persistent addresses for graph capture)
-    HIP_CHECK(hipHostMalloc(&h_pin_A_, batch1_max * sizeof(Scalar*)));
-    HIP_CHECK(hipHostMalloc(&h_pin_B_, batch1_max * sizeof(Scalar*)));
-    HIP_CHECK(hipHostMalloc(&h_pin_C_, batch1_max * sizeof(Scalar*)));
-    HIP_CHECK(hipHostMalloc(&h_pin_A3_, batch3_max * sizeof(Scalar*)));
-    HIP_CHECK(hipHostMalloc(&h_pin_B3_, batch3_max * sizeof(Scalar*)));
-    HIP_CHECK(hipHostMalloc(&h_pin_C3_, batch3_max * sizeof(Scalar*)));
+    // Batched GEMM pointer arrays
+    int batch_max = D_mpo_ * d_;
+    HIP_CHECK(hipMalloc(&d_batch_A_, batch_max * sizeof(Scalar*)));
+    HIP_CHECK(hipMalloc(&d_batch_B_, batch_max * sizeof(Scalar*)));
+    HIP_CHECK(hipMalloc(&d_batch_C_, batch_max * sizeof(Scalar*)));
 
     // SVD workspace
     int svd_max_dim = chi_max_ * d_;
@@ -172,7 +140,6 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
     for (auto ptr : d_R_envs_) if (ptr) hipFree(ptr);
 
     if (d_theta_) hipFree(d_theta_);
-    if (d_theta_staging_) hipFree(d_theta_staging_);
     if (d_heff_result_) hipFree(d_heff_result_);
     if (d_lanczos_v_) hipFree(d_lanczos_v_);
     if (d_ritz_coeffs_) hipFree(d_ritz_coeffs_);
@@ -181,9 +148,6 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
     if (d_batch_A_) hipFree(d_batch_A_);
     if (d_batch_B_) hipFree(d_batch_B_);
     if (d_batch_C_) hipFree(d_batch_C_);
-    if (d_step3_A_) hipFree(d_step3_A_);
-    if (d_step3_B_) hipFree(d_step3_B_);
-    if (d_step3_C_) hipFree(d_step3_C_);
     if (d_svd_A_) hipFree(d_svd_A_);
     if (d_svd_U_) hipFree(d_svd_U_);
     if (d_svd_S_) hipFree(d_svd_S_);
@@ -192,21 +156,6 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
     if (d_svd_info_) hipFree(d_svd_info_);
     if (d_svd_work_) hipFree(d_svd_work_);
 
-    // Pinned host memory
-    if (h_pin_A_) hipHostFree(h_pin_A_);
-    if (h_pin_B_) hipHostFree(h_pin_B_);
-    if (h_pin_C_) hipHostFree(h_pin_C_);
-    if (h_pin_A3_) hipHostFree(h_pin_A3_);
-    if (h_pin_B3_) hipHostFree(h_pin_B3_);
-    if (h_pin_C3_) hipHostFree(h_pin_C3_);
-
-    // HIP Graph
-    if (heff_graph_exec_) hipGraphExecDestroy(heff_graph_exec_);
-    if (heff_graph_) hipGraphDestroy(heff_graph_);
-    if (d_scalar_one_) hipFree(d_scalar_one_);
-    if (d_scalar_zero_) hipFree(d_scalar_zero_);
-
-    rocblas_destroy_handle(rocblas_h_device_);
     rocblas_destroy_handle(rocblas_h_);
     hipStreamDestroy(stream_);
 }
@@ -338,16 +287,17 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
 
     // Step 1: V_ws[a',b] = L_w^T[a',a] * theta_s[a,b]  (batched GEMM)
     {
+        Scalar* h_A[D * d], *h_B[D * d], *h_C[D * d];
         for (int w = 0; w < D; w++)
             for (int s = 0; s < d; s++) {
                 int ws = w * d + s;
-                h_pin_A_[ws] = L_env + w * cL;
-                h_pin_B_[ws] = const_cast<Scalar*>(d_theta_in) + s * cL;
-                h_pin_C_[ws] = V + ws * cL * cR;
+                h_A[ws] = L_env + w * cL;
+                h_B[ws] = const_cast<Scalar*>(d_theta_in) + s * cL;
+                h_C[ws] = V + ws * cL * cR;
             }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_pin_A_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_pin_B_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_pin_C_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
         ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
             Traits::op_t, rocblas_operation_none,
             cL, cR, cL,
@@ -370,10 +320,9 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
         U, cL * cR));
 
     // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
-    // Sequential individual GEMMs (batched version has complex bug - investigating)
-    for (int sp = 0; sp < d; sp++) {
-        for (int wp = 0; wp < D; wp++) {
-            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
+    for (int wp = 0; wp < D; wp++) {
+        Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
+        for (int sp = 0; sp < d; sp++) {
             int ws_out = wp * d + sp;
             ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
                 rocblas_operation_none, rocblas_operation_none,
@@ -385,117 +334,6 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
                 d_result + sp * cL, cL * d));
         }
     }
-}
-
-// ============================================================================
-// HIP Graph: apply_heff with pre-uploaded pointers (for graph capture)
-// ============================================================================
-
-template<typename Scalar>
-void DMRGGPU<Scalar>::apply_heff_graph(int site) {
-    int cL = chi_L(site);
-    int cR = chi_R(site);
-    int D = D_mpo_, d = d_;
-
-    // Uses rocblas_h_device_ with device pointer mode — all alpha/beta are device pointers.
-    // d_scalar_one_ and d_scalar_zero_ are persistent device memory.
-
-    Scalar* V = d_T1_;
-    Scalar* U = d_T2_;
-
-    // Step 1: batched GEMM (pointer arrays already on device from setup_heff_graph)
-    ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_device_,
-        Traits::op_t, rocblas_operation_none,
-        cL, cR, cL,
-        d_scalar_one_,
-        (const Scalar**)d_batch_A_, cL * D,
-        (const Scalar**)d_batch_B_, cL * d,
-        d_scalar_zero_,
-        d_batch_C_, cL,
-        D * d));
-
-    // Step 2: dense GEMM
-    ROCBLAS_CHECK(Traits::gemm(rocblas_h_device_,
-        rocblas_operation_none, rocblas_operation_none,
-        cL * cR, d * D, D * d,
-        d_scalar_one_,
-        V, cL * cR,
-        d_W_left_[site], D * d,
-        d_scalar_zero_,
-        U, cL * cR));
-
-    // Step 3: D batched calls (pointer arrays already on device)
-    // wp=0: beta=zero, wp>0: beta=one (accumulate)
-    ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_device_,
-        rocblas_operation_none, rocblas_operation_none,
-        cL, cR, cR,
-        d_scalar_one_,
-        (const Scalar**)(d_step3_A_), cL,
-        (const Scalar**)(d_step3_B_), cR * D,
-        d_scalar_zero_,
-        d_step3_C_, cL * d,
-        d));
-    for (int wp = 1; wp < D; wp++) {
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_device_,
-            rocblas_operation_none, rocblas_operation_none,
-            cL, cR, cR,
-            d_scalar_one_,
-            (const Scalar**)(d_step3_A_ + wp * d), cL,
-            (const Scalar**)(d_step3_B_ + wp * d), cR * D,
-            d_scalar_one_,  // beta=1 for accumulation
-            d_step3_C_ + wp * d, cL * d,
-            d));
-    }
-}
-
-// ============================================================================
-// HIP Graph: setup and capture apply_heff for a given site
-// ============================================================================
-
-template<typename Scalar>
-void DMRGGPU<Scalar>::setup_heff_graph(int site) {
-    if (heff_graph_site_ == site) return;  // already cached for this site
-
-    // Destroy old graph
-    if (heff_graph_exec_) { HIP_CHECK(hipGraphExecDestroy(heff_graph_exec_)); heff_graph_exec_ = nullptr; }
-    if (heff_graph_) { HIP_CHECK(hipGraphDestroy(heff_graph_)); heff_graph_ = nullptr; }
-
-    int cL = chi_L(site), cR = chi_R(site);
-    int D = D_mpo_, d = d_;
-
-    // Pre-compute Step 1 pointer arrays (using d_theta_staging_ as fixed theta base)
-    for (int w = 0; w < D; w++)
-        for (int s = 0; s < d; s++) {
-            int ws = w * d + s;
-            h_pin_A_[ws] = d_L_envs_[site] + w * cL;
-            h_pin_B_[ws] = d_theta_staging_ + s * cL;
-            h_pin_C_[ws] = d_T1_ + ws * cL * cR;
-        }
-    HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_pin_A_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-    HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_pin_B_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-    HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_pin_C_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-
-    // Pre-compute ALL Step 3 pointer arrays (D batches × d entries each)
-    Scalar* R_env = d_R_envs_[site + 1];
-    for (int wp = 0; wp < D; wp++)
-        for (int sp = 0; sp < d; sp++) {
-            int idx = wp * d + sp;
-            h_pin_A3_[idx] = d_T2_ + (wp * d + sp) * cL * cR;
-            h_pin_B3_[idx] = R_env + wp * cR;
-            h_pin_C3_[idx] = d_heff_result_ + sp * cL;
-        }
-    HIP_CHECK(hipMemcpyAsync(d_step3_A_, h_pin_A3_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-    HIP_CHECK(hipMemcpyAsync(d_step3_B_, h_pin_B3_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-    HIP_CHECK(hipMemcpyAsync(d_step3_C_, h_pin_C3_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-    HIP_CHECK(hipStreamSynchronize(stream_));
-
-    // Capture apply_heff_graph into a HIP Graph
-    HIP_CHECK(hipStreamBeginCapture(stream_, hipStreamCaptureModeGlobal));
-    apply_heff_graph(site);
-    HIP_CHECK(hipStreamEndCapture(stream_, &heff_graph_));
-    HIP_CHECK(hipGraphInstantiate(&heff_graph_exec_, heff_graph_, nullptr, nullptr, 0));
-
-    heff_graph_site_ = site;
 }
 
 // ============================================================================
@@ -520,16 +358,17 @@ void DMRGGPU<Scalar>::update_left_env(int site) {
 
     // Step 1: V_ws[a',b] = L_w^T[a',a] * A_s[a,b]  (batched GEMM)
     {
+        Scalar* h_A[D * d], *h_B[D * d], *h_C[D * d];
         for (int w = 0; w < D; w++)
             for (int s = 0; s < d; s++) {
                 int ws = w * d + s;
-                h_pin_A_[ws] = L_env + w * chi_in;
-                h_pin_B_[ws] = A + s * chi_in;
-                h_pin_C_[ws] = V + ws * chi_in * chi_out;
+                h_A[ws] = L_env + w * chi_in;
+                h_B[ws] = A + s * chi_in;
+                h_C[ws] = V + ws * chi_in * chi_out;
             }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_pin_A_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_pin_B_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_pin_C_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
         ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
             Traits::op_t, rocblas_operation_none,
             chi_in, chi_out, chi_in,
@@ -551,8 +390,11 @@ void DMRGGPU<Scalar>::update_left_env(int site) {
         &zero_val,
         U, chi_in * chi_out));
 
-    // Step 3: L_new_w'[b,b'] = sum_{s'} U^H[ws',b] * A[s',b']
-    // wp INDEPENDENT, sp ACCUMULATES.
+    // Step 3: L_new_w'[b,b'] = sum_{a',s'} U[a',ws',b] * conj(A[a',s',b'])
+    //
+    // gemm(op_h, N, U, A) computes U^H * A = conj(desired result) for complex.
+    // For real, U^T * A is correct directly.
+    // For complex, we conjugate L_new after the loop.
     for (int wp = 0; wp < D; wp++) {
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
@@ -596,16 +438,17 @@ void DMRGGPU<Scalar>::update_right_env(int site) {
 
     // Step 1: V_ws[a,b'] = A_s[a,b] * R_w'[b,b']  (batched GEMM)
     {
+        Scalar* h_A[D * d], *h_B[D * d], *h_C[D * d];
         for (int wp = 0; wp < D; wp++)
             for (int s = 0; s < d; s++) {
                 int ws = wp * d + s;
-                h_pin_A_[ws] = A + s * chi_out;
-                h_pin_B_[ws] = R_env + wp * chi_in;
-                h_pin_C_[ws] = V + ws * chi_out * chi_in;
+                h_A[ws] = A + s * chi_out;
+                h_B[ws] = R_env + wp * chi_in;
+                h_C[ws] = V + ws * chi_out * chi_in;
             }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_pin_A_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_pin_B_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_pin_C_, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C, D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
         ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
             rocblas_operation_none, rocblas_operation_none,
             chi_out, chi_in, chi_in,
@@ -628,7 +471,7 @@ void DMRGGPU<Scalar>::update_right_env(int site) {
         U, chi_out * chi_in));
 
     // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
-    // w INDEPENDENT, sp ACCUMULATES.
+    // For complex: use conjugate transpose (op_h) on A for <bra|
     for (int w = 0; w < D; w++) {
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();

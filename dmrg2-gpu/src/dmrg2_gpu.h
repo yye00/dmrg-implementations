@@ -70,13 +70,6 @@ private:
     hipStream_t stream_;
     rocblas_handle rocblas_h_;
 
-    // Worker stream pool for concurrent Step 3 GEMMs
-    int n_workers_;
-    std::vector<hipStream_t> worker_streams_;
-    std::vector<rocblas_handle> worker_handles_;
-    std::vector<hipEvent_t> worker_done_events_;
-    hipEvent_t step_done_event_;
-
     // Contraction intermediates
     Scalar* d_T1_;
     Scalar* d_T2_;
