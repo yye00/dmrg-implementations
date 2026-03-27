@@ -43,7 +43,8 @@ All GPU implementations use:
 - Lanczos eigensolver on GPU (tridiagonal eigensolve on CPU — <0.01% runtime)
 - rocsolver gesvd for SVD (GPU-side)
 - Templates for double (real) and hipDoubleComplex (Josephson)
-- Single HIP stream per implementation (except pdmrg-gpu which uses multiple streams)
+- Worker stream pools for concurrent dispatch of independent GEMMs (max(d², D_mpo) streams)
+- pdmrg-gpu uses per-segment streams + worker pools for inter-segment parallelism
 
 **dmrg-gpu**: Single-site GPU DMRG. Baseline. All contractions via batched dgemm. The `apply_heff` matvec does 3-step GEMM: (1) D batched GEMMs with L_env, (2) dense GEMM with MPO W, (3) D batched GEMMs with R_env.
 
@@ -1071,6 +1072,111 @@ space is too coarse. This is not an implementation deficiency; the algorithm's
 mathematical convergence theory explicitly requires P~d-1. With d=2, you'd need
 P=1, which is serial DMRG.
 
+### Finding: GPU kernel launch overhead dominates at low bond dimension
+
+rocprof kernel tracing on MI300X revealed that at chi=32, individual rocBLAS GEMM
+kernels complete in ~2.8μs but have ~8.4μs gaps between dispatches, yielding **90%
+GPU idle time** and only **0.28% kernel concurrency** — even with correct multi-stream
+dispatch across independent GEMM iterations.
+
+**Root cause:** The per-kernel dispatch latency (~5-10μs: command buffer submission →
+hardware queue → ACE dispatch → CU scheduling) exceeds the kernel compute time. When
+kernel duration < dispatch overhead, no temporal overlap between kernels is possible
+regardless of how many HIP streams are used. The GPU hardware *can* run concurrent
+kernels — there is simply no time window in which two kernels coexist on CUs.
+
+**AMD ACE architecture:** MI300X (CDNA3) uses Asynchronous Compute Engines (ACEs) —
+4 per XCD, 32 total across 8 XCDs — to dispatch workgroups to Compute Units. Each ACE
+processes commands sequentially from its hardware queue. Concurrent kernel execution
+requires work landing on different ACEs via separate hardware queues, AND each kernel
+must be long enough to still be running when the next kernel's dispatch completes.
+(Source: AMD GPUOpen "Asynchronous Compute Deep Dive"; HIP Programming Guide —
+Hardware Implementation; AMD CDNA3 ISA Reference Guide.)
+
+**Empirical characterization:** Manoj et al. (2021) directly measured kernel-level
+concurrency on NVIDIA and AMD hardware, finding that concurrent execution efficiency
+drops sharply when individual kernels are too short — dispatch overhead and scheduling
+latency create unavoidable gaps. Similarly, the ACS framework (2024) analyzes the
+fixed per-kernel launch overhead as the fundamental bottleneck when compute time is
+comparable to dispatch time. (Sources: arXiv:2110.00459, arXiv:2401.12377.)
+
+**Attempted optimization A: Worker stream pools (reverted — no benefit)**
+We implemented worker stream pools dispatching independent GEMM iterations
+(Step 3 of apply_heff, update_left_env, update_right_env) across `max(d², D_mpo)`
+HIP streams per segment. Kernel-level GPU concurrency remained near 0.31%. Any
+CPU-side dispatch overlap was offset by stream management overhead, yielding no
+net improvement at practical bond dimensions (chi≥64). Reverted.
+
+**Attempted optimization B: Batched GEMM (reverted — slower)**
+We converted Step 1 and Step 3 GEMM loops to `rocblas_dgemm_batched` /
+`rocblas_zgemm_batched` calls, reducing D×d individual kernel launches to a single
+batched dispatch per step. On MI300X (ROCm 7.2.0, rocBLAS 5.2.70200):
+
+| Configuration | Individual GEMMs | Batched GEMMs | Overhead |
+|---|---|---|---|
+| Heisenberg L=32 chi=64 | 4.044 s | 4.055 s | +0.3% |
+| Heisenberg L=32 chi=128 | 4.616 s | 4.915 s | +6.5% |
+| Heisenberg L=32 chi=256 | 11.863 s | 13.259 s | +11.8% |
+
+Batched GEMM was **slower at all tested bond dimensions**. The pointer array setup
+(host loops to fill D×d pointer entries, three `hipMemcpyAsync` H2D transfers per
+batch call) adds overhead that exceeds any kernel launch savings. At chi≥64, each
+individual GEMM is compute-bound (≫10μs); the D×d=10-15 sequential launches per
+apply_heff step add only ~100μs total dispatch overhead, well below the pointer
+array setup cost.
+
+**Pitfall discovered: Pinned host memory race condition in batched GEMM loops.**
+During batched GEMM development, the complex (zgemm_batched) path produced wrong
+results (error ~0.4) while the real (dgemm_batched) path passed. Root cause: the
+pointer arrays were allocated with `hipHostMalloc` (pinned memory), making
+`hipMemcpyAsync` truly asynchronous. In the accumulation loop (D iterations of
+batch_count=d), the CPU overwrote the pinned pointer array for iteration i+1
+before the DMA engine finished reading it for iteration i. A minimal reproducer
+confirmed the race: pinned arrays gave error=1.33, non-pinned (synchronous copy)
+gave error=0.0, and pinned with `hipStreamSynchronize` between iterations gave
+error=0.0. The real path passed by timing coincidence (smaller d=2 pointer arrays,
+faster DMA). This is a general HIP programming pitfall, not a rocBLAS bug —
+`hipMemcpyAsync` from pinned memory is truly non-blocking, and the source buffer
+must not be modified until the copy completes. (Ref: HIP Programming Guide §3.2
+"hipMemcpyAsync — Asynchronous Memory Transfers"; AMD ROCm Documentation —
+"Pinned Memory" behavior notes.)
+
+**Attempted optimization C: HIP Graph capture (failed — rocBLAS incompatible)**
+We attempted to capture the entire apply_heff contraction (3-step GEMM sequence)
+as a HIP Graph for replay during Lanczos iterations (10-50 replays per site
+optimization). This required:
+1. A separate `rocblas_handle` with `rocblas_pointer_mode_device` (host scalar
+   addresses captured during graph recording go stale on replay from different
+   stack frames).
+2. Persistent device-side scalars (`d_scalar_one_`, `d_scalar_zero_`) for alpha/beta.
+3. A fixed-address staging buffer (`d_theta_staging_`) so pointer arrays remain
+   constant across replays.
+
+However, `rocblas_zgemm_batched` (and `rocblas_dgemm_batched`) returned
+`rocblas_status_internal_error` (status 6) during `hipStreamBeginCapture`. The
+rocBLAS Tensile backend apparently does not support HIP Graph stream capture for
+batched GEMM operations. Individual `rocblas_dgemm` calls *can* be captured
+(verified with a standalone test), but the batched variants cannot. No public
+rocBLAS documentation addresses graph capture compatibility; the closest reference
+is the ROCm HIP Graph Programming Guide, which notes that "not all HIP API calls
+are supported during stream capture." This limitation renders HIP Graph replay
+impractical for our GEMM-based apply_heff, since the batched dispatch was intended
+to reduce the number of graph nodes. Capturing D×d individual GEMM calls as
+separate graph nodes would work but defeats the latency-reduction purpose.
+
+**Remaining optimization path: Custom fused kernels.** The only approach that could
+fundamentally address kernel launch overhead is merging the 3-step GEMM contraction
+(L_env × theta × W × R_env) into a single HIP kernel per apply_heff call,
+eliminating all inter-kernel gaps and intermediate global memory traffic. This is
+the approach taken by production GPU tensor network codes like Block2 (custom CUDA
+kernels). However, this requires hand-writing matrix-multiply-accumulate kernels
+targeting the MI300X MFMA instructions, a substantially larger engineering effort.
+
+This finding confirms that the GPU crossover point (currently chi≈128) is set not
+by arithmetic throughput but by kernel launch overhead amortization. At chi=256+,
+individual GEMMs are large enough (~50μs+) that dispatch overhead becomes negligible
+and the GPU's raw FLOP advantage dominates.
+
 ---
 
 ## References to Cite
@@ -1083,3 +1189,8 @@ P=1, which is serial DMRG.
 - quimb: Gray, J. (2018). quimb: a python package for quantum information and many-body calculations. JOSS 3(29), 819.
 - cotengra: Gray, J., & Kourtis, S. (2021). Hyper-optimized tensor network contraction. Quantum 5, 410.
 - ITensor / Block2 / TeNPy references for context on other implementations
+- Manoj, A., et al. (2021). Characterizing Concurrency Mechanisms for NVIDIA and AMD GPUs under Shared Hardware Resources. arXiv:2110.00459.
+- Wang, Y., et al. (2024). ACS: Concurrent Kernel Execution on Irregular, Input-Dependent Computational Graphs. arXiv:2401.12377.
+- AMD. CDNA3 ISA Reference Guide. AMD Developer Documentation.
+- AMD GPUOpen. Asynchronous Compute Deep Dive. (ACE architecture, hardware queue dispatch model.)
+- AMD. ROCm MI300X Workload Optimization Guide. (HIP Graphs recommendation for small kernel dispatch overhead.)
