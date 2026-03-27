@@ -370,27 +370,20 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
         U, cL * cR));
 
     // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
-    // D batched calls (batch_count=d), wp accumulates, sp independent within each batch.
-    for (int wp = 0; wp < D; wp++) {
-        Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
-        for (int sp = 0; sp < d; sp++) {
+    // Sequential individual GEMMs (batched version has complex bug - investigating)
+    for (int sp = 0; sp < d; sp++) {
+        for (int wp = 0; wp < D; wp++) {
+            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
             int ws_out = wp * d + sp;
-            h_pin_A3_[sp] = U + ws_out * cL * cR;
-            h_pin_B3_[sp] = R_env + wp * cR;
-            h_pin_C3_[sp] = d_result + sp * cL;
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                cL, cR, cR,
+                &one,
+                U + ws_out * cL * cR, cL,
+                R_env + wp * cR, cR * D,
+                &beta,
+                d_result + sp * cL, cL * d));
         }
-        HIP_CHECK(hipMemcpyAsync(d_step3_A_, h_pin_A3_, d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_step3_B_, h_pin_B3_, d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_step3_C_, h_pin_C3_, d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-            rocblas_operation_none, rocblas_operation_none,
-            cL, cR, cR,
-            &one,
-            (const Scalar**)d_step3_A_, cL,
-            (const Scalar**)d_step3_B_, cR * D,
-            &beta,
-            d_step3_C_, cL * d,
-            d));
     }
 }
 
