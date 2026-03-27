@@ -120,7 +120,7 @@ class TestEffectiveHamiltonian:
         theta = np.random.randn(chi_L, d, d, chi_R) + 0.1j * np.random.randn(chi_L, d, d, chi_R)
 
         result = apply_heff(L_env, R_env, W_L, W_R, theta)
-        ref = np.einsum('awc,csre,wmps,mnqr,fne->apqf',
+        ref = np.einsum('awc,csre,wmsp,mnrq,fne->apqf',
                          L_env, theta, W_L, W_R, R_env, optimize=True)
         assert np.allclose(result, ref, atol=1e-10)
 
@@ -171,7 +171,7 @@ class TestEnvironments:
 
         L_new = update_left_env(L, A, W)
         A_conj = A.conj()
-        L_ref = np.einsum('awc,atp,wmts,csq->pmq',
+        L_ref = np.einsum('awc,atp,wmst,csq->pmq',
                            L, A_conj, W, A, optimize=True)
         assert np.allclose(L_new, L_ref, atol=1e-12)
 
@@ -187,7 +187,7 @@ class TestEnvironments:
 
         R_new = update_right_env(R, B, W)
         B_conj = B.conj()
-        R_ref = np.einsum('awc,pta,mwts,qsc->pmq',
+        R_ref = np.einsum('awc,pta,mwst,qsc->pmq',
                            R, B_conj, W, B, optimize=True)
         assert np.allclose(R_new, R_ref, atol=1e-12)
 
