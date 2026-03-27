@@ -1,7 +1,7 @@
 """Main PDMRG algorithm entry point.
 
 Implements the Real-Space Parallel DMRG algorithm (Stoudenmire & White 2013):
-  Phase 0: Serial warmup with quimb DMRG2
+  Phase 0: Serial warmup with quimb DMRG1
   Phase 1: Distribute MPS across ranks with V matrices
   Phase 2: Parallel staggered sweeps (independent, no communication)
   Phase 3: Merge at shared bonds using V = Lambda^-1
@@ -34,34 +34,30 @@ from pdmrg.hamiltonians.heisenberg import build_heisenberg_mpo
 
 def serial_warmup(mpo, L, bond_dim_warmup=50, n_warmup_sweeps=5,
                   dtype='float64', initial_mps=None):
-    """Phase 0: Use quimb DMRG2 for a high-quality initial state.
+    """Phase 0: Use quimb DMRG1 for a fast initial state.
 
     Returns MPS in right-canonical form (canonical center at site 0).
     This means all R_envs are correct after distribution.
 
+    Uses DMRG1 (single-site) instead of DMRG2: warmup only needs a
+    reasonable starting state, not optimal bond structure. DMRG1 is
+    ~2x cheaper at large chi since the eigsh problem is chi*d vs chi*d².
+
     Parameters
     ----------
     initial_mps : quimb.tensor.MatrixProductState, optional
-        If provided, used as the starting state for DMRG2 warmup.
+        If provided, used as the starting state for DMRG1 warmup.
         This ensures reproducible benchmarks when all implementations
         start from the same stored MPS.
     """
     mpo_arrays = [get_mpo_tensor_data(mpo, i) for i in range(L)]
 
-    # Warmup: light ramp + a few sweeps at target bond dim.
-    # Per Stoudenmire & White, warmup only needs a reasonable starting state,
-    # NOT full convergence. Over-converging wastes time and produces a state
-    # that parallel sweeps degrade (since they optimize independently).
-    bond_ramp = []
-    m = 10
-    while m < bond_dim_warmup:
-        bond_ramp.append(m)
-        m *= 2
-    bond_ramp.append(bond_dim_warmup)
-    dmrg = qtn.DMRG2(mpo, bond_dims=bond_ramp, cutoffs=1e-14,
+    # Warmup with DMRG1: cheap single-site sweeps to get a decent state.
+    # Bond dimension is set directly (DMRG1 doesn't grow bonds, but the
+    # random initial state already has the target bond dim).
+    dmrg = qtn.DMRG1(mpo, bond_dims=bond_dim_warmup, cutoffs=1e-14,
                       p0=initial_mps)
-    min_sweeps = max(n_warmup_sweeps, len(bond_ramp) + 2)
-    dmrg.solve(tol=1e-10, max_sweeps=min_sweeps, verbosity=0)
+    dmrg.solve(tol=1e-10, max_sweeps=n_warmup_sweeps, verbosity=0)
 
     warmup_energy = dmrg.energy
 
@@ -586,7 +582,7 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
       - Sweep back, merge with other neighbor
 
     Warmup policy:
-      - Serial warmup only: rank 0 runs quimb DMRG2, then MPS is scattered
+      - Serial warmup only: rank 0 runs quimb DMRG1, then MPS is scattered
       - Parallel warmup removed for algorithmic fidelity (2026-03-07)
       - Use random_init_flag=True only for experimental testing
 
@@ -673,7 +669,7 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         # Serial warmup on rank 0
         if rank == 0 and verbose:
             print(f"PDMRG: L={L}, bond_dim={bond_dim}, n_procs={n_procs}")
-            print(f"Phase 0: Serial warmup (quimb DMRG2, m={bond_dim_warmup})")
+            print(f"Phase 0: Serial warmup (quimb DMRG1, m={bond_dim_warmup})")
 
         warmup_energy = None
         local_mps = None
@@ -888,7 +884,7 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
         if random_init_flag:
             warmup_method_str = None
         else:
-            warmup_method_str = "quimb DMRG2 serial"
+            warmup_method_str = "quimb DMRG1 serial"
 
         algorithm_executed_str = "PDMRG parallel sweeps with local optimization"
 
@@ -914,10 +910,12 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
 
 
 def _quimb_cleanup_sweeps(mps_arrays, mpo, bond_dim, tol, verbose):
-    """Run quimb DMRG2 cleanup sweeps on the assembled MPS.
+    """Run quimb DMRG1 cleanup sweeps on the assembled MPS.
 
     Converts the assembled PDMRG MPS to a quimb MPS and runs a few
     DMRG2 sweeps to polish the energy to quimb-level precision.
+    DMRG2 (not DMRG1) is needed here because DMRG1 can get trapped
+    in local minima when the bond structure from PDMRG is suboptimal.
     """
     L = len(mps_arrays)
 
