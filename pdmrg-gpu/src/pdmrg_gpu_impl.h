@@ -1939,12 +1939,12 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     // stale boundary environments that only full-chain sweeps can fix.
     if (n_segments_ > 1) {
         int n_polish = 10;
-        std::cout << "Polish sweeps (full-chain dmrg2, max " << n_polish << ")..." << std::endl;
+        std::cout << "Polish sweeps (full-chain dmrg1, max " << n_polish << ")..." << std::endl;
         build_initial_environments();
         for (int sw = 0; sw < n_polish; sw++) {
             auto t_sw = std::chrono::high_resolution_clock::now();
-            sweep_LR_full();
-            double eRL = sweep_RL_full();
+            sweep_LR_full_1site();
+            double eRL = sweep_RL_full_1site();
             auto t_sw_end = std::chrono::high_resolution_clock::now();
             double dE = std::abs(eRL - energy_);
             std::cout << "  Polish " << sw << ": E = " << std::fixed << std::setprecision(12)

@@ -857,7 +857,7 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
 
     # ===== QUIMB CLEANUP SWEEPS =====
     # PDMRG block-local sweeps use cross-block environments from the previous
-    # merge (stale). Quimb DMRG2 cleanup on the assembled MPS closes this gap
+    # merge (stale). Quimb DMRG1 cleanup on the assembled MPS closes this gap
     # to machine-precision accuracy (ΔE < 1e-14).
     mps_assembled = gather_mps(pmps, comm)
 
@@ -903,12 +903,12 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
 
 
 def _quimb_cleanup_sweeps(mps_arrays, mpo, bond_dim, tol, verbose):
-    """Run quimb DMRG2 cleanup sweeps on the assembled MPS.
+    """Run quimb DMRG1 cleanup sweeps on the assembled MPS.
 
     Converts the assembled PDMRG MPS to a quimb MPS and runs a few
-    DMRG2 sweeps to polish the energy to quimb-level precision.
-    DMRG2 (not DMRG1) is needed here because DMRG1 can get trapped
-    in local minima when the bond structure from PDMRG is suboptimal.
+    DMRG1 sweeps to polish the energy. DMRG1 is cheaper than DMRG2
+    (eigsh problem chi*d vs chi*d²) and sufficient when the bond
+    structure from PDMRG is already close to converged.
     """
     L = len(mps_arrays)
 
@@ -929,12 +929,12 @@ def _quimb_cleanup_sweeps(mps_arrays, mpo, bond_dim, tol, verbose):
         arrays_q.append(t)
     mps_q = qtn.MatrixProductState(arrays_q)
 
-    dmrg = qtn.DMRG2(mpo, bond_dims=bond_dim, cutoffs=1e-14, p0=mps_q)
+    dmrg = qtn.DMRG1(mpo, bond_dims=bond_dim, cutoffs=1e-14, p0=mps_q)
     dmrg.solve(max_sweeps=50, tol=tol, verbosity=0)
     E = float(np.real(dmrg.energy))
 
     if verbose:
-        print(f"  Cleanup (quimb DMRG2): E = {E:.12f}")
+        print(f"  Cleanup (quimb DMRG1): E = {E:.12f}")
 
     return E
 
