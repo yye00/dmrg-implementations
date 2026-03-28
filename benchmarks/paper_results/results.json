@@ -7896,5 +7896,35 @@
     "success": false,
     "raw_output": "TIMEOUT",
     "note": "dmrg1-warmup-polish"
+  },
+  {
+    "impl": "pdmrg",
+    "model": "heisenberg",
+    "L": 12,
+    "chi": 20,
+    "sweeps": 30,
+    "np": 2,
+    "threads": 1,
+    "energy": -20.538578027554784,
+    "solve_time": 67.591,
+    "wall_time": 68.65769839286804,
+    "success": true,
+    "raw_output": "",
+    "note": "dmrg1-warmup-cleanup"
+  },
+  {
+    "impl": "pdmrg",
+    "model": "heisenberg",
+    "L": 12,
+    "chi": 20,
+    "sweeps": 30,
+    "np": 4,
+    "threads": 1,
+    "energy": -25.107923668905315,
+    "solve_time": 65.483,
+    "wall_time": 66.60751628875732,
+    "success": true,
+    "raw_output": "",
+    "note": "dmrg1-warmup-cleanup"
   }
 ]
