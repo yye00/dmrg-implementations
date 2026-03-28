@@ -7851,5 +7851,50 @@
     "success": true,
     "raw_output": "",
     "note": "dmrg1-warmup-polish"
+  },
+  {
+    "impl": "pdmrg-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 20,
+    "sweeps": 30,
+    "segments": 2,
+    "energy": -40.384125355191,
+    "wall_time": 12.885,
+    "outer_iters": null,
+    "polish_sweeps": null,
+    "success": true,
+    "raw_output": "",
+    "note": "dmrg1-warmup-polish"
+  },
+  {
+    "impl": "pdmrg-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 20,
+    "sweeps": 30,
+    "segments": 4,
+    "energy": -40.383827855383,
+    "wall_time": 6.045,
+    "outer_iters": 15,
+    "polish_sweeps": null,
+    "success": true,
+    "raw_output": "",
+    "note": "dmrg1-warmup-polish"
+  },
+  {
+    "impl": "pdmrg-gpu",
+    "model": "tfim",
+    "L": 32,
+    "chi": 20,
+    "sweeps": 30,
+    "segments": 8,
+    "energy": null,
+    "wall_time": 1800,
+    "outer_iters": null,
+    "polish_sweeps": null,
+    "success": false,
+    "raw_output": "TIMEOUT",
+    "note": "dmrg1-warmup-polish"
   }
 ]
