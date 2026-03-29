@@ -866,7 +866,48 @@ contributions, and (2) the existing GPU codes are either abandoned, not publicly
 available, or tightly integrated into larger frameworks that make controlled
 benchmarking difficult.
 
-### 13.2 Existing Implementations
+### 13.2 Recent GPU DMRG Literature (2023-2024)
+
+**Brabec et al. (2024) — Quarter-petaFLOPS on DGX-H100** [arXiv:2407.07411]:
+The state-of-the-art result. Hybrid CPU-multi-GPU implementation of spin-adapted
+ab initio DMRG achieves 246 TFLOPS sustained on a single NVIDIA DGX-H100 node
+(8×H100 GPUs). Reports 80× speedup over 128-core OpenMP CPU and 2.5× over DGX-A100.
+All contractions via cuBLAS (not cuTENSOR). Key difference from our work: they target
+quantum chemistry with SU(2) symmetry at bond dimensions D=8,000-10,000, where the
+GEMM sizes are enormous (matrices in the thousands). At these sizes, GPU acceleration
+is unambiguous. They do not report results at small bond dimensions (D<500) where our
+crossover analysis shows CPU wins. Based on the ITensor/Block2 ecosystem, NVIDIA-only.
+
+**Li et al. (2024) — Distributed Multi-GPU DMRG** [arXiv:2311.02854]:
+Distributed multi-GPU ab initio DMRG on 48 NVIDIA A100 GPUs reaching D=14,000 for
+the P-cluster of nitrogenase (114 electrons, 73 orbitals). Uses batched cuBLAS GEMMs
+with CUDA streams for concurrent kernel execution and NCCL for multi-GPU communication.
+Explicitly notes that "for large D, batched GEMM achieves good performance even with
+small batchCount" — confirming that GPU benefit scales with bond dimension. Again,
+quantum chemistry at very large D; no small-D crossover analysis.
+
+**Secular et al. (2024) — Hybrid CPU-GPU 2D DMRG** [arXiv:2311.14106]:
+Mode-optimized hybrid CPU-GPU DMRG for 2D lattice models on 8×NVIDIA A100 GPUs.
+Reports 25-30× speedup over fully parallelized CPU. Critically, they keep SVD on CPU
+and only offload the eigensolver (Davidson) and tensor contractions to GPU — the same
+split we found optimal. They note GPU benefit sharpens for D>512 where "tensor core
+units enable near-theoretical FP64 performance." For smaller D, the CPU handles
+renormalization steps, SVD, and quantum number bookkeeping.
+
+**Ganahl et al. (2023) — DMRG on TPUs** [PRX Quantum 4, 010317]:
+DMRG on Google TPUs (1,024 TPU v3 cores) reaching D=65,536. Demonstrates that
+hardware accelerators can push bond dimensions far beyond CPU limits, but the focus
+is on the D→∞ regime where parallelism is trivially beneficial. No CPU crossover
+analysis.
+
+**quimb GPU discussion** [github.com/jcmgray/quimb/discussions/190]:
+The quimb maintainer (Gray) notes that DMRG is not GPU-ready in quimb because the
+iterative eigensolver (scipy/SLEPc) is CPU-bound, and DMRG2's dynamic shapes prevent
+JIT compilation. Recommends TNOptimizer (gradient-based MPS optimization) for GPU
+acceleration instead. This aligns with our finding that the eigensolver — not the
+tensor contractions — is the true bottleneck at moderate bond dimensions.
+
+### 13.3 Existing Framework Implementations
 
 **ITensor (C++)**: The gold-standard DMRG library. Has experimental GPU support via
 ITensorGPU.jl (Julia). However, ITensorGPU.jl targets NVIDIA/CUDA and has not been
@@ -879,6 +920,7 @@ Has GPU support for some tensor operations but is focused on quantum chemistry w
 symmetry exploitation (SU(2), point groups). The GPU path is not publicly benchmarked
 for condensed matter models. Block2's strength is symmetry-adapted DMRG, which we
 do not implement — our benchmarks use the full (non-symmetry-adapted) Hilbert space.
+The Brabec et al. (2024) quarter-petaFLOPS result is based on this codebase.
 
 **TeNPy**: A widely-used Python tensor network library. Purely CPU-based; GPU support
 was discussed but never implemented. TeNPy's strength is its extensive model library
@@ -888,18 +930,34 @@ and MPS algorithms, not raw performance.
 parallelism (MPI) across nodes, not GPU acceleration. Different parallelization
 strategy than our single-GPU approach.
 
-### 13.3 What's Missing in the Literature
+**cuDMRG** [github.com/ClarkResearchGroup/cuDMRG]: CuPy-based DMRG prototype.
+Testing/educational code, not performance-optimized.
 
-No existing code provides:
-1. A systematic GPU vs CPU crossover analysis across multiple physics models
-2. Benchmarks on AMD MI300X (all existing GPU work targets NVIDIA)
-3. Empirical evaluation of SVD-replacement strategies (Newton-Schulz) for DMRG
-4. Head-to-head comparison of parallel DMRG algorithms (Stoudenmire vs Grigori-Hassan)
-   on GPU hardware
+### 13.4 What's Missing in the Literature
 
-Our paper fills these gaps. The finding that GPU DMRG only pays off at χ≥128 — and
-that the SVD bottleneck cannot be circumvented with iterative methods — is, to our
-knowledge, not documented in the existing literature.
+The existing GPU DMRG literature has a consistent blind spot: all successful GPU
+speedups are reported at large bond dimensions (D≥500, typically D≥1000) in the
+quantum chemistry regime. No existing work provides:
+
+1. A systematic GPU vs CPU crossover analysis at small-to-moderate bond dimensions
+   (χ=20-256) across multiple condensed matter models — the regime where most
+   practical DMRG calculations actually operate
+2. Benchmarks on AMD MI300X (all existing GPU work targets NVIDIA A100/H100/TPU)
+3. Empirical evaluation of SVD-replacement strategies (Newton-Schulz polar
+   decomposition) as an alternative to the SVD bottleneck in DMRG
+4. Head-to-head comparison of real-space parallel DMRG (Stoudenmire & White 2013)
+   vs serial DMRG on GPU — testing whether intra-GPU parallelism via HIP streams
+   provides any benefit over simply running serial DMRG on the full GPU
+5. Evidence that parallel DMRG on a single GPU is counterproductive — the GPU is
+   already saturated by serial DMRG's batched GEMMs, so partitioning the chain
+   into segments only adds boundary-merge overhead without reducing wall time
+
+Our paper fills these gaps. The central finding — that GPU DMRG only pays off at
+χ≥128 for complex arithmetic and the crossover is even higher for real — is consistent
+with the literature (which only reports successes at D≥500) but has not been explicitly
+documented. The Newton-Schulz failure (0% win rate, numerical divergence at χ≥128)
+and the parallel DMRG anti-scaling on single GPU are, to our knowledge, novel
+negative results.
 
 ---
 
@@ -1179,6 +1237,37 @@ and the GPU's raw FLOP advantage dominates.
 
 ---
 
+### Finding: Real-space parallel DMRG is counterproductive on a single GPU
+
+The 2026-03-28 re-run of pdmrg-gpu (with DMRG1 warmup+polish) vs serial GPU DMRG
+confirms that stream-parallel DMRG on a single GPU never wins:
+
+**GPU: Serial vs Parallel (best serial GPU vs best pdmrg-gpu, all converged configs):**
+- Serial GPU wins: 21/22 (95.5%)
+- Parallel GPU wins: 1/22 (4.5%) — marginal, within noise
+- Josephson is especially bad: pdmrg-gpu 5-50× slower than dmrg-gpu at L≥16
+
+**CPU: quimb vs MPI PDMRG (best quimb vs best pdmrg/pdmrg-opt, all converged configs):**
+- quimb wins: 22/22 (100%)
+- MPI PDMRG wins: 0/22 (0%)
+- PDMRG is 5-100× slower due to warmup + parallel sweeps + cleanup overhead
+
+**Root cause for GPU parallel failure:** The MI300X is already saturated by serial
+DMRG's batched GEMMs at chi≥64. Splitting the chain into segments means each segment
+gets smaller GEMM calls (chi/nseg effective dimension at boundaries), which are less
+efficient on the GPU. The boundary merge overhead (additional SVD + environment
+rebuilds) exceeds any time saved from concurrent segment sweeps. This is fundamentally
+different from multi-node CPU parallelism (Stoudenmire & White 2013), where each node
+has independent compute resources.
+
+**Root cause for CPU parallel failure:** The PDMRG total time = serial warmup (quimb
+DMRG1) + parallel sweeps + serial cleanup (quimb DMRG1). Even with DMRG1 (cheaper than
+DMRG2), the warmup+cleanup essentially runs quimb DMRG twice in addition to the
+parallel sweeps. At the problem sizes tested (L≤100, chi≤128), the parallel sweeps
+cannot offset this overhead.
+
+---
+
 ## References to Cite
 
 - White, S. R. (1992). Density matrix formulation for quantum renormalization groups. PRL 69, 2863.
@@ -1188,6 +1277,10 @@ and the GPU's raw FLOP advantage dominates.
 - Keller, T., & Bäuml, M. (2024). Newton-Schulz iteration for matrix square roots. (ML context for NS SVD replacement)
 - quimb: Gray, J. (2018). quimb: a python package for quantum information and many-body calculations. JOSS 3(29), 819.
 - cotengra: Gray, J., & Kourtis, S. (2021). Hyper-optimized tensor network contraction. Quantum 5, 410.
+- Brabec, J., et al. (2024). Parallel implementation of the DMRG method achieving a quarter petaFLOPS performance on a single DGX-H100 GPU node. JCTC. arXiv:2407.07411.
+- Li, Z., et al. (2024). Distributed multi-GPU ab initio DMRG algorithm with applications to the P-cluster of nitrogenase. JCTC. arXiv:2311.02854.
+- Secular, P., et al. (2024). Two-dimensional quantum lattice models via mode optimized hybrid CPU-GPU DMRG method. arXiv:2311.14106.
+- Ganahl, M., et al. (2023). Density matrix renormalization group with tensor processing units. PRX Quantum 4, 010317.
 - ITensor / Block2 / TeNPy references for context on other implementations
 - Manoj, A., et al. (2021). Characterizing Concurrency Mechanisms for NVIDIA and AMD GPUs under Shared Hardware Resources. arXiv:2110.00459.
 - Wang, Y., et al. (2024). ACS: Concurrent Kernel Execution on Irregular, Input-Dependent Computational Graphs. arXiv:2401.12377.
