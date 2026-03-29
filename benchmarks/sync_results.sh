@@ -27,7 +27,7 @@ while true; do
 
     # Copy results + log
     scp -q "$REMOTE:$REMOTE_REPO/$RESULTS_DIR/results.json" "$REPO_DIR/$RESULTS_DIR/results.json" 2>/dev/null
-    scp -q "$REMOTE:$REMOTE_REPO/$RESULTS_DIR/rerun_dmrg1.log" "$REPO_DIR/$RESULTS_DIR/rerun_dmrg1.log" 2>/dev/null
+    scp -q "$REMOTE:$REMOTE_REPO/$RESULTS_DIR/rerun_gpu_opt.log" "$REPO_DIR/$RESULTS_DIR/rerun_gpu_opt.log" 2>/dev/null
 
     # Check if anything changed
     if git diff --quiet "$RESULTS_DIR/"; then
@@ -35,20 +35,20 @@ while true; do
     else
         N=$(python3 -c "import json; print(len(json.load(open('$RESULTS_DIR/results.json'))))" 2>/dev/null)
         echo "[$(date)] New results ($N total), pushing to GitHub..."
-        git add "$RESULTS_DIR/results.json" "$RESULTS_DIR/rerun_dmrg1.log" 2>/dev/null
+        git add "$RESULTS_DIR/results.json" "$RESULTS_DIR/rerun_gpu_opt.log" 2>/dev/null
         git commit -m "data: auto-sync benchmark results ($N results)" 2>/dev/null
         git push 2>/dev/null
     fi
 
     # Check if benchmark is still running
-    RUNNING=$(ssh -o ConnectTimeout=5 "$REMOTE" 'ps aux | grep rerun_dmrg1 | grep -v grep | wc -l' 2>/dev/null)
+    RUNNING=$(ssh -o ConnectTimeout=5 "$REMOTE" 'ps aux | grep rerun_gpu_opt | grep -v grep | wc -l' 2>/dev/null)
     if [ "$RUNNING" = "0" ]; then
         echo "[$(date)] Benchmark finished! Final sync..."
         scp -q "$REMOTE:$REMOTE_REPO/$RESULTS_DIR/results.json" "$REPO_DIR/$RESULTS_DIR/results.json" 2>/dev/null
-        scp -q "$REMOTE:$REMOTE_REPO/$RESULTS_DIR/rerun_dmrg1.log" "$REPO_DIR/$RESULTS_DIR/rerun_dmrg1.log" 2>/dev/null
+        scp -q "$REMOTE:$REMOTE_REPO/$RESULTS_DIR/rerun_gpu_opt.log" "$REPO_DIR/$RESULTS_DIR/rerun_gpu_opt.log" 2>/dev/null
         N=$(python3 -c "import json; print(len(json.load(open('$RESULTS_DIR/results.json'))))" 2>/dev/null)
-        git add "$RESULTS_DIR/results.json" "$RESULTS_DIR/rerun_dmrg1.log" 2>/dev/null
-        git commit -m "data: final benchmark results ($N results, DMRG1 warmup+polish)" 2>/dev/null
+        git add "$RESULTS_DIR/results.json" "$RESULTS_DIR/rerun_gpu_opt.log" 2>/dev/null
+        git commit -m "data: final benchmark results ($N results, gpu-opt DMRG1 warmup+polish)" 2>/dev/null
         git push 2>/dev/null
         echo "[$(date)] Final push done. Exiting."
         break
