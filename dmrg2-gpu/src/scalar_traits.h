@@ -267,6 +267,45 @@ struct ScalarTraits<hipDoubleComplex> {
 };
 
 // ============================================================================
+// Device helpers for Lanczos device-pointer-mode operations
+// ============================================================================
+
+__device__ inline double dev_real_part(double x) { return x; }
+__device__ inline double dev_real_part(hipDoubleComplex x) { return hipCreal(x); }
+
+__device__ inline double dev_make_neg_real_scalar(double, double neg_alpha) { return neg_alpha; }
+__device__ inline hipDoubleComplex dev_make_neg_real_scalar(hipDoubleComplex, double neg_alpha) {
+    return make_hipDoubleComplex(neg_alpha, 0.0);
+}
+
+template<typename Scalar>
+__global__ void lanczos_process_alpha_kernel(const Scalar* dot_result, Scalar* neg_alpha_out,
+                                              double* alpha_arr, int iter) {
+    double alpha = dev_real_part(dot_result[0]);
+    alpha_arr[iter] = alpha;
+    neg_alpha_out[0] = dev_make_neg_real_scalar(dot_result[0], -alpha);
+}
+
+template<typename Scalar>
+__global__ void lanczos_process_beta_kernel(const double* nrm2_result, double* inv_nrm_out,
+                                             double* beta_arr, Scalar* neg_beta_scalars, int iter) {
+    double beta = nrm2_result[0];
+    beta_arr[iter] = beta;
+    inv_nrm_out[0] = 1.0 / beta;
+    neg_beta_scalars[iter] = dev_make_neg_real_scalar(Scalar{}, -beta);
+}
+
+__device__ inline double dev_negate(double x) { return -x; }
+__device__ inline hipDoubleComplex dev_negate(hipDoubleComplex x) {
+    return make_hipDoubleComplex(-hipCreal(x), -hipCimag(x));
+}
+
+template<typename Scalar>
+__global__ void negate_scalar_kernel(const Scalar* in, Scalar* out) {
+    out[0] = dev_negate(in[0]);
+}
+
+// ============================================================================
 // In-place conjugation of GPU arrays (no-op for real)
 // ============================================================================
 

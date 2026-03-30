@@ -94,6 +94,25 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_lanczos_v_, (size_t)max_lanczos_iter_ * theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_ritz_coeffs_, max_lanczos_iter_ * sizeof(Scalar)));
 
+    // Device scalars for sync-free Lanczos
+    HIP_CHECK(hipMalloc(&d_dot_result_, sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_nrm2_result_, sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_neg_alpha_, sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_neg_overlap_, sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_inv_nrm_, sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_alpha_dev_, max_lanczos_iter_ * sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_beta_dev_, max_lanczos_iter_ * sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_neg_beta_scalars_, max_lanczos_iter_ * sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_const_one_, sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_const_zero_, sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_const_neg_one_, sizeof(Scalar)));
+    {
+        Scalar one = Traits::one(), zero = Traits::zero(), neg_one = Traits::neg(one);
+        HIP_CHECK(hipMemcpy(d_const_one_, &one, sizeof(Scalar), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(d_const_zero_, &zero, sizeof(Scalar), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(d_const_neg_one_, &neg_one, sizeof(Scalar), hipMemcpyHostToDevice));
+    }
+
     // Batched GEMM pointer arrays
     int batch_max = D_mpo_ * d_;
     HIP_CHECK(hipMalloc(&d_batch_A_, batch_max * sizeof(Scalar*)));
@@ -139,6 +158,17 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
     if (d_heff_result_) hipFree(d_heff_result_);
     if (d_lanczos_v_) hipFree(d_lanczos_v_);
     if (d_ritz_coeffs_) hipFree(d_ritz_coeffs_);
+    if (d_dot_result_) hipFree(d_dot_result_);
+    if (d_nrm2_result_) hipFree(d_nrm2_result_);
+    if (d_neg_alpha_) hipFree(d_neg_alpha_);
+    if (d_neg_overlap_) hipFree(d_neg_overlap_);
+    if (d_inv_nrm_) hipFree(d_inv_nrm_);
+    if (d_alpha_dev_) hipFree(d_alpha_dev_);
+    if (d_beta_dev_) hipFree(d_beta_dev_);
+    if (d_neg_beta_scalars_) hipFree(d_neg_beta_scalars_);
+    if (d_const_one_) hipFree(d_const_one_);
+    if (d_const_zero_) hipFree(d_const_zero_);
+    if (d_const_neg_one_) hipFree(d_const_neg_one_);
     if (d_T1_) hipFree(d_T1_);
     if (d_T2_) hipFree(d_T2_);
     if (d_batch_A_) hipFree(d_batch_A_);
@@ -531,12 +561,10 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     double tol_eig_conv = 1e-12;
 
     Scalar* d_lanczos_v = d_lanczos_v_;
-
-    // Alpha and beta are always real for Hermitian operators
     std::vector<double> h_alpha(max_iter);
     std::vector<double> h_beta(max_iter);
 
-    // v[0] = theta / ||theta||
+    // v[0] = theta / ||theta|| (host pointer mode for initial setup)
     double norm;
     ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, &norm));
 
@@ -554,61 +582,90 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
 
     double prev_energy = 1e30;
     int iter;
-    for (iter = 0; iter < max_iter; iter++) {
-        Scalar* d_vi = d_lanczos_v + iter * n;
+    int last_synced_iter = -1;
 
-        // w = H|v_i>
+    for (iter = 0; iter < max_iter; iter++) {
+        Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
+
+        // w = H|v_i> (apply_heff uses host pointer mode internally)
         apply_heff(site, d_vi, d_heff_result_);
 
-        // alpha_i = <v_i|w> (real for Hermitian H)
-        Scalar alpha_result;
-        ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_vi, 1, d_heff_result_, 1, &alpha_result));
-        double alpha_i = Traits::real_part(alpha_result);
-        h_alpha[iter] = alpha_i;
+        // Switch to device pointer mode for scalar operations
+        ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_device));
 
-        // w = w - alpha_i * v_i
-        Scalar neg_alpha = Traits::make_scalar(-alpha_i);
-        ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, &neg_alpha, d_vi, 1, d_heff_result_, 1));
+        // alpha_i = <v_i|w> → device
+        ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_vi, 1, d_heff_result_, 1, d_dot_result_));
 
-        // w = w - beta_{i-1} * v_{i-1}
+        // Process alpha: store to d_alpha_dev_[iter], compute d_neg_alpha_
+        hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
+                           d_dot_result_, d_neg_alpha_, d_alpha_dev_, iter);
+
+        // w -= alpha_i * v_i (device pointer)
+        ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, d_neg_alpha_, d_vi, 1, d_heff_result_, 1));
+
+        // w -= beta_{i-1} * v_{i-1} (device pointer)
         if (iter > 0) {
-            Scalar neg_beta = Traits::make_scalar(-h_beta[iter - 1]);
-            Scalar* d_vim1 = d_lanczos_v + (iter - 1) * n;
-            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, &neg_beta, d_vim1, 1, d_heff_result_, 1));
+            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n,
+                d_neg_beta_scalars_ + (iter - 1),
+                d_lanczos_v + (size_t)(iter - 1) * n, 1,
+                d_heff_result_, 1));
         }
 
-        // Full reorthogonalization via gemv
+        // Full reorthogonalization (device pointer mode for gemv constants)
         if (iter > 0) {
-            Scalar one_val = Traits::one(), zero_sc = Traits::zero(), neg_one = Traits::neg(Traits::one());
             ROCBLAS_CHECK(Traits::gemv(rocblas_h_, Traits::op_h,
-                n, iter + 1, &one_val,
+                n, iter + 1, d_const_one_,
                 d_lanczos_v, n,
                 d_heff_result_, 1,
-                &zero_sc, d_ritz_coeffs_, 1));
+                d_const_zero_, d_ritz_coeffs_, 1));
             ROCBLAS_CHECK(Traits::gemv(rocblas_h_, rocblas_operation_none,
-                n, iter + 1, &neg_one,
+                n, iter + 1, d_const_neg_one_,
                 d_lanczos_v, n,
                 d_ritz_coeffs_, 1,
-                &one_val, d_heff_result_, 1));
+                d_const_one_, d_heff_result_, 1));
         } else {
-            Scalar overlap;
-            ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_lanczos_v, 1, d_heff_result_, 1, &overlap));
-            Scalar neg_overlap = Traits::neg(overlap);
-            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, &neg_overlap, d_lanczos_v, 1, d_heff_result_, 1));
+            ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_lanczos_v, 1, d_heff_result_, 1, d_dot_result_));
+            hipLaunchKernelGGL(negate_scalar_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
+                               d_dot_result_, d_neg_overlap_);
+            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, d_neg_overlap_, d_lanczos_v, 1, d_heff_result_, 1));
         }
 
-        // beta_i = ||w||
-        double beta_i;
-        ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_heff_result_, 1, &beta_i));
-        h_beta[iter] = beta_i;
+        // beta_i = ||w|| → device
+        ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_heff_result_, 1, d_nrm2_result_));
 
-        if (beta_i < tol_lanczos) {
-            iter++;
-            break;
+        // Process beta: store, compute 1/beta, store -beta as Scalar
+        hipLaunchKernelGGL(lanczos_process_beta_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
+                           d_nrm2_result_, d_inv_nrm_, d_beta_dev_, d_neg_beta_scalars_, iter);
+
+        // v_{i+1} = w / beta_i (device pointer for scal)
+        if (iter + 1 < max_iter) {
+            Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
+            HIP_CHECK(hipMemcpy(d_vip1, d_heff_result_, n * sizeof(Scalar), hipMemcpyDeviceToDevice));
+            ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_vip1, 1));
         }
 
-        // Eigenvalue convergence check (every 3 iterations after iter >= 4)
+        // Switch back to host pointer mode
+        ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
+
+        // Convergence check every 3 iterations after iter >= 4
         if (iter >= 4 && iter % 3 == 0) {
+            HIP_CHECK(hipStreamSynchronize(stream_));
+
+            int n_copy = iter + 1;
+            HIP_CHECK(hipMemcpy(h_alpha.data(), d_alpha_dev_, n_copy * sizeof(double), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpy(h_beta.data(), d_beta_dev_, n_copy * sizeof(double), hipMemcpyDeviceToHost));
+            last_synced_iter = iter;
+
+            bool early_break = false;
+            for (int j = 0; j <= iter; j++) {
+                if (h_beta[j] < tol_lanczos) {
+                    iter = j + 1;
+                    early_break = true;
+                    break;
+                }
+            }
+            if (early_break) break;
+
             int ncheck = iter + 1;
             std::vector<double> h_D_chk(ncheck), h_E_chk(ncheck);
             std::copy(h_alpha.begin(), h_alpha.begin() + ncheck, h_D_chk.begin());
@@ -628,19 +685,18 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
                 prev_energy = cur_energy;
             }
         }
-
-        // v_{i+1} = w / beta_i
-        if (iter + 1 < max_iter) {
-            Scalar* d_vip1 = d_lanczos_v + (iter + 1) * n;
-            double scale = 1.0 / beta_i;
-            HIP_CHECK(hipMemcpy(d_vip1, d_heff_result_, n * sizeof(Scalar), hipMemcpyDeviceToDevice));
-            ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, &scale, d_vip1, 1));
-        }
     }
 
     int niter = iter;
 
-    // Solve tridiagonal eigenvalue problem on CPU (always real)
+    HIP_CHECK(hipStreamSynchronize(stream_));
+
+    if (last_synced_iter < niter - 1) {
+        HIP_CHECK(hipMemcpy(h_alpha.data(), d_alpha_dev_, niter * sizeof(double), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(h_beta.data(), d_beta_dev_, niter * sizeof(double), hipMemcpyDeviceToHost));
+    }
+
+    // Solve tridiagonal eigenvalue problem on CPU
     std::vector<double> h_D(niter), h_E(niter), h_Z(niter * niter);
     std::vector<double> h_work(std::max(1, 2*niter - 2));
     int lapack_info = 0;
@@ -662,7 +718,6 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     double energy = h_D[0];
 
     // Reconstruct ground state: |theta> = sum_i c[i] |v_i>
-    // Ritz coefficients are real (from dstev); convert to Scalar for gemv
     std::vector<Scalar> h_ritz_scalar(niter);
     for (int i = 0; i < niter; i++) {
         h_ritz_scalar[i] = Traits::make_scalar(h_Z[i]);
@@ -678,7 +733,6 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
         &zero_sc, d_theta, 1
     ));
 
-    // Normalize
     ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, &norm));
     inv_norm = 1.0 / norm;
     ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, &inv_norm, d_theta, 1));

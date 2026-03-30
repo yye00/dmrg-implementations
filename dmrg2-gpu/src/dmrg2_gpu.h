@@ -83,6 +83,19 @@ private:
     int theta_size_max_;
     int max_lanczos_iter_;
 
+    // Device scalars for sync-free Lanczos (device pointer mode)
+    Scalar* d_dot_result_;
+    RealType* d_nrm2_result_;
+    Scalar* d_neg_alpha_;
+    Scalar* d_neg_overlap_;
+    RealType* d_inv_nrm_;
+    RealType* d_alpha_dev_;
+    RealType* d_beta_dev_;
+    Scalar* d_neg_beta_scalars_;
+    Scalar* d_const_one_;
+    Scalar* d_const_zero_;
+    Scalar* d_const_neg_one_;
+
     // Batched GEMM pointer arrays (on device)
     Scalar** d_batch_A_;
     Scalar** d_batch_B_;
