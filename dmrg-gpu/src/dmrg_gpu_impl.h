@@ -315,39 +315,19 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
         &zero_val,
         U, cL * cR));
 
-    // Step 3: Batched GEMMs — contract R_env
-    //   result[s'] += sum_w U[w*d+s'] @ R[w], D batched calls of d each
-    {
-        int total = D * d;
-        Scalar* h_A3[256], *h_B3[256], *h_C3[256];
-        for (int wp = 0; wp < D; wp++) {
-            for (int sp = 0; sp < d; sp++) {
-                int idx = wp * d + sp;
-                h_A3[idx] = U + (size_t)idx * cL * cR;
-                h_B3[idx] = R_env + wp * cR;
-                h_C3[idx] = d_result + sp * cL;
-            }
-        }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A3, total * sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B3, total * sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C3, total * sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-            rocblas_operation_none, rocblas_operation_none,
-            cL, cR, cR, &one,
-            (const Scalar**)d_batch_A_, cL,
-            (const Scalar**)d_batch_B_, cR * D,
-            &zero_val,
-            d_batch_C_, cL * d, d));
-
-        for (int wp = 1; wp < D; wp++) {
-            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
+    for (int wp = 0; wp < D; wp++) {
+        Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
+        for (int sp = 0; sp < d; sp++) {
+            int ws_out = wp * d + sp;
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
                 rocblas_operation_none, rocblas_operation_none,
-                cL, cR, cR, &one,
-                (const Scalar* const*)(d_batch_A_ + wp * d), cL,
-                (const Scalar* const*)(d_batch_B_ + wp * d), cR * D,
+                cL, cR, cR,
                 &one,
-                d_batch_C_ + wp * d, cL * d, d));
+                U + ws_out * cL * cR, cL,
+                R_env + wp * cR, cR * D,
+                &beta,
+                d_result + sp * cL, cL * d));
         }
     }
 }

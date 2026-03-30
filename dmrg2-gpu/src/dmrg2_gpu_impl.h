@@ -421,42 +421,24 @@ void DMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in, S
         T2, cL * cR));
 
     // ---------------------------------------------------------------
-    // Step 3: Batched GEMMs — contract R_env
-    //   result[s1',s2'] += sum_n T2[n*dd+s1'*d+s2'] @ R[n]
-    //   D batched calls of d² GEMMs each (accumulate over n)
+    // Step 3: Loop of GEMMs — contract R_env
+    //   result[a', s1', s2', b'] = sum_{n} T2_col[a', b] * R[n][b, b']
+    //   Accumulate over n (beta=0 for n=0, beta=1 for n>0)
     // ---------------------------------------------------------------
-    {
-        int total = D * dd;
-        Scalar* h_A3[256], *h_B3[256], *h_C3[256];
-        for (int n = 0; n < D; n++) {
-            for (int b = 0; b < dd; b++) {
-                int idx = n * dd + b;
-                int s1p = b / d, s2p = b % d;
-                h_A3[idx] = T2 + (size_t)(n * dd + s1p * d + s2p) * cL * cR;
-                h_B3[idx] = R_env + n * cR;
-                h_C3[idx] = d_result + s1p * cL + s2p * cL * d;
+    for (int s1p = 0; s1p < d; s1p++) {
+        for (int s2p = 0; s2p < d; s2p++) {
+            for (int n = 0; n < D; n++) {
+                Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
+                int ws_out = n * dd + s1p * d + s2p;
+                ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                    rocblas_operation_none, rocblas_operation_none,
+                    cL, cR, cR,
+                    &one,
+                    T2 + ws_out * cL * cR, cL,
+                    R_env + n * cR, cR * D,
+                    &beta,
+                    d_result + s1p * cL + s2p * cL * d, cL * dd));
             }
-        }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A3, total * sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B3, total * sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C3, total * sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-            rocblas_operation_none, rocblas_operation_none,
-            cL, cR, cR, &one,
-            (const Scalar**)d_batch_A_, cL,
-            (const Scalar**)d_batch_B_, cR * D,
-            &zero_val,
-            d_batch_C_, cL * dd, dd));
-
-        for (int n = 1; n < D; n++) {
-            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-                rocblas_operation_none, rocblas_operation_none,
-                cL, cR, cR, &one,
-                (const Scalar* const*)(d_batch_A_ + n * dd), cL,
-                (const Scalar* const*)(d_batch_B_ + n * dd), cR * D,
-                &one,
-                d_batch_C_ + n * dd, cL * dd, dd));
         }
     }
 }
