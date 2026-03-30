@@ -40,6 +40,7 @@ public:
     void set_use_ns_split(bool use_ns) { use_ns_split_ = use_ns; }
     void set_use_davidson(bool use_dav) { use_davidson_ = use_dav; }
     void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
+    void set_quiet(bool) {}  // no-op
 
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }

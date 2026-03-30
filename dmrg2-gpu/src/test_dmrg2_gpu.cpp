@@ -190,15 +190,17 @@ void build_josephson_mpo(int L, int d, int D_mpo,
 // ============================================================================
 // Heisenberg test (real)
 // ============================================================================
-int test_heisenberg(int L, int chi_max, int n_sweeps) {
+int test_heisenberg(int L, int chi_max, int n_sweeps, bool quiet) {
     int d = 2;
     int D_mpo = 5;
 
-    printf("======================================\n");
-    printf("Two-Site Heisenberg DMRG-GPU Test (float64)\n");
-    printf("======================================\n");
-    printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
-    printf("======================================\n\n");
+    if (!quiet) {
+        printf("======================================\n");
+        printf("Two-Site Heisenberg DMRG-GPU Test (float64)\n");
+        printf("======================================\n");
+        printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
+        printf("======================================\n\n");
+    }
 
     std::map<int, double> exact_energies = {
         {4, -1.616025403784},
@@ -206,6 +208,7 @@ int test_heisenberg(int L, int chi_max, int n_sweeps) {
     };
 
     DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    dmrg.set_quiet(quiet);
     dmrg.initialize_mps_neel();
 
     std::vector<double*> h_mpo_tensors(L);
@@ -214,11 +217,10 @@ int test_heisenberg(int L, int chi_max, int n_sweeps) {
 
     double energy = dmrg.run(n_sweeps);
 
-    printf("\n--- RESULT ---\n");
-    printf("Final energy: %.12f\n", energy);
+    // Final energy already printed by run()
 
     int ret = 0;
-    if (exact_energies.count(L) > 0) {
+    if (!quiet && exact_energies.count(L) > 0) {
         double exact = exact_energies[L];
         double error = std::abs(energy - exact);
         printf("Exact energy: %.12f\n", exact);
@@ -235,18 +237,21 @@ int test_heisenberg(int L, int chi_max, int n_sweeps) {
 // TFIM test (real)
 // ============================================================================
 int test_tfim(int L, int chi_max, int n_sweeps,
-              double J, double h_field) {
+              double J, double h_field, bool quiet) {
     int d = 2;
     int D_mpo = 3;
 
-    printf("======================================\n");
-    printf("Two-Site TFIM DMRG-GPU Test (float64)\n");
-    printf("======================================\n");
-    printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
-    printf("  J=%.4f, h=%.4f\n", J, h_field);
-    printf("======================================\n\n");
+    if (!quiet) {
+        printf("======================================\n");
+        printf("Two-Site TFIM DMRG-GPU Test (float64)\n");
+        printf("======================================\n");
+        printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
+        printf("  J=%.4f, h=%.4f\n", J, h_field);
+        printf("======================================\n\n");
+    }
 
     DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 
     std::vector<double*> h_mpo_tensors(L);
@@ -255,9 +260,8 @@ int test_tfim(int L, int chi_max, int n_sweeps,
 
     double energy = dmrg.run(n_sweeps);
 
-    printf("\n--- RESULT ---\n");
-    printf("Final energy: %.12f\n", energy);
-    printf("Energy per site: %.12f\n", energy / L);
+    // Final energy already printed by run()
+    if (!quiet) printf("Energy per site: %.12f\n", energy / L);
 
     for (auto ptr : h_mpo_tensors) delete[] ptr;
     return 0;
@@ -267,17 +271,19 @@ int test_tfim(int L, int chi_max, int n_sweeps,
 // Josephson Junction test (complex128)
 // ============================================================================
 int test_josephson(int L, int chi_max, int n_sweeps,
-                   int n_max, double E_J, double E_C, double phi_ext) {
+                   int n_max, double E_J, double E_C, double phi_ext, bool quiet) {
     int d = 2 * n_max + 1;
     int D_mpo = 4;
 
-    printf("======================================\n");
-    printf("Two-Site Josephson DMRG-GPU Test (complex128)\n");
-    printf("======================================\n");
-    printf("  L=%d, d=%d (n_max=%d), chi_max=%d, D_mpo=%d, sweeps=%d\n",
-           L, d, n_max, chi_max, D_mpo, n_sweeps);
-    printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/%.1f\n", E_J, E_C, M_PI / phi_ext);
-    printf("======================================\n\n");
+    if (!quiet) {
+        printf("======================================\n");
+        printf("Two-Site Josephson DMRG-GPU Test (complex128)\n");
+        printf("======================================\n");
+        printf("  L=%d, d=%d (n_max=%d), chi_max=%d, D_mpo=%d, sweeps=%d\n",
+               L, d, n_max, chi_max, D_mpo, n_sweeps);
+        printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/%.1f\n", E_J, E_C, M_PI / phi_ext);
+        printf("======================================\n\n");
+    }
 
     std::map<int, double> exact_energies;
     if (n_max == 1 && std::abs(E_J - 1.0) < 1e-10 && std::abs(E_C - 0.5) < 1e-10
@@ -289,6 +295,7 @@ int test_josephson(int L, int chi_max, int n_sweeps,
     }
 
     DMRG2GPU<Complex> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 
     std::vector<Complex*> h_mpo_tensors(L);
@@ -297,11 +304,10 @@ int test_josephson(int L, int chi_max, int n_sweeps,
 
     double energy = dmrg.run(n_sweeps);
 
-    printf("\n--- RESULT ---\n");
-    printf("Final energy: %.12f\n", energy);
+    // Final energy already printed by run()
 
     int ret = 0;
-    if (exact_energies.count(L) > 0) {
+    if (!quiet && exact_energies.count(L) > 0) {
         double exact = exact_energies[L];
         double error = std::abs(energy - exact);
         printf("Exact energy: %.12f\n", exact);
@@ -323,6 +329,7 @@ int main(int argc, char** argv) {
     int n_sweeps = 30;
     bool run_josephson = false;
     bool run_tfim = false;
+    bool quiet = false;
     int n_max = 1;
     double E_J = 1.0, E_C = 0.5, phi_ext = M_PI / 4;
     double J_tfim = 1.0, h_field = 1.0;
@@ -333,6 +340,7 @@ int main(int argc, char** argv) {
         for (int i = 1; i < argc; i++) {
             if (std::string(argv[i]) == "--josephson") { run_josephson = true; continue; }
             if (std::string(argv[i]) == "--tfim") { run_tfim = true; continue; }
+            if (std::string(argv[i]) == "--quiet") { quiet = true; continue; }
             if (std::string(argv[i]) == "--hfield" && i+1 < argc) { h_field = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--nmax" && i+1 < argc) { n_max = std::atoi(argv[++i]); continue; }
             if (std::string(argv[i]) == "--ej" && i+1 < argc) { E_J = std::atof(argv[++i]); continue; }
@@ -348,11 +356,11 @@ int main(int argc, char** argv) {
 
     try {
         if (run_josephson) {
-            return test_josephson(L, chi_max, n_sweeps, n_max, E_J, E_C, phi_ext);
+            return test_josephson(L, chi_max, n_sweeps, n_max, E_J, E_C, phi_ext, quiet);
         } else if (run_tfim) {
-            return test_tfim(L, chi_max, n_sweeps, J_tfim, h_field);
+            return test_tfim(L, chi_max, n_sweeps, J_tfim, h_field, quiet);
         } else {
-            return test_heisenberg(L, chi_max, n_sweeps);
+            return test_heisenberg(L, chi_max, n_sweeps, quiet);
         }
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << std::endl;

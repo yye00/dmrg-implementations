@@ -38,6 +38,7 @@ public:
     void get_mps(std::vector<std::vector<Scalar>>& h_mps) const;
     void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
     void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
+    void set_quiet(bool) {}  // no-op
 
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }

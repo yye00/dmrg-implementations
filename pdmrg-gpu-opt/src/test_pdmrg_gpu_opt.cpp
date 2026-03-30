@@ -192,20 +192,22 @@ void build_josephson_mpo(int L, int d, int D_mpo,
 // ============================================================================
 int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
                     int n_local, int n_warmup, bool gpu_svd, bool ns_split,
-                    bool davidson, bool rsvd) {
+                    bool davidson, bool rsvd, bool quiet) {
     int d = 2;
     int D_mpo = 5;
 
-    printf("======================================\n");
-    printf("PDMRG-GPU-OPT Heisenberg Test (float64)\n");
-    printf("======================================\n");
-    printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d\n", L, d, chi_max, D_mpo);
-    printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
-           n_segments, n_outer, n_local, n_warmup);
-    printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
-    printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
-    printf("  Eigensolver: %s\n", davidson ? "Block-Davidson" : "Lanczos");
-    printf("======================================\n\n");
+    if (!quiet) {
+        printf("======================================\n");
+        printf("PDMRG-GPU-OPT Heisenberg Test (float64)\n");
+        printf("======================================\n");
+        printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d\n", L, d, chi_max, D_mpo);
+        printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
+               n_segments, n_outer, n_local, n_warmup);
+        printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
+        printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
+        printf("  Eigensolver: %s\n", davidson ? "Block-Davidson" : "Lanczos");
+        printf("======================================\n\n");
+    }
 
     std::map<int, double> exact_energies = {
         {4, -1.616025403784},
@@ -219,6 +221,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
     pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
     pdmrg.set_rsvd(rsvd);
+    pdmrg.set_quiet(quiet);
     pdmrg.initialize_mps_random();
 
     std::vector<double*> h_mpo_tensors(L);
@@ -227,11 +230,10 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
 
     double energy = pdmrg.run(n_outer, n_local, n_warmup);
 
-    printf("\n--- RESULT ---\n");
-    printf("Final energy: %.12f\n", energy);
+    // Final energy already printed by run()
 
     int ret = 0;
-    if (exact_energies.count(L) > 0) {
+    if (!quiet && exact_energies.count(L) > 0) {
         double exact = exact_energies[L];
         double error = std::abs(energy - exact);
         printf("Exact energy: %.12f\n", exact);
@@ -249,27 +251,30 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
 // ============================================================================
 int test_tfim(int L, int chi_max, int n_outer, int n_segments,
               int n_local, int n_warmup, bool gpu_svd, bool ns_split,
-              bool davidson, bool rsvd, double J, double h_field) {
+              bool davidson, bool rsvd, double J, double h_field, bool quiet) {
     int d = 2;
     int D_mpo = 3;
 
-    printf("======================================\n");
-    printf("PDMRG-GPU-OPT TFIM Test (float64)\n");
-    printf("======================================\n");
-    printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d\n", L, d, chi_max, D_mpo);
-    printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
-           n_segments, n_outer, n_local, n_warmup);
-    printf("  J=%.4f, h=%.4f\n", J, h_field);
-    printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
-    printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
-    printf("  Eigensolver: %s\n", davidson ? "Block-Davidson" : "Lanczos");
-    printf("======================================\n\n");
+    if (!quiet) {
+        printf("======================================\n");
+        printf("PDMRG-GPU-OPT TFIM Test (float64)\n");
+        printf("======================================\n");
+        printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d\n", L, d, chi_max, D_mpo);
+        printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
+               n_segments, n_outer, n_local, n_warmup);
+        printf("  J=%.4f, h=%.4f\n", J, h_field);
+        printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
+        printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
+        printf("  Eigensolver: %s\n", davidson ? "Block-Davidson" : "Lanczos");
+        printf("======================================\n\n");
+    }
 
     PDMRGGPUOpt<double> pdmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
     pdmrg.set_cpu_svd(!gpu_svd);
     pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
     pdmrg.set_rsvd(rsvd);
+    pdmrg.set_quiet(quiet);
     pdmrg.initialize_mps_random();
 
     std::vector<double*> h_mpo_tensors(L);
@@ -278,9 +283,8 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
 
     double energy = pdmrg.run(n_outer, n_local, n_warmup);
 
-    printf("\n--- RESULT ---\n");
-    printf("Final energy: %.12f\n", energy);
-    printf("Energy per site: %.12f\n", energy / L);
+    // Final energy already printed by run()
+    if (!quiet) printf("Energy per site: %.12f\n", energy / L);
 
     for (auto ptr : h_mpo_tensors) delete[] ptr;
     return 0;
@@ -291,22 +295,24 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
 // ============================================================================
 int test_josephson(int L, int chi_max, int n_outer, int n_segments,
                    int n_local, int n_warmup, bool gpu_svd, bool ns_split,
-                   bool davidson, bool rsvd, int n_max, double E_J, double E_C, double phi_ext) {
+                   bool davidson, bool rsvd, int n_max, double E_J, double E_C, double phi_ext, bool quiet) {
     int d = 2 * n_max + 1;
     int D_mpo = 4;
 
-    printf("======================================\n");
-    printf("PDMRG-GPU-OPT Josephson Test (complex128)\n");
-    printf("======================================\n");
-    printf("  L=%d, d=%d (n_max=%d), chi_max=%d, D_mpo=%d\n",
-           L, d, n_max, chi_max, D_mpo);
-    printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
-           n_segments, n_outer, n_local, n_warmup);
-    printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/%.1f\n", E_J, E_C, M_PI / phi_ext);
-    printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
-    printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
-    printf("  Eigensolver: %s\n", davidson ? "Block-Davidson" : "Lanczos");
-    printf("======================================\n\n");
+    if (!quiet) {
+        printf("======================================\n");
+        printf("PDMRG-GPU-OPT Josephson Test (complex128)\n");
+        printf("======================================\n");
+        printf("  L=%d, d=%d (n_max=%d), chi_max=%d, D_mpo=%d\n",
+               L, d, n_max, chi_max, D_mpo);
+        printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
+               n_segments, n_outer, n_local, n_warmup);
+        printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/%.1f\n", E_J, E_C, M_PI / phi_ext);
+        printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
+        printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
+        printf("  Eigensolver: %s\n", davidson ? "Block-Davidson" : "Lanczos");
+        printf("======================================\n\n");
+    }
 
     std::map<int, double> exact_energies;
     if (n_max == 1 && std::abs(E_J - 1.0) < 1e-10 && std::abs(E_C - 0.5) < 1e-10
@@ -322,6 +328,7 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
     pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
     pdmrg.set_rsvd(rsvd);
+    pdmrg.set_quiet(quiet);
     pdmrg.initialize_mps_random();
 
     std::vector<Complex*> h_mpo_tensors(L);
@@ -330,11 +337,10 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
 
     double energy = pdmrg.run(n_outer, n_local, n_warmup);
 
-    printf("\n--- RESULT ---\n");
-    printf("Final energy: %.12f\n", energy);
+    // Final energy already printed by run()
 
     int ret = 0;
-    if (exact_energies.count(L) > 0) {
+    if (!quiet && exact_energies.count(L) > 0) {
         double exact = exact_energies[L];
         double error = std::abs(energy - exact);
         printf("Exact energy: %.12f\n", exact);
@@ -361,6 +367,7 @@ int main(int argc, char** argv) {
     bool ns_split = true;  // default: use Newton-Schulz for bond split
     bool davidson = false;  // default: use Lanczos eigensolver
     bool rsvd = false;      // default: no randomized SVD
+    bool quiet = false;
     bool run_josephson = false;
     bool run_tfim = false;
     int n_max = 1;
@@ -376,6 +383,7 @@ int main(int argc, char** argv) {
             if (std::string(argv[i]) == "--svd-split") { ns_split = false; continue; }
             if (std::string(argv[i]) == "--rsvd") { rsvd = true; ns_split = false; continue; }
             if (std::string(argv[i]) == "--davidson") { davidson = true; continue; }
+            if (std::string(argv[i]) == "--quiet") { quiet = true; continue; }
             if (std::string(argv[i]) == "--josephson") { run_josephson = true; continue; }
             if (std::string(argv[i]) == "--tfim") { run_tfim = true; continue; }
             if (std::string(argv[i]) == "--hfield" && i+1 < argc) { h_field = std::atof(argv[++i]); continue; }
@@ -397,13 +405,13 @@ int main(int argc, char** argv) {
     try {
         if (run_josephson) {
             return test_josephson(L, chi_max, n_outer, n_segments, n_local, n_warmup,
-                                  gpu_svd, ns_split, davidson, rsvd, n_max, E_J, E_C, phi_ext);
+                                  gpu_svd, ns_split, davidson, rsvd, n_max, E_J, E_C, phi_ext, quiet);
         } else if (run_tfim) {
             return test_tfim(L, chi_max, n_outer, n_segments, n_local, n_warmup,
-                             gpu_svd, ns_split, davidson, rsvd, J_tfim, h_field);
+                             gpu_svd, ns_split, davidson, rsvd, J_tfim, h_field, quiet);
         } else {
             return test_heisenberg(L, chi_max, n_outer, n_segments, n_local, n_warmup,
-                                   gpu_svd, ns_split, davidson, rsvd);
+                                   gpu_svd, ns_split, davidson, rsvd, quiet);
         }
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << std::endl;

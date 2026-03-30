@@ -28,10 +28,6 @@
         } \
     } while(0)
 
-// Profiling counters (reset per sweep pair)
-static double prof_lanczos_ms = 0, prof_svd_ms = 0, prof_env_ms = 0;
-static int prof_lanczos_iters = 0, prof_site_count = 0;
-static int prof_heff_calls = 0;
 
 // ============================================================================
 // Constructor
@@ -643,8 +639,6 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     }
 
     int niter = iter;
-    prof_lanczos_iters += niter;
-    prof_heff_calls += niter;
 
     // Solve tridiagonal eigenvalue problem on CPU (always real)
     std::vector<double> h_D(niter), h_E(niter), h_Z(niter * niter);
@@ -815,19 +809,8 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
 template<typename Scalar>
 double DMRGGPU<Scalar>::optimize_site(int site, char direction) {
     form_theta(site, d_theta_);
-
-    HIP_CHECK(hipStreamSynchronize(stream_));
-    auto t0 = std::chrono::high_resolution_clock::now();
     double energy = lanczos_eigensolver(site, d_theta_);
-    HIP_CHECK(hipStreamSynchronize(stream_));
-    auto t1 = std::chrono::high_resolution_clock::now();
     svd_and_update_mps(site, d_theta_, direction);
-    HIP_CHECK(hipStreamSynchronize(stream_));
-    auto t2 = std::chrono::high_resolution_clock::now();
-
-    prof_lanczos_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
-    prof_svd_ms += std::chrono::duration<double, std::milli>(t2 - t1).count();
-    prof_site_count++;
     return energy;
 }
 
@@ -841,12 +824,7 @@ double DMRGGPU<Scalar>::sweep_left_to_right() {
 
     for (int site = 0; site < L_ - 1; site++) {
         energy = optimize_site(site, 'R');
-        HIP_CHECK(hipStreamSynchronize(stream_));
-        auto te0 = std::chrono::high_resolution_clock::now();
         update_left_env(site);
-        HIP_CHECK(hipStreamSynchronize(stream_));
-        auto te1 = std::chrono::high_resolution_clock::now();
-        prof_env_ms += std::chrono::duration<double, std::milli>(te1 - te0).count();
     }
     // Optimize last site without SVD
     {
@@ -867,12 +845,7 @@ double DMRGGPU<Scalar>::sweep_right_to_left() {
 
     for (int site = L_ - 1; site >= 1; site--) {
         energy = optimize_site(site, 'L');
-        HIP_CHECK(hipStreamSynchronize(stream_));
-        auto te0 = std::chrono::high_resolution_clock::now();
         update_right_env(site);
-        HIP_CHECK(hipStreamSynchronize(stream_));
-        auto te1 = std::chrono::high_resolution_clock::now();
-        prof_env_ms += std::chrono::duration<double, std::milli>(te1 - te0).count();
     }
     // Optimize first site without SVD
     {
@@ -893,57 +866,25 @@ double DMRGGPU<Scalar>::sweep_right_to_left() {
 
 template<typename Scalar>
 double DMRGGPU<Scalar>::run(int n_sweeps) {
-    const char* type_name = Traits::is_complex ? "complex128" : "float64";
-    printf("=== GPU-Native DMRG (rocBLAS GEMM, %s) ===\n", type_name);
-    printf("L = %d, d = %d, chi_max = %d, D_mpo = %d\n", L_, d_, chi_max_, D_mpo_);
-    printf("Running %d sweeps...\n\n", n_sweeps);
-
-    auto t_setup = std::chrono::high_resolution_clock::now();
-
-    printf("Building initial environments...\n");
     build_initial_environments();
-
-    auto t_envs = std::chrono::high_resolution_clock::now();
-    double env_time = std::chrono::duration<double>(t_envs - t_setup).count();
-    printf("  Environment build: %.3f s\n\n", env_time);
 
     // Timer starts AFTER env build — measures sweep-to-convergence only
     auto t_start = std::chrono::high_resolution_clock::now();
     double energy_prev = 0.0;
 
     for (int sweep = 0; sweep < n_sweeps; sweep++) {
-        prof_lanczos_ms = prof_svd_ms = prof_env_ms = 0;
-        prof_lanczos_iters = prof_site_count = prof_heff_calls = 0;
+        sweep_left_to_right();
+        energy_ = sweep_right_to_left();
 
-        auto t_sweep = std::chrono::high_resolution_clock::now();
-
-        double energy_LR = sweep_left_to_right();
-        double energy_RL = sweep_right_to_left();
-
-        auto t_sweep_end = std::chrono::high_resolution_clock::now();
-        double sweep_time = std::chrono::duration<double>(t_sweep_end - t_sweep).count();
-
-        energy_ = energy_RL;
         double dE = std::abs(energy_ - energy_prev);
-
-        double other_ms = sweep_time*1000.0 - prof_lanczos_ms - prof_svd_ms - prof_env_ms;
-        printf("Sweep %3d: E = %.12f, dE = %.2e, time = %.3f s\n",
-               sweep, energy_, dE, sweep_time);
-        printf("  Profile: lanczos=%.0fms (%d iters, %d heff) svd=%.0fms env=%.0fms other=%.0fms\n",
-               prof_lanczos_ms, prof_lanczos_iters, prof_heff_calls,
-               prof_svd_ms, prof_env_ms, other_ms);
-
-        if (dE < tol_ && sweep > 0) {
-            printf("Converged after %d sweeps!\n", sweep + 1);
-            break;
-        }
-
+        if (dE < tol_ && sweep > 0) break;
         energy_prev = energy_;
     }
 
     auto t_end = std::chrono::high_resolution_clock::now();
     double total_time = std::chrono::duration<double>(t_end - t_start).count();
-    printf("\nTotal wall time: %.3f s\n", total_time);
+    printf("Final energy: %.12f\n", energy_);
+    printf("Total wall time: %.3f s\n", total_time);
 
     return energy_;
 }
