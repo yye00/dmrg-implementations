@@ -453,10 +453,10 @@ void DMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in, S
             ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
                 rocblas_operation_none, rocblas_operation_none,
                 cL, cR, cR, &one,
-                (const Scalar**)(d_batch_A_ + n * dd), cL,
-                (const Scalar**)(d_batch_B_ + n * dd), cR * D,
+                (const Scalar* const*)(d_batch_A_ + n * dd), cL,
+                (const Scalar* const*)(d_batch_B_ + n * dd), cR * D,
                 &one,
-                (const Scalar**)(d_batch_C_ + n * dd), cL * dd, dd));
+                d_batch_C_ + n * dd, cL * dd, dd));
         }
     }
 }

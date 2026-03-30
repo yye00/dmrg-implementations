@@ -591,10 +591,10 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
             ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
                 rocblas_operation_none, rocblas_operation_none,
                 cL, cR, cR, &one,
-                (const Scalar**)(ws.d_batch_A + n * dd), cL,
-                (const Scalar**)(ws.d_batch_B + n * dd), cR * D,
+                (const Scalar* const*)(ws.d_batch_A + n * dd), cL,
+                (const Scalar* const*)(ws.d_batch_B + n * dd), cR * D,
                 &one,
-                (const Scalar**)(ws.d_batch_C + n * dd), cL * dd, dd));
+                ws.d_batch_C + n * dd, cL * dd, dd));
         }
     }
 }
@@ -1410,10 +1410,10 @@ void PDMRGGPU<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta_in
             ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
                 rocblas_operation_none, rocblas_operation_none,
                 cL, cR, cR, &one,
-                (const Scalar**)(ws.d_batch_A + wp * d), cL,
-                (const Scalar**)(ws.d_batch_B + wp * d), cR * D,
+                (const Scalar* const*)(ws.d_batch_A + wp * d), cL,
+                (const Scalar* const*)(ws.d_batch_B + wp * d), cR * D,
                 &one,
-                (const Scalar**)(ws.d_batch_C + wp * d), cL * d, d));
+                ws.d_batch_C + wp * d, cL * d, d));
         }
     }
 }

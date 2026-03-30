@@ -344,10 +344,10 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
             ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
                 rocblas_operation_none, rocblas_operation_none,
                 cL, cR, cR, &one,
-                (const Scalar**)(d_batch_A_ + wp * d), cL,
-                (const Scalar**)(d_batch_B_ + wp * d), cR * D,
+                (const Scalar* const*)(d_batch_A_ + wp * d), cL,
+                (const Scalar* const*)(d_batch_B_ + wp * d), cR * D,
                 &one,
-                (const Scalar**)(d_batch_C_ + wp * d), cL * d, d));
+                d_batch_C_ + wp * d, cL * d, d));
         }
     }
 }
