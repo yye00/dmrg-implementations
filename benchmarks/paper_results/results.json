@@ -4279,5 +4279,70 @@
     "success": true,
     "raw_output": "",
     "note": "timing-fix"
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 20,
+    "chi": 128,
+    "sweeps": 40,
+    "energy": -8.682473334399,
+    "solve_time": 1.39,
+    "wall_time": 1.39,
+    "success": true,
+    "raw_output": "",
+    "note": "timing-fix"
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 20,
+    "sweeps": 30,
+    "energy": -13.997308480726,
+    "solve_time": 4.24,
+    "wall_time": 4.24,
+    "success": true,
+    "raw_output": "",
+    "note": "timing-fix"
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 50,
+    "sweeps": 30,
+    "energy": -13.997315615485,
+    "solve_time": 6.26,
+    "wall_time": 6.26,
+    "success": true,
+    "raw_output": "",
+    "note": "timing-fix"
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 32,
+    "chi": 128,
+    "sweeps": 40,
+    "energy": -13.997315618224,
+    "solve_time": 4.314,
+    "wall_time": 4.314,
+    "success": true,
+    "raw_output": "",
+    "note": "timing-fix"
+  },
+  {
+    "impl": "dmrg-gpu",
+    "model": "heisenberg",
+    "L": 64,
+    "chi": 50,
+    "sweeps": 40,
+    "energy": -28.175424542905,
+    "solve_time": 22.595,
+    "wall_time": 22.595,
+    "success": true,
+    "raw_output": "",
+    "note": "timing-fix"
   }
 ]
