@@ -2691,7 +2691,7 @@ double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_wa
     }
     std::cout << std::endl;
 
-    auto t_start = std::chrono::high_resolution_clock::now();
+    auto t_setup = std::chrono::high_resolution_clock::now();
 
     // === Phase 0: Build environments ===
     std::cout << "Building initial environments..." << std::endl;
@@ -2699,7 +2699,10 @@ double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_wa
 
     auto t_envs = std::chrono::high_resolution_clock::now();
     std::cout << "  Environment build: " << std::fixed << std::setprecision(3)
-              << std::chrono::duration<double>(t_envs - t_start).count() << " s" << std::endl;
+              << std::chrono::duration<double>(t_envs - t_setup).count() << " s" << std::endl;
+
+    // Timer starts AFTER env build — measures sweep-to-convergence only
+    auto t_start = std::chrono::high_resolution_clock::now();
 
     // === Warmup: full-chain sweeps ===
     std::cout << "Running up to " << n_warmup << " warmup sweeps (full-chain dmrg1)..." << std::endl;

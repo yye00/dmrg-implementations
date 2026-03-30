@@ -774,6 +774,8 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
     # Initialize sweep direction based on rank (staggered pattern)
     direction = 'right' if rank % 2 == 0 else 'left'
 
+    t_sweep_start = time.time()  # sweep-to-convergence timer (excludes warmup/env build)
+
     for sweep in range(max_sweeps):
         t0 = time.time()
 
@@ -873,6 +875,10 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
             mps_assembled, mpo, bond_dim, tol / 100, verbose)
 
     E_global = comm.bcast(E_global, root=0)
+
+    t_sweep_end = time.time()
+    if rank == 0:
+        print(f"SWEEP_TIME={t_sweep_end - t_sweep_start:.3f}")
 
     if rank == 0 and verbose:
         print(f"Final energy: {E_global:.12f}")

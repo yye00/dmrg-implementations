@@ -360,6 +360,7 @@ if MPI.COMM_WORLD.Get_rank() == 0:
     out, wall, ok = run_python_script(script, env_extra=env, mpi_np=np_val)
     energy = extract(out, r'ENERGY=([-\d.eE+]+)')
     solve_time = extract(out, r'TIME=([\d.]+)')
+    sweep_time = extract(out, r'SWEEP_TIME=([\d.]+)')
 
     result = {
         'impl': impl,
@@ -368,7 +369,7 @@ if MPI.COMM_WORLD.Get_rank() == 0:
         'np': np_val,
         'threads': threads,
         'energy': float(energy) if energy else None,
-        'solve_time': float(solve_time) if solve_time else None,
+        'solve_time': float(sweep_time) if sweep_time else (float(solve_time) if solve_time else None),
         'wall_time': wall,
         'success': ok and energy is not None,
         'raw_output': out[:2000] if not ok else '',

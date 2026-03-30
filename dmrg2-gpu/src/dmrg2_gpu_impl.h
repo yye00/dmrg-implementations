@@ -959,15 +959,17 @@ double DMRG2GPU<Scalar>::run(int n_sweeps) {
     printf("L = %d, d = %d, chi_max = %d, D_mpo = %d\n", L_, d_, chi_max_, D_mpo_);
     printf("Running %d sweeps...\n\n", n_sweeps);
 
-    auto t_start = std::chrono::high_resolution_clock::now();
+    auto t_setup = std::chrono::high_resolution_clock::now();
 
     printf("Building initial environments...\n");
     build_initial_environments();
 
     auto t_envs = std::chrono::high_resolution_clock::now();
-    double env_time = std::chrono::duration<double>(t_envs - t_start).count();
+    double env_time = std::chrono::duration<double>(t_envs - t_setup).count();
     printf("  Environment build: %.3f s\n\n", env_time);
 
+    // Timer starts AFTER env build — measures sweep-to-convergence only
+    auto t_start = std::chrono::high_resolution_clock::now();
     double energy_prev = 0.0;
 
     for (int sweep = 0; sweep < n_sweeps; sweep++) {
