@@ -127,17 +127,8 @@ def save_results(results, filename='results.json'):
 
 
 def git_push_results():
-    try:
-        subprocess.run(
-            'cd {} && git add benchmarks/paper_results/ && '
-            'git diff --cached --quiet || '
-            'git commit -m "data: timing-fix benchmark results ({})" && '
-            'git push'.format(REPO, datetime.now().strftime('%Y-%m-%d %H:%M')),
-            shell=True, capture_output=True, timeout=60
-        )
-        log("  [git push: results saved to GitHub]")
-    except Exception as e:
-        log(f"  [git push failed: {e}]")
+    """No-op: push from local machine via scp sync instead."""
+    pass
 
 
 def max_segments_for_L(L):
