@@ -6966,5 +6966,20 @@
     "success": true,
     "raw_output": "",
     "note": "timing-fix"
+  },
+  {
+    "impl": "pdmrg-gpu-opt",
+    "model": "tfim",
+    "L": 32,
+    "chi": 20,
+    "sweeps": 30,
+    "segments": 8,
+    "energy": null,
+    "wall_time": 1800,
+    "outer_iters": null,
+    "polish_sweeps": null,
+    "success": false,
+    "raw_output": "TIMEOUT",
+    "note": "timing-fix"
   }
 ]
