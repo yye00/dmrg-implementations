@@ -741,6 +741,7 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
             print(f"  Rank {r}: sites {list(site_ranges[r])}")
 
     # Phase 2-4: Main loop
+    t_sweep_start = time.time()  # sweep-to-convergence timer (excludes warmup/env build)
     E_prev = 0.0
     E_global = 0.0
     converged_flag = False
@@ -870,6 +871,9 @@ def pdmrg_main(L, mpo, max_sweeps=20, bond_dim=100, bond_dim_warmup=50,
             mps_assembled, mpo, bond_dim, tol / 100, verbose)
 
     E_global = comm.bcast(E_global, root=0)
+    t_sweep_end = time.time()
+    if rank == 0:
+        print(f"SWEEP_TIME={t_sweep_end - t_sweep_start:.3f}")
 
     if rank == 0 and verbose:
         print(f"Final energy: {E_global:.12f}")
