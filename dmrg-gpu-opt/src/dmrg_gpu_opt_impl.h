@@ -408,9 +408,9 @@ void DMRGGPUOpt<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* 
         U, cL * cR));
 
     // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
-    // Use strided_batched GEMM for large matrices, individual for small
-    if (cL >= 16 && cR >= 16) {
-        // Batched over s' (d elements) per w' iteration
+    // Use strided_batched GEMM only when: large chi AND d<=2
+    // (d>=3 causes cache line contention from interleaved output layout)
+    if (cL >= 16 && cR >= 16 && d <= 2) {
         for (int wp = 0; wp < D; wp++) {
             Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
             ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
@@ -424,7 +424,6 @@ void DMRGGPUOpt<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* 
                 d));
         }
     } else {
-        // Individual GEMMs for small matrices (less overhead)
         for (int wp = 0; wp < D; wp++) {
             Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
             for (int sp = 0; sp < d; sp++) {
@@ -497,8 +496,8 @@ void DMRGGPUOpt<Scalar>::update_left_env(int site) {
         U, chi_in * chi_out));
 
     // Step 3: L_new_w'[b,b'] = sum_{a',s'} U[a',ws',b] * conj(A[a',s',b'])
-    if (chi_in >= 16 && chi_out >= 16) {
-        // Batched over w' (D elements) per s' iteration
+    // Batched over w' only when D<=2 and chi large (D>=3 causes cache contention)
+    if (chi_in >= 16 && chi_out >= 16 && D <= 2) {
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
             ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
@@ -590,8 +589,8 @@ void DMRGGPUOpt<Scalar>::update_right_env(int site) {
         U, chi_out * chi_in));
 
     // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
-    if (chi_in >= 16 && chi_out >= 16) {
-        // Batched over w (D elements) per s' iteration
+    // Batched over w only when D<=2 and chi large (D>=3 causes cache contention)
+    if (chi_in >= 16 && chi_out >= 16 && D <= 2) {
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
             ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
