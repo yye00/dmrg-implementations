@@ -52,7 +52,7 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     bond_dims_[L] = 1;
     for (int i = 1; i < L; i++) {
         double exact_dim = pow((double)d_, std::min(i, L - i));
-        bond_dims_[i] = (exact_dim > chi_max_) ? chi_max_ : (int)exact_dim;
+        bond_dims_[i] = (exact_dim > chi_max_user_) ? chi_max_user_ : (int)exact_dim;
     }
 
     // GPU handles
@@ -1012,7 +1012,7 @@ void DMRGGPUOpt<Scalar>::ns_svd_and_update_mps(int site, Scalar* d_theta, char d
 
     // Truncation: single-site doesn't change bond dims, but we still truncate near-zero
     int full_k = n_svd;
-    int max_k = std::min(full_k, chi_max_);
+    int max_k = std::min(full_k, chi_max_user_);
     int new_k = max_k;
     for (int i = 0; i < new_k; i++) {
         if (sing_vals[i] < 1e-14) { new_k = i; break; }
@@ -1153,7 +1153,7 @@ void DMRGGPUOpt<Scalar>::svd_fallback(int site, Scalar* d_theta, char direction)
     if (direction == 'R') { m = cL * d_; n_svd = cR; }
     else                  { m = cL;      n_svd = d_ * cR; }
     int full_k = std::min(m, n_svd);
-    int k = std::min(full_k, chi_max_);
+    int k = std::min(full_k, chi_max_user_);
 
     // CPU SVD path
     HIP_CHECK(hipMemcpy(h_svd_A_.data(), d_theta, m * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));

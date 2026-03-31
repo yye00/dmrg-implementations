@@ -2715,6 +2715,15 @@ double PDMRGGPUOpt<Scalar>::merge_and_optimize_boundaries(int parity) {
 
 template<typename Scalar>
 double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup) {
+    const char* type_name = Traits::is_complex ? "complex128" : "float64";
+    printf("=== PDMRG-GPU-OPT (NS + Davidson + MFMA-16 pad + batched, %s) ===\n", type_name);
+    if (chi_max_ != chi_max_user_)
+        printf("L = %d, d = %d, chi_max = %d (padded from %d), D_mpo = %d, segments = %d\n",
+               L_, d_, chi_max_, chi_max_user_, D_mpo_, n_segments_);
+    else
+        printf("L = %d, d = %d, chi_max = %d, D_mpo = %d, segments = %d\n",
+               L_, d_, chi_max_, D_mpo_, n_segments_);
+
     build_initial_environments();
 
     // Timer starts AFTER env build — measures sweep-to-convergence only
