@@ -138,6 +138,7 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
     use_rsvd_ = false;
     lanczos_use_1site_ = false;
     use_batched_sweep_ = false;  // cross-segment batching: slower for n_segments=2 due to BLAS-1 serialization
+    use_chebyshev_ = false;       // Chebyshev-filtered subspace iteration eigensolver
     rsvd_oversampling_ = 20;
 
     allocate_stream_workspaces();
@@ -2084,6 +2085,224 @@ double PDMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
 }
 
 // ============================================================================
+// Chebyshev-Filtered Subspace Iteration Eigensolver
+// For ground state: Chebyshev polynomial filter + Rayleigh quotient
+// No orthogonalization during filtering — just apply_heff + BLAS-1
+// ============================================================================
+
+template<typename Scalar>
+double PDMRGGPUOpt<Scalar>::chebyshev_eigensolver(int site, Scalar* d_theta, int theta_size, int si) {
+    int n = theta_size;
+    auto& ws = workspaces_[si];
+    double tol_eig = 1e-12;
+    int cheb_degree = 15;       // Chebyshev polynomial degree per outer iter
+    int max_outer = 20;         // max outer iterations
+    int bounds_lanczos = 10;    // Lanczos steps for spectral bounds
+
+    // === Step 1: Estimate spectral bounds via truncated Lanczos ===
+    // Run a few Lanczos steps to get rough [λ_min, λ_max]
+    Scalar* d_lanczos_v = ws.d_lanczos_v;
+    std::vector<double> h_alpha(bounds_lanczos);
+    std::vector<double> h_beta(bounds_lanczos);
+
+    // Normalize initial vector
+    double init_norm;
+    ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &init_norm));
+    if (init_norm < 1e-14) {
+        std::vector<Scalar> h_init(n);
+        srand(42 + site);
+        for (int i = 0; i < n; i++) h_init[i] = Traits::random_val();
+        HIP_CHECK(hipMemcpy(d_theta, h_init.data(), n * sizeof(Scalar), hipMemcpyHostToDevice));
+        ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &init_norm));
+    }
+    {
+        Scalar inv = Traits::make_scalar(1.0 / init_norm);
+        ROCBLAS_CHECK(Traits::scal(handles_[si], n, &inv, d_theta, 1));
+    }
+    HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta, n * sizeof(Scalar),
+                              hipMemcpyDeviceToDevice, streams_[si]));
+
+    // Short Lanczos for bounds estimation
+    for (int iter = 0; iter < bounds_lanczos; iter++) {
+        Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
+
+        if (lanczos_use_1site_)
+            apply_heff_single_site(site, d_vi, ws.d_heff_result, si);
+        else
+            apply_heff_two_site(site, d_vi, ws.d_heff_result, si);
+
+        // alpha = <v_i, H v_i>
+        Scalar h_dot;
+        ROCBLAS_CHECK(Traits::dot(handles_[si], n, d_vi, 1, ws.d_heff_result, 1, &h_dot));
+        h_alpha[iter] = Traits::real_part(h_dot);
+
+        // w -= alpha * v_i
+        Scalar neg_alpha = Traits::make_scalar(-h_alpha[iter]);
+        ROCBLAS_CHECK(Traits::axpy(handles_[si], n, &neg_alpha, d_vi, 1, ws.d_heff_result, 1));
+
+        if (iter > 0) {
+            Scalar neg_beta = Traits::make_scalar(-h_beta[iter - 1]);
+            ROCBLAS_CHECK(Traits::axpy(handles_[si], n, &neg_beta,
+                d_lanczos_v + (size_t)(iter - 1) * n, 1, ws.d_heff_result, 1));
+        }
+
+        // beta = ||w||
+        ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, ws.d_heff_result, 1, &h_beta[iter]));
+
+        if (iter + 1 < bounds_lanczos && h_beta[iter] > 1e-14) {
+            Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
+            HIP_CHECK(hipMemcpyAsync(d_vip1, ws.d_heff_result, n * sizeof(Scalar),
+                                      hipMemcpyDeviceToDevice, streams_[si]));
+            Scalar inv_beta = Traits::make_scalar(1.0 / h_beta[iter]);
+            ROCBLAS_CHECK(Traits::scal(handles_[si], n, &inv_beta, d_vip1, 1));
+        }
+    }
+
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
+
+    // Diagonalize tridiagonal matrix for spectral bounds
+    {
+        std::vector<double> D_chk(bounds_lanczos), E_chk(bounds_lanczos);
+        std::copy(h_alpha.begin(), h_alpha.end(), D_chk.begin());
+        for (int i = 0; i < bounds_lanczos - 1; i++) E_chk[i] = h_beta[i];
+        E_chk[bounds_lanczos - 1] = 0.0;
+        const char jobz = 'N';
+        const int n_chk = bounds_lanczos;
+        std::vector<double> work(1);
+        int info = 0;
+        dstev_(&jobz, &n_chk, D_chk.data(), E_chk.data(), nullptr, &n_chk, work.data(), &info);
+        if (info != 0) {
+            // Fallback to Lanczos if bounds estimation fails
+            return lanczos_eigensolver(site, d_theta, theta_size, si);
+        }
+        // D_chk is now sorted eigenvalues
+        double lambda_min = D_chk[0] - h_beta[bounds_lanczos - 1] - 0.1;  // conservative lower bound
+        double lambda_max = D_chk[bounds_lanczos - 1];
+
+        // === Step 2: Chebyshev-filtered iteration ===
+        // Unwanted spectrum: [a, b] where a is slightly above ground state, b = λ_max
+        // We use the 2nd eigenvalue estimate as 'a' (cutoff for unwanted)
+        double lambda_1_est = D_chk[0];  // ground state estimate
+        double gap_est = (bounds_lanczos > 1) ? (D_chk[1] - D_chk[0]) : 1.0;
+        double a_unwanted = lambda_1_est + gap_est * 0.5;  // midpoint of gap
+        double b_unwanted = lambda_max + 0.1;  // upper bound with margin
+
+        // Map [a_unwanted, b_unwanted] → [-1, 1]
+        double center = (b_unwanted + a_unwanted) / 2.0;
+        double half_width = (b_unwanted - a_unwanted) / 2.0;
+        if (half_width < 1e-10) half_width = 1.0;  // safety
+
+        // Use d_lanczos_v slots for Chebyshev recurrence (apply_heff clobbers T1/T2/heff_result)
+        // d_theta = current iterate, lanczos_v[0] = previous, lanczos_v[1] = next
+        Scalar* d_yk = d_theta;
+        Scalar* d_yk_prev = ws.d_lanczos_v;                     // slot 0
+        Scalar* d_yk_next = ws.d_lanczos_v + (size_t)n;         // slot 1
+
+        double energy = lambda_1_est;
+        double prev_energy = 1e30;
+        double scale = 2.0 / half_width;
+        double shift = -2.0 * center / half_width;
+
+        for (int outer = 0; outer < max_outer; outer++) {
+            // Initialize: y_{-1} = d_theta (already normalized from init or previous outer)
+            // Copy theta → d_yk_prev as T_0 = I (y_{-1})
+            HIP_CHECK(hipMemcpyAsync(d_yk_prev, d_yk, n * sizeof(Scalar),
+                                      hipMemcpyDeviceToDevice, streams_[si]));
+
+            // y_0 = scale * H*x + shift * x  (T_1(φ(H))x = φ(H)x)
+            if (lanczos_use_1site_)
+                apply_heff_single_site(site, d_yk, ws.d_heff_result, si);
+            else
+                apply_heff_two_site(site, d_yk, ws.d_heff_result, si);
+
+            // d_yk_next = scale * H*d_yk + shift * d_yk
+            HIP_CHECK(hipMemcpyAsync(d_yk_next, ws.d_heff_result, n * sizeof(Scalar),
+                                      hipMemcpyDeviceToDevice, streams_[si]));
+            {
+                Scalar s = Traits::make_scalar(scale);
+                ROCBLAS_CHECK(Traits::scal(handles_[si], n, &s, d_yk_next, 1));
+                Scalar sh = Traits::make_scalar(shift);
+                ROCBLAS_CHECK(Traits::axpy(handles_[si], n, &sh, d_yk, 1, d_yk_next, 1));
+            }
+
+            // Swap: prev=theta(T_0), current=yk_next(T_1)
+            // For the recurrence, we need: d_yk_prev = old d_yk, d_yk = d_yk_next
+            // d_yk_prev already has old d_yk from the copy above
+            // Now copy d_yk_next → d_yk
+            HIP_CHECK(hipMemcpyAsync(d_yk, d_yk_next, n * sizeof(Scalar),
+                                      hipMemcpyDeviceToDevice, streams_[si]));
+
+            // Three-term recurrence: T_{k+1}(φ) = 2φ T_k - T_{k-1}
+            for (int k = 1; k < cheb_degree; k++) {
+                // H * d_yk → ws.d_heff_result
+                if (lanczos_use_1site_)
+                    apply_heff_single_site(site, d_yk, ws.d_heff_result, si);
+                else
+                    apply_heff_two_site(site, d_yk, ws.d_heff_result, si);
+
+                // d_yk_next = 2*scale * H*d_yk + 2*shift * d_yk - d_yk_prev
+                HIP_CHECK(hipMemcpyAsync(d_yk_next, ws.d_heff_result, n * sizeof(Scalar),
+                                          hipMemcpyDeviceToDevice, streams_[si]));
+                {
+                    Scalar s2 = Traits::make_scalar(2.0 * scale);
+                    ROCBLAS_CHECK(Traits::scal(handles_[si], n, &s2, d_yk_next, 1));
+                    Scalar sh2 = Traits::make_scalar(2.0 * shift);
+                    ROCBLAS_CHECK(Traits::axpy(handles_[si], n, &sh2, d_yk, 1, d_yk_next, 1));
+                    Scalar neg_one = Traits::neg(Traits::one());
+                    ROCBLAS_CHECK(Traits::axpy(handles_[si], n, &neg_one, d_yk_prev, 1, d_yk_next, 1));
+                }
+
+                // Rotate: prev ← current, current ← next
+                // Use pointer swap (d_yk_prev = d_yk, d_yk = d_yk_next) via memcpy
+                HIP_CHECK(hipMemcpyAsync(d_yk_prev, d_yk, n * sizeof(Scalar),
+                                          hipMemcpyDeviceToDevice, streams_[si]));
+                HIP_CHECK(hipMemcpyAsync(d_yk, d_yk_next, n * sizeof(Scalar),
+                                          hipMemcpyDeviceToDevice, streams_[si]));
+            }
+
+            // Normalize filtered vector
+            double nrm;
+            ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_yk, 1, &nrm));
+            if (nrm > 1e-14) {
+                Scalar inv_nrm = Traits::make_scalar(1.0 / nrm);
+                ROCBLAS_CHECK(Traits::scal(handles_[si], n, &inv_nrm, d_yk, 1));
+            }
+
+            // Rayleigh quotient: E = <y|H|y>
+            if (lanczos_use_1site_)
+                apply_heff_single_site(site, d_yk, ws.d_heff_result, si);
+            else
+                apply_heff_two_site(site, d_yk, ws.d_heff_result, si);
+
+            Scalar h_rq;
+            ROCBLAS_CHECK(Traits::dot(handles_[si], n, d_yk, 1, ws.d_heff_result, 1, &h_rq));
+            energy = Traits::real_part(h_rq);
+
+            // Check convergence
+            if (std::abs(energy - prev_energy) < tol_eig && outer > 0) {
+                break;
+            }
+            prev_energy = energy;
+
+            // Update cutoff for next iteration (tighten around ground state)
+            if (outer == 0) {
+                a_unwanted = energy + gap_est * 0.3;
+                center = (b_unwanted + a_unwanted) / 2.0;
+                half_width = (b_unwanted - a_unwanted) / 2.0;
+                if (half_width < 1e-10) half_width = 1.0;
+                scale = 2.0 / half_width;
+                shift = -2.0 * center / half_width;
+            }
+        }
+
+        // Ensure d_theta has the final eigenvector (it's d_yk which IS d_theta)
+        // d_yk == d_theta by construction, so no copy needed
+
+        return energy;
+    }
+}
+
+// ============================================================================
 // Bond optimization
 // ============================================================================
 
@@ -2096,9 +2315,11 @@ double PDMRGGPUOpt<Scalar>::optimize_bond(int site, char direction, int si) {
 
     form_theta_two_site(site, si);
 
-    // Eigensolver: Lanczos (default, device-pointer-mode) or Block-Davidson
+    // Eigensolver: Chebyshev (BLAS-3 friendly), Davidson, or Lanczos (default)
     double energy;
-    if (use_davidson_) {
+    if (use_chebyshev_) {
+        energy = chebyshev_eigensolver(site, ws.d_theta, theta_size, si);
+    } else if (use_davidson_) {
         energy = block_davidson_eigensolver(site, ws.d_theta, theta_size, si);
     } else {
         energy = lanczos_eigensolver(site, ws.d_theta, theta_size, si);

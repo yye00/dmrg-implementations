@@ -47,6 +47,7 @@ public:
     void set_use_davidson(bool use_dav) { use_davidson_ = use_dav; }
     void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
     void set_use_batched_sweep(bool b) { use_batched_sweep_ = b; }
+    void set_use_chebyshev(bool b) { use_chebyshev_ = b; }
     void set_quiet(bool) {}  // no-op
 
     int chi_L(int site) const { return bond_dims_[site]; }
@@ -181,6 +182,7 @@ private:
     bool use_rsvd_;
     bool lanczos_use_1site_;  // when true, Lanczos calls apply_heff_single_site
     bool use_batched_sweep_;  // cross-segment batched GEMM in lock-step sweep
+    bool use_chebyshev_;      // Chebyshev-filtered subspace iteration eigensolver
     int rsvd_oversampling_;
     int theta_size_max_;
     int max_lanczos_iter_;
@@ -197,6 +199,7 @@ private:
     void apply_heff_two_site(int site, const Scalar* d_in, Scalar* d_out, int si);
     double block_davidson_eigensolver(int site, Scalar* d_theta, int theta_size, int si);
     double lanczos_eigensolver(int site, Scalar* d_theta, int theta_size, int si);
+    double chebyshev_eigensolver(int site, Scalar* d_theta, int theta_size, int si);
     void ns_split(int site, Scalar* d_theta, char direction, int si);
     void svd_split(int site, Scalar* d_theta, char direction, int si);
     void rsvd_split(int site, Scalar* d_theta, char direction, int si);
