@@ -91,17 +91,6 @@ private:
     Scalar* d_const_zero_;
     Scalar* d_const_neg_one_;
 
-    // GPU tridiagonal eigensolver workspace (rocsolver_dsteqr)
-    RealType* d_steqr_D_;       // diagonal (copy of alpha) for steqr
-    RealType* d_steqr_E_;       // off-diagonal (copy of beta) for steqr
-    RealType* d_steqr_C_;       // eigenvector matrix (niter x niter), real
-    int* d_steqr_info_;
-
-    // GPU-side convergence detection (zero-sync Lanczos)
-    int* d_converged_;          // 0/1 flag: eigenvalue converged
-    RealType* d_prev_energy_;   // previous eigenvalue for convergence comparison
-    int* d_effective_niter_;    // iteration count at convergence
-
     // Batched GEMM pointer arrays (on device)
     Scalar** d_batch_A_;
     Scalar** d_batch_B_;

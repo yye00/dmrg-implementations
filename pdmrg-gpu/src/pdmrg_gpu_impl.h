@@ -176,17 +176,6 @@ void PDMRGGPU<Scalar>::allocate_stream_workspaces() {
             HIP_CHECK(hipMemcpy(ws.d_const_neg_one, &h_neg_one, sizeof(Scalar), hipMemcpyHostToDevice));
         }
 
-        // GPU tridiagonal eigensolver workspace (rocsolver_dsteqr)
-        HIP_CHECK(hipMalloc(&ws.d_steqr_D, max_lanczos_iter_ * sizeof(RealType)));
-        HIP_CHECK(hipMalloc(&ws.d_steqr_E, max_lanczos_iter_ * sizeof(RealType)));
-        HIP_CHECK(hipMalloc(&ws.d_steqr_C, (size_t)max_lanczos_iter_ * max_lanczos_iter_ * sizeof(RealType)));
-        HIP_CHECK(hipMalloc(&ws.d_steqr_info, sizeof(int)));
-
-        // GPU-side convergence detection
-        HIP_CHECK(hipMalloc(&ws.d_converged, sizeof(int)));
-        HIP_CHECK(hipMalloc(&ws.d_prev_energy, sizeof(RealType)));
-        HIP_CHECK(hipMalloc(&ws.d_effective_niter, sizeof(int)));
-
         // GPU SVD workspace
         HIP_CHECK(hipMalloc(&ws.d_svd_A, theta_size_max_ * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_svd_U, (size_t)svd_max_m * svd_max_k * sizeof(Scalar)));
@@ -311,13 +300,6 @@ void PDMRGGPU<Scalar>::free_gpu_resources() {
         if (ws.d_const_one) hipFree(ws.d_const_one);
         if (ws.d_const_zero) hipFree(ws.d_const_zero);
         if (ws.d_const_neg_one) hipFree(ws.d_const_neg_one);
-        if (ws.d_steqr_D) hipFree(ws.d_steqr_D);
-        if (ws.d_steqr_E) hipFree(ws.d_steqr_E);
-        if (ws.d_steqr_C) hipFree(ws.d_steqr_C);
-        if (ws.d_steqr_info) hipFree(ws.d_steqr_info);
-        if (ws.d_converged) hipFree(ws.d_converged);
-        if (ws.d_prev_energy) hipFree(ws.d_prev_energy);
-        if (ws.d_effective_niter) hipFree(ws.d_effective_niter);
         if (ws.d_svd_A) hipFree(ws.d_svd_A);
         if (ws.d_svd_U) hipFree(ws.d_svd_U);
         if (ws.d_svd_S) hipFree(ws.d_svd_S);
@@ -799,64 +781,66 @@ template<typename Scalar>
 double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int theta_size, int si) {
     int n = theta_size;
     int max_iter = std::min(max_lanczos_iter_, n);
+    double tol_lanczos = 1e-12;
+    double tol_eig_conv = 1e-12;
     auto& ws = workspaces_[si];
 
     Scalar* d_lanczos_v = ws.d_lanczos_v;
 
-    // === Zero-sync Lanczos with GPU-side convergence detection ===
+    std::vector<double> h_alpha(max_iter);
+    std::vector<double> h_beta(max_iter);
 
-    HIP_CHECK(hipMemsetAsync(ws.d_converged, 0, sizeof(int), streams_[si]));
-    {
-        RealType big = RealType(1e30);
-        HIP_CHECK(hipMemcpyAsync(ws.d_prev_energy, &big, sizeof(RealType),
-                                 hipMemcpyHostToDevice, streams_[si]));
-    }
-
-    // v[0] = theta / ||theta|| (device pointer mode — no sync)
+    // v[0] = theta / ||theta|| — use device pointer mode to avoid implicit sync
+    double norm;
     ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
     ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
+
+    // Check norm on host (need the value for near-zero check)
+    HIP_CHECK(hipMemcpy(&norm, ws.d_nrm2_result, sizeof(double), hipMemcpyDeviceToHost));
+    if (norm < 1e-14) {
+        std::vector<Scalar> h_init(n);
+        srand(42 + site);
+        for (int i = 0; i < n; i++) h_init[i] = Traits::random_val();
+        HIP_CHECK(hipMemcpy(d_theta, h_init.data(), n * sizeof(Scalar), hipMemcpyHostToDevice));
+        ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &norm));
+    }
+
+    // Normalize using device pointer mode
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
     hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
                        ws.d_nrm2_result, ws.d_inv_nrm);
     ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
     ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
-    HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta, n * sizeof(Scalar),
-                             hipMemcpyDeviceToDevice, streams_[si]));
+    HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta, n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
 
-    hipEvent_t conv_event;
-    HIP_CHECK(hipEventCreateWithFlags(&conv_event, hipEventDisableTiming));
-    int conv_check_pending = 0;
-    int niter = std::min(30, max_iter);
-    RealType tol_conv = RealType(1e-12);
+    double prev_energy = 1e30;
+    int iter;
+    int last_synced_iter = -1;
 
-    for (int iter = 0; iter < niter; iter++) {
-        if (conv_check_pending && hipEventQuery(conv_event) == hipSuccess) {
-            int converged;
-            HIP_CHECK(hipMemcpy(&converged, ws.d_converged, sizeof(int), hipMemcpyDeviceToHost));
-            if (converged) {
-                int eff_niter;
-                HIP_CHECK(hipMemcpy(&eff_niter, ws.d_effective_niter, sizeof(int), hipMemcpyDeviceToHost));
-                niter = eff_niter;
-                break;
-            }
-            conv_check_pending = 0;
-        }
-
+    for (iter = 0; iter < max_iter; iter++) {
         Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
 
+        // w = H|v_i> (apply_heff uses host pointer mode internally)
         if (lanczos_use_1site_)
             apply_heff_single_site(site, d_vi, ws.d_heff_result, si);
         else
             apply_heff_two_site(site, d_vi, ws.d_heff_result, si);
 
+        // Switch to device pointer mode for scalar operations
         ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
 
+        // alpha_i = <v_i|w> → device
         ROCBLAS_CHECK(Traits::dot(handles_[si], n, d_vi, 1, ws.d_heff_result, 1, ws.d_dot_result));
 
+        // Process alpha: store to d_alpha_dev[iter], compute d_neg_alpha
         hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
                            ws.d_dot_result, ws.d_neg_alpha, ws.d_alpha_dev, iter);
 
+        // w -= alpha_i * v_i (device pointer)
         ROCBLAS_CHECK(Traits::axpy(handles_[si], n, ws.d_neg_alpha, d_vi, 1, ws.d_heff_result, 1));
 
+        // w -= beta_{i-1} * v_{i-1} (device pointer: pre-stored by previous iter)
         if (iter > 0) {
             ROCBLAS_CHECK(Traits::axpy(handles_[si], n,
                 ws.d_neg_beta_scalars + (iter - 1),
@@ -864,6 +848,7 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
                 ws.d_heff_result, 1));
         }
 
+        // Full reorthogonalization (device pointer mode for gemv constants)
         if (iter > 0) {
             ROCBLAS_CHECK(Traits::gemv(handles_[si], Traits::op_h,
                 n, iter + 1, ws.d_const_one,
@@ -882,73 +867,106 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
             ROCBLAS_CHECK(Traits::axpy(handles_[si], n, ws.d_neg_overlap, d_lanczos_v, 1, ws.d_heff_result, 1));
         }
 
+        // beta_i = ||w|| → device
         ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, ws.d_heff_result, 1, ws.d_nrm2_result));
 
+        // Process beta: store, compute 1/beta, store -beta as Scalar
         hipLaunchKernelGGL(lanczos_process_beta_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
                            ws.d_nrm2_result, ws.d_inv_nrm, ws.d_beta_dev, ws.d_neg_beta_scalars, iter);
 
-        if (iter + 1 < niter) {
+        // v_{i+1} = w / beta_i (device pointer for scal)
+        if (iter + 1 < max_iter) {
             Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
-            HIP_CHECK(hipMemcpyAsync(d_vip1, ws.d_heff_result, n * sizeof(Scalar),
-                                     hipMemcpyDeviceToDevice, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(d_vip1, ws.d_heff_result, n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
             ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_vip1, 1));
         }
 
+        // Switch back to host pointer mode (needed by apply_heff next iteration)
         ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
 
-        if (iter >= 4 && iter % 3 == 0 && !conv_check_pending) {
+        // Convergence check every 3 iterations after iter >= 4
+        // This is the ONLY sync point in the inner loop
+        if (iter >= 4 && iter % 3 == 0) {
+            HIP_CHECK(hipStreamSynchronize(streams_[si]));
+
+            // Bulk copy alpha and beta from device to host
+            int n_copy = iter + 1;
+            HIP_CHECK(hipMemcpy(h_alpha.data(), ws.d_alpha_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpy(h_beta.data(), ws.d_beta_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost));
+            last_synced_iter = iter;
+
+            // Check if any beta was near zero (invariant subspace found)
+            bool early_break = false;
+            for (int j = 0; j <= iter; j++) {
+                if (h_beta[j] < tol_lanczos) {
+                    iter = j + 1;
+                    early_break = true;
+                    break;
+                }
+            }
+            if (early_break) break;
+
+            // Eigenvalue convergence check
             int ncheck = iter + 1;
-            HIP_CHECK(hipMemcpyAsync(ws.d_steqr_D, ws.d_alpha_dev, ncheck * sizeof(RealType),
-                                     hipMemcpyDeviceToDevice, streams_[si]));
-            if (ncheck > 1) {
-                HIP_CHECK(hipMemcpyAsync(ws.d_steqr_E, ws.d_beta_dev, (ncheck - 1) * sizeof(RealType),
-                                         hipMemcpyDeviceToDevice, streams_[si]));
+            std::vector<double> h_D_chk(ncheck), h_E_chk(ncheck);
+            std::copy(h_alpha.begin(), h_alpha.begin() + ncheck, h_D_chk.begin());
+            for (int i = 0; i < ncheck - 1; i++) h_E_chk[i] = h_beta[i];
+            h_E_chk[ncheck - 1] = 0.0;
+            const char jobz_n = 'N';
+            const int n_chk = ncheck;
+            std::vector<double> h_work_chk(1);
+            int info_chk = 0;
+            dstev_(&jobz_n, &n_chk, h_D_chk.data(), h_E_chk.data(), nullptr, &n_chk, h_work_chk.data(), &info_chk);
+            if (info_chk == 0) {
+                double cur_energy = h_D_chk[0];
+                if (std::abs(cur_energy - prev_energy) < tol_eig_conv) {
+                    iter++;
+                    break;
+                }
+                prev_energy = cur_energy;
             }
-            {
-                int total = ncheck * ncheck;
-                int threads = 256;
-                int blocks = (total + threads - 1) / threads;
-                hipLaunchKernelGGL(set_identity_kernel<RealType>, dim3(blocks), dim3(threads), 0, streams_[si],
-                                   ws.d_steqr_C, ncheck);
-            }
-            ROCBLAS_CHECK((rocblas_status)rocsolver_dsteqr(handles_[si],
-                rocblas_evect_tridiagonal, ncheck,
-                ws.d_steqr_D, ws.d_steqr_E, ws.d_steqr_C, ncheck, ws.d_steqr_info));
-            hipLaunchKernelGGL(lanczos_convergence_kernel<RealType>, dim3(1), dim3(1), 0, streams_[si],
-                               ws.d_steqr_D, ws.d_prev_energy, ws.d_converged, ws.d_effective_niter,
-                               iter, tol_conv);
-            HIP_CHECK(hipEventRecord(conv_event, streams_[si]));
-            conv_check_pending = 1;
         }
     }
 
-    HIP_CHECK(hipEventDestroy(conv_event));
+    int niter = iter;
 
-    // Final tridiagonal solve + reconstruction on GPU
-    HIP_CHECK(hipMemcpyAsync(ws.d_steqr_D, ws.d_alpha_dev, niter * sizeof(RealType),
-                             hipMemcpyDeviceToDevice, streams_[si]));
-    if (niter > 1) {
-        HIP_CHECK(hipMemcpyAsync(ws.d_steqr_E, ws.d_beta_dev, (niter - 1) * sizeof(RealType),
-                                 hipMemcpyDeviceToDevice, streams_[si]));
-    }
-    {
-        int total = niter * niter;
-        int threads = 256;
-        int blocks = (total + threads - 1) / threads;
-        hipLaunchKernelGGL(set_identity_kernel<RealType>, dim3(blocks), dim3(threads), 0, streams_[si],
-                           ws.d_steqr_C, niter);
-    }
-    ROCBLAS_CHECK((rocblas_status)rocsolver_dsteqr(handles_[si],
-        rocblas_evect_tridiagonal, niter,
-        ws.d_steqr_D, ws.d_steqr_E, ws.d_steqr_C, niter, ws.d_steqr_info));
+    // Ensure stream is synchronized before reading results
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
-    {
-        int threads = 256;
-        int blocks = (niter + threads - 1) / threads;
-        hipLaunchKernelGGL((real_eigvec_to_scalar_kernel<Scalar, RealType>),
-                           dim3(blocks), dim3(threads), 0, streams_[si],
-                           ws.d_steqr_C, niter, ws.d_ritz_coeffs, niter);
+    // Copy any remaining alpha/beta values we haven't synced yet
+    if (last_synced_iter < niter - 1) {
+        HIP_CHECK(hipMemcpy(h_alpha.data(), ws.d_alpha_dev, niter * sizeof(double), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpy(h_beta.data(), ws.d_beta_dev, niter * sizeof(double), hipMemcpyDeviceToHost));
     }
+
+    // Solve tridiagonal eigenvalue problem on CPU
+    std::vector<double> h_D(niter), h_E(niter), h_Z(niter * niter);
+    std::vector<double> h_work(std::max(1, 2*niter - 2));
+    int lapack_info = 0;
+
+    std::copy(h_alpha.begin(), h_alpha.begin() + niter, h_D.begin());
+    for (int i = 0; i < niter - 1; i++) h_E[i] = h_beta[i];
+    if (niter > 0) h_E[niter - 1] = 0.0;
+
+    const char jobz = 'V';
+    const int n_lapack = niter;
+    const int ldz = niter;
+
+    dstev_(&jobz, &n_lapack, h_D.data(), h_E.data(), h_Z.data(), &ldz, h_work.data(), &lapack_info);
+
+    if (lapack_info != 0) {
+        throw std::runtime_error("LAPACK dstev failed with info = " + std::to_string(lapack_info));
+    }
+
+    double energy = h_D[0];
+
+    // Reconstruct ground state: |theta> = sum_i c[i] |v_i> (device pointer mode)
+    std::vector<Scalar> h_ritz_scalar(niter);
+    for (int i = 0; i < niter; i++) {
+        h_ritz_scalar[i] = Traits::make_scalar(h_Z[i]);
+    }
+    HIP_CHECK(hipMemcpyAsync(ws.d_ritz_coeffs, h_ritz_scalar.data(),
+              niter * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
 
     ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
     ROCBLAS_CHECK(Traits::gemv(
@@ -959,14 +977,12 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         ws.d_const_zero, d_theta, 1
     ));
 
+    // Normalize on device
     ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
     hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
                        ws.d_nrm2_result, ws.d_inv_nrm);
     ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
     ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
-
-    double energy;
-    HIP_CHECK(hipMemcpy(&energy, ws.d_steqr_D, sizeof(double), hipMemcpyDeviceToHost));
 
     return energy;
 }

@@ -96,17 +96,6 @@ private:
     Scalar* d_const_zero_;
     Scalar* d_const_neg_one_;
 
-    // GPU tridiagonal eigensolver workspace (rocsolver_dsteqr)
-    RealType* d_steqr_D_;
-    RealType* d_steqr_E_;
-    RealType* d_steqr_C_;
-    int* d_steqr_info_;
-
-    // GPU-side convergence detection (zero-sync Lanczos)
-    int* d_converged_;
-    RealType* d_prev_energy_;
-    int* d_effective_niter_;
-
     // Batched GEMM pointer arrays (on device)
     Scalar** d_batch_A_;
     Scalar** d_batch_B_;

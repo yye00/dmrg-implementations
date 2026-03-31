@@ -290,15 +290,9 @@ template<typename Scalar>
 __global__ void lanczos_process_beta_kernel(const double* nrm2_result, double* inv_nrm_out,
                                              double* beta_arr, Scalar* neg_beta_scalars, int iter) {
     double beta = nrm2_result[0];
-    if (beta < 1e-14) {
-        beta_arr[iter] = 0.0;
-        inv_nrm_out[0] = 0.0;
-        neg_beta_scalars[iter] = dev_make_neg_real_scalar(Scalar{}, 0.0);
-    } else {
-        beta_arr[iter] = beta;
-        inv_nrm_out[0] = 1.0 / beta;
-        neg_beta_scalars[iter] = dev_make_neg_real_scalar(Scalar{}, -beta);
-    }
+    beta_arr[iter] = beta;
+    inv_nrm_out[0] = 1.0 / beta;
+    neg_beta_scalars[iter] = dev_make_neg_real_scalar(Scalar{}, -beta);
 }
 
 __device__ inline double dev_negate(double x) { return -x; }
@@ -314,52 +308,6 @@ __global__ void negate_scalar_kernel(const Scalar* in, Scalar* out) {
 template<typename RealType>
 __global__ void invert_nrm_kernel(const RealType* nrm, RealType* inv_nrm) {
     inv_nrm[0] = RealType(1.0) / nrm[0];
-}
-
-// ============================================================================
-// Zero-sync Lanczos kernels
-// ============================================================================
-
-template<typename RealType>
-__global__ void set_identity_kernel(RealType* C, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n * n) {
-        int row = idx % n;
-        int col = idx / n;
-        C[idx] = (row == col) ? RealType(1.0) : RealType(0.0);
-    }
-}
-
-__device__ inline double real_to_scalar(double, double val) { return val; }
-__device__ inline hipDoubleComplex real_to_scalar(hipDoubleComplex, double val) {
-    return make_hipDoubleComplex(val, 0.0);
-}
-
-template<typename Scalar, typename RealType>
-__global__ void real_eigvec_to_scalar_kernel(const RealType* C, int ldc, Scalar* out, int n) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx < n) {
-        out[idx] = real_to_scalar(Scalar{}, (double)C[idx]);
-    }
-}
-
-template<typename RealType>
-__global__ void lanczos_convergence_kernel(const RealType* eigenvalues,
-                                            RealType* prev_energy,
-                                            int* converged,
-                                            int* effective_niter,
-                                            int current_iter,
-                                            RealType tol) {
-    if (converged[0]) return;
-    RealType cur = eigenvalues[0];
-    RealType prev = prev_energy[0];
-    RealType diff = cur - prev;
-    if (diff < 0) diff = -diff;
-    if (current_iter >= 4 && diff < tol) {
-        converged[0] = 1;
-        effective_niter[0] = current_iter + 1;
-    }
-    prev_energy[0] = cur;
 }
 
 // ============================================================================
