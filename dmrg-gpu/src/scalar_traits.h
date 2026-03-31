@@ -312,6 +312,36 @@ __global__ void invert_nrm_kernel(const RealType* nrm, RealType* inv_nrm) {
 }
 
 // ============================================================================
+// Zero-sync Lanczos kernels
+// ============================================================================
+
+// Set C = identity matrix (n x n) for rocsolver_dsteqr
+template<typename RealType>
+__global__ void set_identity_kernel(RealType* C, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n * n) {
+        int row = idx % n;
+        int col = idx / n;
+        C[idx] = (row == col) ? RealType(1.0) : RealType(0.0);
+    }
+}
+
+// Convert real eigenvector (first column of C) to Scalar type for gemv
+// For double→double: trivial copy. For double→hipDoubleComplex: set imag=0.
+__device__ inline double real_to_scalar(double, double val) { return val; }
+__device__ inline hipDoubleComplex real_to_scalar(hipDoubleComplex, double val) {
+    return make_hipDoubleComplex(val, 0.0);
+}
+
+template<typename Scalar, typename RealType>
+__global__ void real_eigvec_to_scalar_kernel(const RealType* C, int ldc, Scalar* out, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < n) {
+        out[idx] = real_to_scalar(Scalar{}, (double)C[idx]);  // first column: C[idx + 0*ldc]
+    }
+}
+
+// ============================================================================
 // SVD post-processing kernels: keep U/S/Vh on GPU, avoid D2H→CPU→H2D roundtrip
 // ============================================================================
 

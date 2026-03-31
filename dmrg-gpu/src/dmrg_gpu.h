@@ -91,6 +91,12 @@ private:
     Scalar* d_const_zero_;
     Scalar* d_const_neg_one_;
 
+    // GPU tridiagonal eigensolver workspace (rocsolver_dsteqr)
+    RealType* d_steqr_D_;       // diagonal (copy of alpha) for steqr
+    RealType* d_steqr_E_;       // off-diagonal (copy of beta) for steqr
+    RealType* d_steqr_C_;       // eigenvector matrix (niter x niter), real
+    int* d_steqr_info_;
+
     // Batched GEMM pointer arrays (on device)
     Scalar** d_batch_A_;
     Scalar** d_batch_B_;

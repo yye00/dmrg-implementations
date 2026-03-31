@@ -113,6 +113,12 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
         HIP_CHECK(hipMemcpy(d_const_neg_one_, &neg_one, sizeof(Scalar), hipMemcpyHostToDevice));
     }
 
+    // GPU tridiagonal eigensolver workspace (rocsolver_dsteqr)
+    HIP_CHECK(hipMalloc(&d_steqr_D_, max_lanczos_iter_ * sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_steqr_E_, max_lanczos_iter_ * sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_steqr_C_, (size_t)max_lanczos_iter_ * max_lanczos_iter_ * sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_steqr_info_, sizeof(int)));
+
     // Batched GEMM pointer arrays
     int batch_max = D_mpo_ * d_;
     HIP_CHECK(hipMalloc(&d_batch_A_, batch_max * sizeof(Scalar*)));
@@ -174,6 +180,10 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
     if (d_batch_A_) hipFree(d_batch_A_);
     if (d_batch_B_) hipFree(d_batch_B_);
     if (d_batch_C_) hipFree(d_batch_C_);
+    if (d_steqr_D_) hipFree(d_steqr_D_);
+    if (d_steqr_E_) hipFree(d_steqr_E_);
+    if (d_steqr_C_) hipFree(d_steqr_C_);
+    if (d_steqr_info_) hipFree(d_steqr_info_);
     if (d_svd_A_) hipFree(d_svd_A_);
     if (d_svd_U_) hipFree(d_svd_U_);
     if (d_svd_S_) hipFree(d_svd_S_);
@@ -593,34 +603,25 @@ template<typename Scalar>
 double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     int n = chi_L(site) * d_ * chi_R(site);
     int max_iter = std::min(max_lanczos_iter_, n);
-    double tol_lanczos = 1e-12;
-    double tol_eig_conv = 1e-12;
 
     Scalar* d_lanczos_v = d_lanczos_v_;
-    std::vector<double> h_alpha(max_iter);
-    std::vector<double> h_beta(max_iter);
 
-    // v[0] = theta / ||theta|| (host pointer mode for initial setup)
-    double norm;
-    ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, &norm));
+    // === Zero-sync Lanczos: no CPU sync until final energy readback ===
 
-    if (norm < 1e-14) {
-        std::vector<Scalar> h_init(n);
-        srand(42 + site);
-        for (int i = 0; i < n; i++) h_init[i] = Traits::random_val();
-        HIP_CHECK(hipMemcpy(d_theta, h_init.data(), n * sizeof(Scalar), hipMemcpyHostToDevice));
-        ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, &norm));
-    }
+    // v[0] = theta / ||theta|| (device pointer mode — no sync)
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_device));
+    ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
+    hipLaunchKernelGGL(invert_nrm_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
+                       d_nrm2_result_, d_inv_nrm_);
+    ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
 
-    double inv_norm = 1.0 / norm;
-    ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, &inv_norm, d_theta, 1));
-    HIP_CHECK(hipMemcpy(d_lanczos_v, d_theta, n * sizeof(Scalar), hipMemcpyDeviceToDevice));
+    HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta, n * sizeof(Scalar),
+                             hipMemcpyDeviceToDevice, stream_));
 
-    double prev_energy = 1e30;
-    int iter;
-    int last_synced_iter = -1;
-
-    for (iter = 0; iter < max_iter; iter++) {
+    // Run all iterations — no convergence check, no sync
+    int niter = max_iter;
+    for (int iter = 0; iter < niter; iter++) {
         Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
 
         // w = H|v_i> (apply_heff uses host pointer mode internally)
@@ -674,93 +675,56 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
                            d_nrm2_result_, d_inv_nrm_, d_beta_dev_, d_neg_beta_scalars_, iter);
 
         // v_{i+1} = w / beta_i (device pointer for scal)
-        if (iter + 1 < max_iter) {
+        if (iter + 1 < niter) {
             Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
-            HIP_CHECK(hipMemcpy(d_vip1, d_heff_result_, n * sizeof(Scalar), hipMemcpyDeviceToDevice));
+            HIP_CHECK(hipMemcpyAsync(d_vip1, d_heff_result_, n * sizeof(Scalar),
+                                     hipMemcpyDeviceToDevice, stream_));
             ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_vip1, 1));
         }
 
-        // Switch back to host pointer mode
+        // Switch back to host pointer mode for next apply_heff
         ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
-
-        // Convergence check every 3 iterations after iter >= 4
-        if (iter >= 4 && iter % 3 == 0) {
-            HIP_CHECK(hipStreamSynchronize(stream_));
-
-            int n_copy = iter + 1;
-            HIP_CHECK(hipMemcpy(h_alpha.data(), d_alpha_dev_, n_copy * sizeof(double), hipMemcpyDeviceToHost));
-            HIP_CHECK(hipMemcpy(h_beta.data(), d_beta_dev_, n_copy * sizeof(double), hipMemcpyDeviceToHost));
-            last_synced_iter = iter;
-
-            bool early_break = false;
-            for (int j = 0; j <= iter; j++) {
-                if (h_beta[j] < tol_lanczos) {
-                    iter = j + 1;
-                    early_break = true;
-                    break;
-                }
-            }
-            if (early_break) break;
-
-            int ncheck = iter + 1;
-            std::vector<double> h_D_chk(ncheck), h_E_chk(ncheck);
-            std::copy(h_alpha.begin(), h_alpha.begin() + ncheck, h_D_chk.begin());
-            for (int i = 0; i < ncheck - 1; i++) h_E_chk[i] = h_beta[i];
-            h_E_chk[ncheck - 1] = 0.0;
-            const char jobz_n = 'N';
-            const int n_chk = ncheck;
-            std::vector<double> h_work_chk(1);
-            int info_chk = 0;
-            dstev_(&jobz_n, &n_chk, h_D_chk.data(), h_E_chk.data(), nullptr, &n_chk, h_work_chk.data(), &info_chk);
-            if (info_chk == 0) {
-                double cur_energy = h_D_chk[0];
-                if (std::abs(cur_energy - prev_energy) < tol_eig_conv) {
-                    iter++;
-                    break;
-                }
-                prev_energy = cur_energy;
-            }
-        }
     }
 
-    int niter = iter;
+    // === GPU tridiagonal eigensolver (rocsolver_dsteqr) — no CPU sync ===
 
-    HIP_CHECK(hipStreamSynchronize(stream_));
-
-    if (last_synced_iter < niter - 1) {
-        HIP_CHECK(hipMemcpy(h_alpha.data(), d_alpha_dev_, niter * sizeof(double), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(h_beta.data(), d_beta_dev_, niter * sizeof(double), hipMemcpyDeviceToHost));
+    // Copy alpha → D, beta → E (device-to-device, async)
+    HIP_CHECK(hipMemcpyAsync(d_steqr_D_, d_alpha_dev_, niter * sizeof(RealType),
+                             hipMemcpyDeviceToDevice, stream_));
+    if (niter > 1) {
+        HIP_CHECK(hipMemcpyAsync(d_steqr_E_, d_beta_dev_, (niter - 1) * sizeof(RealType),
+                                 hipMemcpyDeviceToDevice, stream_));
     }
 
-    // Solve tridiagonal eigenvalue problem on CPU
-    std::vector<double> h_D(niter), h_E(niter), h_Z(niter * niter);
-    std::vector<double> h_work(std::max(1, 2*niter - 2));
-    int lapack_info = 0;
-
-    std::copy(h_alpha.begin(), h_alpha.begin() + niter, h_D.begin());
-    for (int i = 0; i < niter - 1; i++) h_E[i] = h_beta[i];
-    if (niter > 0) h_E[niter - 1] = 0.0;
-
-    const char jobz = 'V';
-    const int n_lapack = niter;
-    const int ldz = niter;
-
-    dstev_(&jobz, &n_lapack, h_D.data(), h_E.data(), h_Z.data(), &ldz, h_work.data(), &lapack_info);
-
-    if (lapack_info != 0) {
-        throw std::runtime_error("LAPACK dstev failed with info = " + std::to_string(lapack_info));
+    // Set C = identity matrix (niter x niter)
+    {
+        int total = niter * niter;
+        int threads = 256;
+        int blocks = (total + threads - 1) / threads;
+        hipLaunchKernelGGL(set_identity_kernel<RealType>, dim3(blocks), dim3(threads), 0, stream_,
+                           d_steqr_C_, niter);
     }
 
-    double energy = h_D[0];
+    // Solve tridiagonal eigenproblem on GPU
+    ROCBLAS_CHECK((rocblas_status)rocsolver_dsteqr(rocblas_h_,
+        rocblas_evect_tridiagonal,
+        niter,
+        d_steqr_D_,          // diagonal (eigenvalues on output)
+        d_steqr_E_,          // off-diagonal
+        d_steqr_C_,          // identity on input, eigenvectors on output
+        niter,                // ldc
+        d_steqr_info_));
 
-    // Reconstruct ground state: |theta> = sum_i c[i] |v_i>
-    std::vector<Scalar> h_ritz_scalar(niter);
-    for (int i = 0; i < niter; i++) {
-        h_ritz_scalar[i] = Traits::make_scalar(h_Z[i]);
+    // Convert real eigenvector (first column of C) to Scalar for gemv
+    {
+        int threads = 256;
+        int blocks = (niter + threads - 1) / threads;
+        hipLaunchKernelGGL((real_eigvec_to_scalar_kernel<Scalar, RealType>),
+                           dim3(blocks), dim3(threads), 0, stream_,
+                           d_steqr_C_, niter, d_ritz_coeffs_, niter);
     }
-    HIP_CHECK(hipMemcpy(d_ritz_coeffs_, h_ritz_scalar.data(), niter * sizeof(Scalar), hipMemcpyHostToDevice));
 
-    // Use device pointer mode for finalization to avoid implicit GPU syncs
+    // Reconstruct ground state: |theta> = sum_i c[i] |v_i>  (device pointer mode)
     ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_device));
     ROCBLAS_CHECK(Traits::gemv(
         rocblas_h_, rocblas_operation_none,
@@ -770,12 +734,16 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
         d_const_zero_, d_theta, 1
     ));
 
-    // nrm2 writes to device, kernel computes 1/norm, scal normalizes
+    // Normalize theta
     ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
-    hipLaunchKernelGGL(invert_nrm_kernel<RealType>, dim3(1), dim3(1), 0, 0,
+    hipLaunchKernelGGL(invert_nrm_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
                        d_nrm2_result_, d_inv_nrm_);
     ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
     ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
+
+    // === Only sync point: read back energy (1 double, D2H) ===
+    double energy;
+    HIP_CHECK(hipMemcpy(&energy, d_steqr_D_, sizeof(double), hipMemcpyDeviceToHost));
 
     return energy;
 }
