@@ -350,6 +350,26 @@ __global__ void real_eigvec_to_scalar_kernel(const RealType* C, int ldc, Scalar*
     }
 }
 
+// GPU-side Lanczos convergence check: compare lowest eigenvalue to previous
+template<typename RealType>
+__global__ void lanczos_convergence_kernel(const RealType* eigenvalues,
+                                            RealType* prev_energy,
+                                            int* converged,
+                                            int* effective_niter,
+                                            int current_iter,
+                                            RealType tol) {
+    if (converged[0]) return;  // already converged from earlier check
+    RealType cur = eigenvalues[0];  // lowest eigenvalue (steqr sorts ascending)
+    RealType prev = prev_energy[0];
+    RealType diff = cur - prev;
+    if (diff < 0) diff = -diff;
+    if (current_iter >= 4 && diff < tol) {
+        converged[0] = 1;
+        effective_niter[0] = current_iter + 1;
+    }
+    prev_energy[0] = cur;
+}
+
 // ============================================================================
 // SVD post-processing kernels: keep U/S/Vh on GPU, avoid D2H→CPU→H2D roundtrip
 // ============================================================================

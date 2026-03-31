@@ -119,6 +119,11 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_steqr_C_, (size_t)max_lanczos_iter_ * max_lanczos_iter_ * sizeof(RealType)));
     HIP_CHECK(hipMalloc(&d_steqr_info_, sizeof(int)));
 
+    // GPU-side convergence detection
+    HIP_CHECK(hipMalloc(&d_converged_, sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_prev_energy_, sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_effective_niter_, sizeof(int)));
+
     // Batched GEMM pointer arrays
     int batch_max = D_mpo_ * d_;
     HIP_CHECK(hipMalloc(&d_batch_A_, batch_max * sizeof(Scalar*)));
@@ -184,6 +189,9 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
     if (d_steqr_E_) hipFree(d_steqr_E_);
     if (d_steqr_C_) hipFree(d_steqr_C_);
     if (d_steqr_info_) hipFree(d_steqr_info_);
+    if (d_converged_) hipFree(d_converged_);
+    if (d_prev_energy_) hipFree(d_prev_energy_);
+    if (d_effective_niter_) hipFree(d_effective_niter_);
     if (d_svd_A_) hipFree(d_svd_A_);
     if (d_svd_U_) hipFree(d_svd_U_);
     if (d_svd_S_) hipFree(d_svd_S_);
@@ -606,7 +614,18 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
 
     Scalar* d_lanczos_v = d_lanczos_v_;
 
-    // === Zero-sync Lanczos: no CPU sync until final energy readback ===
+    // === Zero-sync Lanczos with GPU-side convergence detection ===
+    // No hipStreamSynchronize in the loop. Convergence checked on GPU via
+    // rocsolver_dsteqr + convergence kernel. Host polls via hipEventQuery
+    // (non-blocking) and breaks early when GPU signals convergence.
+
+    // Initialize convergence state on device (async, no sync)
+    HIP_CHECK(hipMemsetAsync(d_converged_, 0, sizeof(int), stream_));
+    {
+        RealType big = RealType(1e30);
+        HIP_CHECK(hipMemcpyAsync(d_prev_energy_, &big, sizeof(RealType),
+                                 hipMemcpyHostToDevice, stream_));
+    }
 
     // v[0] = theta / ||theta|| (device pointer mode — no sync)
     ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_device));
@@ -619,11 +638,27 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta, n * sizeof(Scalar),
                              hipMemcpyDeviceToDevice, stream_));
 
-    // Fixed iteration count — no convergence check, no mid-loop sync.
-    // Cap at 15: Lanczos typically converges in 5-10 iters after first sweep.
-    // Beta clamping in kernel prevents basis corruption past convergence.
-    int niter = std::min(15, max_iter);
+    // Event for non-blocking convergence polling
+    hipEvent_t conv_event;
+    HIP_CHECK(hipEventCreateWithFlags(&conv_event, hipEventDisableTiming));
+    int conv_check_pending = 0;
+    int niter = std::min(30, max_iter);
+    RealType tol_conv = RealType(1e-12);
+
     for (int iter = 0; iter < niter; iter++) {
+        // Poll previous convergence check (non-blocking — no pipeline stall)
+        if (conv_check_pending && hipEventQuery(conv_event) == hipSuccess) {
+            int converged;
+            HIP_CHECK(hipMemcpy(&converged, d_converged_, sizeof(int), hipMemcpyDeviceToHost));
+            if (converged) {
+                int eff_niter;
+                HIP_CHECK(hipMemcpy(&eff_niter, d_effective_niter_, sizeof(int), hipMemcpyDeviceToHost));
+                niter = eff_niter;
+                break;
+            }
+            conv_check_pending = 0;
+        }
+
         Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
 
         // w = H|v_i> (apply_heff uses host pointer mode internally)
@@ -684,11 +719,39 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
             ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_vip1, 1));
         }
 
-        // Switch back to host pointer mode for next apply_heff
+        // Switch back to host pointer mode
         ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
+
+        // Launch GPU convergence check every 3 iterations starting at iter 4
+        if (iter >= 4 && iter % 3 == 0 && !conv_check_pending) {
+            int ncheck = iter + 1;
+            HIP_CHECK(hipMemcpyAsync(d_steqr_D_, d_alpha_dev_, ncheck * sizeof(RealType),
+                                     hipMemcpyDeviceToDevice, stream_));
+            if (ncheck > 1) {
+                HIP_CHECK(hipMemcpyAsync(d_steqr_E_, d_beta_dev_, (ncheck - 1) * sizeof(RealType),
+                                         hipMemcpyDeviceToDevice, stream_));
+            }
+            {
+                int total = ncheck * ncheck;
+                int threads = 256;
+                int blocks = (total + threads - 1) / threads;
+                hipLaunchKernelGGL(set_identity_kernel<RealType>, dim3(blocks), dim3(threads), 0, stream_,
+                                   d_steqr_C_, ncheck);
+            }
+            ROCBLAS_CHECK((rocblas_status)rocsolver_dsteqr(rocblas_h_,
+                rocblas_evect_tridiagonal, ncheck,
+                d_steqr_D_, d_steqr_E_, d_steqr_C_, ncheck, d_steqr_info_));
+            hipLaunchKernelGGL(lanczos_convergence_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
+                               d_steqr_D_, d_prev_energy_, d_converged_, d_effective_niter_,
+                               iter, tol_conv);
+            HIP_CHECK(hipEventRecord(conv_event, stream_));
+            conv_check_pending = 1;
+        }
     }
 
-    // === GPU tridiagonal eigensolver (rocsolver_dsteqr) — no CPU sync ===
+    HIP_CHECK(hipEventDestroy(conv_event));
+
+    // === Final tridiagonal solve + reconstruction on GPU ===
 
     // Copy alpha → D, beta → E (device-to-device, async)
     HIP_CHECK(hipMemcpyAsync(d_steqr_D_, d_alpha_dev_, niter * sizeof(RealType),
@@ -711,10 +774,10 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     ROCBLAS_CHECK((rocblas_status)rocsolver_dsteqr(rocblas_h_,
         rocblas_evect_tridiagonal,
         niter,
-        d_steqr_D_,          // diagonal (eigenvalues on output)
-        d_steqr_E_,          // off-diagonal
-        d_steqr_C_,          // identity on input, eigenvectors on output
-        niter,                // ldc
+        d_steqr_D_,
+        d_steqr_E_,
+        d_steqr_C_,
+        niter,
         d_steqr_info_));
 
     // Convert real eigenvector (first column of C) to Scalar for gemv
@@ -743,7 +806,7 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
     ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
 
-    // === Only sync point: read back energy (1 double, D2H) ===
+    // === Only sync: read back energy (1 double, D2H) ===
     double energy;
     HIP_CHECK(hipMemcpy(&energy, d_steqr_D_, sizeof(double), hipMemcpyDeviceToHost));
 
