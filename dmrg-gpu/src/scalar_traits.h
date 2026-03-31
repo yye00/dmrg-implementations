@@ -291,9 +291,18 @@ template<typename Scalar>
 __global__ void lanczos_process_beta_kernel(const double* nrm2_result, double* inv_nrm_out,
                                              double* beta_arr, Scalar* neg_beta_scalars, int iter) {
     double beta = nrm2_result[0];
-    beta_arr[iter] = beta;
-    inv_nrm_out[0] = 1.0 / beta;
-    neg_beta_scalars[iter] = dev_make_neg_real_scalar(Scalar{}, -beta);
+    if (beta < 1e-14) {
+        // Krylov space exhausted — zero out to prevent 1/beta explosion.
+        // Subsequent iterations produce zero vectors and zero tridiagonal entries,
+        // which steqr handles as a decoupled block.
+        beta_arr[iter] = 0.0;
+        inv_nrm_out[0] = 0.0;
+        neg_beta_scalars[iter] = dev_make_neg_real_scalar(Scalar{}, 0.0);
+    } else {
+        beta_arr[iter] = beta;
+        inv_nrm_out[0] = 1.0 / beta;
+        neg_beta_scalars[iter] = dev_make_neg_real_scalar(Scalar{}, -beta);
+    }
 }
 
 __device__ inline double dev_negate(double x) { return -x; }
