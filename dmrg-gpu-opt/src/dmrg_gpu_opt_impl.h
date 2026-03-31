@@ -408,18 +408,37 @@ void DMRGGPUOpt<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* 
         U, cL * cR));
 
     // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
-    // Batched over s' (d elements) per w' iteration, using strided_batched GEMM
-    for (int wp = 0; wp < D; wp++) {
-        Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
-        ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
-            rocblas_operation_none, rocblas_operation_none,
-            cL, cR, cR,
-            &one,
-            U + (size_t)wp * d * cL * cR, cL, (rocblas_stride)(cL * cR),  // A, lda, strideA
-            R_env + wp * cR, cR * D, (rocblas_stride)0,                    // B, ldb, strideB (same B)
-            &beta,
-            d_result, cL * d, (rocblas_stride)cL,                          // C, ldc, strideC
-            d));                                                            // batch_count
+    // Use strided_batched GEMM for large matrices, individual for small
+    if (cL >= 16 && cR >= 16) {
+        // Batched over s' (d elements) per w' iteration
+        for (int wp = 0; wp < D; wp++) {
+            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
+            ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                cL, cR, cR,
+                &one,
+                U + (size_t)wp * d * cL * cR, cL, (rocblas_stride)(cL * cR),
+                R_env + wp * cR, cR * D, (rocblas_stride)0,
+                &beta,
+                d_result, cL * d, (rocblas_stride)cL,
+                d));
+        }
+    } else {
+        // Individual GEMMs for small matrices (less overhead)
+        for (int wp = 0; wp < D; wp++) {
+            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
+            for (int sp = 0; sp < d; sp++) {
+                int ws_out = wp * d + sp;
+                ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                    rocblas_operation_none, rocblas_operation_none,
+                    cL, cR, cR,
+                    &one,
+                    U + ws_out * cL * cR, cL,
+                    R_env + wp * cR, cR * D,
+                    &beta,
+                    d_result + sp * cL, cL * d));
+            }
+        }
     }
 }
 
@@ -478,19 +497,36 @@ void DMRGGPUOpt<Scalar>::update_left_env(int site) {
         U, chi_in * chi_out));
 
     // Step 3: L_new_w'[b,b'] = sum_{a',s'} U[a',ws',b] * conj(A[a',s',b'])
-    // Batched over w' (D elements) per s' iteration, using strided_batched GEMM
-    for (int sp = 0; sp < d; sp++) {
-        Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-        ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
-            Traits::op_h, rocblas_operation_none,
-            chi_out, chi_out, chi_in,
-            &one,
-            U + (size_t)sp * chi_in * chi_out, chi_in,
-            (rocblas_stride)((size_t)d * chi_in * chi_out),                // strideA: skip d slots between w' values
-            A + sp * chi_in, chi_in * d, (rocblas_stride)0,               // B same for all w' (strideB=0)
-            &beta,
-            L_new, chi_out * D, (rocblas_stride)chi_out,                  // C, ldc, strideC
-            D));                                                           // batch_count = D
+    if (chi_in >= 16 && chi_out >= 16) {
+        // Batched over w' (D elements) per s' iteration
+        for (int sp = 0; sp < d; sp++) {
+            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+            ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
+                Traits::op_h, rocblas_operation_none,
+                chi_out, chi_out, chi_in,
+                &one,
+                U + (size_t)sp * chi_in * chi_out, chi_in,
+                (rocblas_stride)((size_t)d * chi_in * chi_out),
+                A + sp * chi_in, chi_in * d, (rocblas_stride)0,
+                &beta,
+                L_new, chi_out * D, (rocblas_stride)chi_out,
+                D));
+        }
+    } else {
+        for (int wp = 0; wp < D; wp++) {
+            for (int sp = 0; sp < d; sp++) {
+                Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+                int ws_out = wp * d + sp;
+                ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                    Traits::op_h, rocblas_operation_none,
+                    chi_out, chi_out, chi_in,
+                    &one,
+                    U + ws_out * chi_in * chi_out, chi_in,
+                    A + sp * chi_in, chi_in * d,
+                    &beta,
+                    L_new + wp * chi_out, chi_out * D));
+            }
+        }
     }
 
     // For complex: L_new = conj(U^H * A) = U^T * conj(A), the correct bra contraction
@@ -554,19 +590,36 @@ void DMRGGPUOpt<Scalar>::update_right_env(int site) {
         U, chi_out * chi_in));
 
     // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
-    // Batched over w (D elements) per s' iteration, using strided_batched GEMM
-    for (int sp = 0; sp < d; sp++) {
-        Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-        ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
-            rocblas_operation_none, Traits::op_h,
-            chi_out, chi_out, chi_in,
-            &one,
-            U + (size_t)sp * chi_out * chi_in, chi_out,
-            (rocblas_stride)((size_t)d * chi_out * chi_in),               // strideA
-            A + sp * chi_out, chi_out * d, (rocblas_stride)0,             // B same for all w (strideB=0)
-            &beta,
-            R_new, chi_out * D, (rocblas_stride)chi_out,                  // C, ldc, strideC
-            D));                                                           // batch_count = D
+    if (chi_in >= 16 && chi_out >= 16) {
+        // Batched over w (D elements) per s' iteration
+        for (int sp = 0; sp < d; sp++) {
+            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+            ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
+                rocblas_operation_none, Traits::op_h,
+                chi_out, chi_out, chi_in,
+                &one,
+                U + (size_t)sp * chi_out * chi_in, chi_out,
+                (rocblas_stride)((size_t)d * chi_out * chi_in),
+                A + sp * chi_out, chi_out * d, (rocblas_stride)0,
+                &beta,
+                R_new, chi_out * D, (rocblas_stride)chi_out,
+                D));
+        }
+    } else {
+        for (int w = 0; w < D; w++) {
+            for (int sp = 0; sp < d; sp++) {
+                Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+                int ws_out = w * d + sp;
+                ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                    rocblas_operation_none, Traits::op_h,
+                    chi_out, chi_out, chi_in,
+                    &one,
+                    U + ws_out * chi_out * chi_in, chi_out,
+                    A + sp * chi_out, chi_out * d,
+                    &beta,
+                    R_new + w * chi_out, chi_out * D));
+            }
+        }
     }
 }
 
