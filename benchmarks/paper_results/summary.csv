@@ -728,3 +728,10 @@ pdmrg-gpu-opt,tfim,20,128,4,-25.107797111624,,7.5,True
 pdmrg-gpu-opt,tfim,32,20,2,-40.384313161213,,12.862,True
 pdmrg-gpu-opt,tfim,32,20,4,-40.384313161213,,8.036,True
 pdmrg-gpu-opt,tfim,32,20,8,None,,1800,False
+
+# Item 5: Chebyshev-Filtered Subspace Iteration (pdmrg-gpu-opt)
+# Result: SLOWER than Lanczos - wrong tool for DMRG single ground state
+# L=8  chi=32  seg=2: Lanczos 0.732s, Chebyshev 1.395s (1.9x slower), both PASS 1e-13
+# L=20 chi=50  seg=2: Lanczos 5.273s, Chebyshev 59.152s (11x slower)
+# Reason: CheFSI does degree*outer matvecs (up to 300), Lanczos converges in ~15
+# Status: Implemented, defaulted OFF
