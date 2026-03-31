@@ -137,7 +137,7 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
     use_davidson_ = false;  // default: use Lanczos (device-pointer-mode, 2-3 syncs/bond)
     use_rsvd_ = false;
     lanczos_use_1site_ = false;
-    use_batched_sweep_ = (n_segments_ >= 2);  // enable cross-segment batching when we have segments
+    use_batched_sweep_ = false;  // cross-segment batching: slower for n_segments=2 due to BLAS-1 serialization
     rsvd_oversampling_ = 20;
 
     allocate_stream_workspaces();

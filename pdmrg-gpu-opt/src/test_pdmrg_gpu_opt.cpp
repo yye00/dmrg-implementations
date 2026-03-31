@@ -372,7 +372,7 @@ int main(int argc, char** argv) {
     bool davidson = false;  // default: use Lanczos eigensolver
     bool rsvd = false;      // default: no randomized SVD
     bool quiet = false;
-    bool batched_sweep = true;  // default: cross-segment batched sweep
+    bool batched_sweep = false;  // cross-segment batched: slower for 2 segments
     bool run_josephson = false;
     bool run_tfim = false;
     int n_max = 1;
