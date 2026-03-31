@@ -627,6 +627,25 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
                                  hipMemcpyHostToDevice, stream_));
     }
 
+    // Debug: check theta before normalization
+    {
+        HIP_CHECK(hipStreamSynchronize(stream_));
+        std::vector<Scalar> h_theta(n);
+        HIP_CHECK(hipMemcpy(h_theta.data(), d_theta, n * sizeof(Scalar), hipMemcpyDeviceToHost));
+        bool has_nan = false;
+        for (int i = 0; i < n; i++) {
+            double v = Traits::is_complex ? 0.0 : (double)h_theta[i];
+            if (std::isnan(v)) { has_nan = true; break; }
+        }
+        if (has_nan) {
+            fprintf(stderr, "DEBUG: theta is NaN at entry! site=%d n=%d\n", site, n);
+            fprintf(stderr, "  theta[0..4]:");
+            for (int i = 0; i < std::min(n, 5); i++)
+                fprintf(stderr, " %.6e", (double)h_theta[i]);
+            fprintf(stderr, "\n");
+        }
+    }
+
     // v[0] = theta / ||theta|| (device pointer mode — no sync)
     ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_device));
     ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
@@ -663,6 +682,18 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
 
         // w = H|v_i> (apply_heff uses host pointer mode internally)
         apply_heff(site, d_vi, d_heff_result_);
+
+        // Debug: check v_i and heff_result after first iter
+        if (iter == 0) {
+            HIP_CHECK(hipStreamSynchronize(stream_));
+            double v0_val, w0_val;
+            HIP_CHECK(hipMemcpy(&v0_val, d_vi, sizeof(double), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpy(&w0_val, d_heff_result_, sizeof(double), hipMemcpyDeviceToHost));
+            if (std::isnan(v0_val) || std::isnan(w0_val)) {
+                fprintf(stderr, "DEBUG: iter=0 v0[0]=%.6e heff[0]=%.6e site=%d n=%d\n",
+                        v0_val, w0_val, site, n);
+            }
+        }
 
         // Switch to device pointer mode for scalar operations
         ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_device));
