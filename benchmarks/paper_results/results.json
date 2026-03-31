@@ -8409,5 +8409,20 @@
     "success": true,
     "raw_output": "",
     "note": "timing-fix"
+  },
+  {
+    "impl": "pdmrg-opt",
+    "model": "tfim",
+    "L": 100,
+    "chi": 50,
+    "sweeps": 50,
+    "np": 8,
+    "threads": 1,
+    "energy": -126.96187673967519,
+    "solve_time": 253.186,
+    "wall_time": 258.89313101768494,
+    "success": true,
+    "raw_output": "",
+    "note": "timing-fix"
   }
 ]
