@@ -206,7 +206,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
                n_segments, n_outer, n_local, n_warmup);
         printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
         printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
-        printf("  Eigensolver: %s\n", davidson ? "Block-Davidson" : "Lanczos");
+        printf("  Eigensolver: %s\n", chebyshev ? "Chebyshev" : (davidson ? "Block-Davidson" : "Lanczos"));
         printf("======================================\n\n");
     }
 
@@ -269,7 +269,7 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
         printf("  J=%.4f, h=%.4f\n", J, h_field);
         printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
         printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
-        printf("  Eigensolver: %s\n", davidson ? "Block-Davidson" : "Lanczos");
+        printf("  Eigensolver: %s\n", chebyshev ? "Chebyshev" : (davidson ? "Block-Davidson" : "Lanczos"));
         printf("======================================\n\n");
     }
 
@@ -317,7 +317,7 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
         printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/%.1f\n", E_J, E_C, M_PI / phi_ext);
         printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
         printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
-        printf("  Eigensolver: %s\n", davidson ? "Block-Davidson" : "Lanczos");
+        printf("  Eigensolver: %s\n", chebyshev ? "Chebyshev" : (davidson ? "Block-Davidson" : "Lanczos"));
         printf("======================================\n\n");
     }
 
