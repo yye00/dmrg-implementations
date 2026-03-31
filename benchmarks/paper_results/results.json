@@ -8439,5 +8439,20 @@
     "success": true,
     "raw_output": "",
     "note": "zero-sync"
+  },
+  {
+    "impl": "pdmrg-gpu",
+    "model": "tfim",
+    "L": 100,
+    "chi": 50,
+    "sweeps": 50,
+    "segments": 8,
+    "energy": null,
+    "wall_time": 1800,
+    "outer_iters": null,
+    "polish_sweeps": null,
+    "success": false,
+    "raw_output": "TIMEOUT",
+    "note": "zero-sync"
   }
 ]
