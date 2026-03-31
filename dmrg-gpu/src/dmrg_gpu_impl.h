@@ -810,6 +810,26 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     double energy;
     HIP_CHECK(hipMemcpy(&energy, d_steqr_D_, sizeof(double), hipMemcpyDeviceToHost));
 
+    // Debug: check steqr info and detect NaN
+    {
+        int steqr_info;
+        HIP_CHECK(hipMemcpy(&steqr_info, d_steqr_info_, sizeof(int), hipMemcpyDeviceToHost));
+        if (steqr_info != 0 || std::isnan(energy)) {
+            fprintf(stderr, "DEBUG Lanczos: site=%d n=%d niter=%d steqr_info=%d energy=%.6e\n",
+                    site, n, niter, steqr_info, energy);
+            // Print alpha/beta from device
+            std::vector<RealType> h_alpha(niter), h_beta(niter > 1 ? niter - 1 : 0);
+            HIP_CHECK(hipMemcpy(h_alpha.data(), d_alpha_dev_, niter * sizeof(RealType), hipMemcpyDeviceToHost));
+            if (niter > 1)
+                HIP_CHECK(hipMemcpy(h_beta.data(), d_beta_dev_, (niter - 1) * sizeof(RealType), hipMemcpyDeviceToHost));
+            fprintf(stderr, "  alpha:");
+            for (int i = 0; i < std::min(niter, 10); i++) fprintf(stderr, " %.6e", h_alpha[i]);
+            fprintf(stderr, "\n  beta:");
+            for (int i = 0; i < std::min(niter - 1, 9); i++) fprintf(stderr, " %.6e", h_beta[i]);
+            fprintf(stderr, "\n");
+        }
+    }
+
     return energy;
 }
 
