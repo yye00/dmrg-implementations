@@ -137,6 +137,7 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
     use_davidson_ = false;  // default: use Lanczos (device-pointer-mode, 2-3 syncs/bond)
     use_rsvd_ = false;
     lanczos_use_1site_ = false;
+    use_batched_sweep_ = (n_segments_ >= 2);  // enable cross-segment batching when we have segments
     rsvd_oversampling_ = 20;
 
     allocate_stream_workspaces();
@@ -297,6 +298,12 @@ void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
             ws.h_rsvd_U_small.resize((size_t)rsvd_r * rsvd_r);
         }
     }
+
+    // Cross-segment batched pointer arrays
+    int xs_batch_max = n_segments_ * D_mpo_ * dd;
+    HIP_CHECK(hipMalloc(&d_xs_batch_A_, xs_batch_max * sizeof(Scalar*)));
+    HIP_CHECK(hipMalloc(&d_xs_batch_B_, xs_batch_max * sizeof(Scalar*)));
+    HIP_CHECK(hipMalloc(&d_xs_batch_C_, xs_batch_max * sizeof(Scalar*)));
 }
 
 // ============================================================================
@@ -377,6 +384,11 @@ void PDMRGGPUOpt<Scalar>::free_gpu_resources() {
     for (auto& e : step_done_events_) hipEventDestroy(e);
     for (auto& h : handles_) rocblas_destroy_handle(h);
     for (auto& s : streams_) hipStreamDestroy(s);
+
+    // Cross-segment batched arrays
+    if (d_xs_batch_A_) hipFree(d_xs_batch_A_);
+    if (d_xs_batch_B_) hipFree(d_xs_batch_B_);
+    if (d_xs_batch_C_) hipFree(d_xs_batch_C_);
 }
 
 // ============================================================================
@@ -2609,6 +2621,502 @@ void PDMRGGPUOpt<Scalar>::segment_sweep_RL(int seg_idx) {
 }
 
 // ============================================================================
+// Cross-segment batched apply_heff: process N segments' matvecs in one set
+// of GEMM calls. All segments must have same (cL, cR) dimensions.
+// Uses stream 0 for all work.
+// ============================================================================
+
+template<typename Scalar>
+void PDMRGGPUOpt<Scalar>::batched_apply_heff_two_site(
+    const int* sites, const int* seg_indices, int n_batch,
+    const Scalar** d_thetas_in, Scalar** d_results) {
+
+    // All segments assumed to have same dims (caller guarantees this)
+    int cL = chi_L(sites[0]);
+    int cR = chi_R(sites[0] + 1);
+    int D = D_mpo_, d = d_;
+    int dd = d * d;
+    Scalar one = Traits::one(), zero_val = Traits::zero();
+
+    // Step 1: Batched GEMM — L_env^T × theta, batch across all segments
+    // batch_count = n_batch * D * dd
+    {
+        int per_seg_batch = D * dd;
+        int total_batch = n_batch * per_seg_batch;
+
+        // Build pointer arrays on host, copy to device
+        std::vector<Scalar*> h_A(total_batch), h_B(total_batch), h_C(total_batch);
+        for (int b = 0; b < n_batch; b++) {
+            int site = sites[b];
+            int si = seg_indices[b];
+            Scalar* L_env = d_L_envs_[site];
+            Scalar* T1 = workspaces_[si].d_T1;
+            const Scalar* theta = d_thetas_in[b];
+
+            for (int n = 0; n < D; n++) {
+                for (int idx = 0; idx < dd; idx++) {
+                    int k = b * per_seg_batch + n * dd + idx;
+                    h_A[k] = L_env + (size_t)n * cL;          // L_env slice, stride cL*D
+                    h_B[k] = const_cast<Scalar*>(theta) + (size_t)idx * cL;  // theta slice
+                    h_C[k] = T1 + (size_t)(n * dd + idx) * cL * cR;         // T1 output
+                }
+            }
+        }
+
+        HIP_CHECK(hipMemcpyAsync(d_xs_batch_A_, h_A.data(), total_batch * sizeof(Scalar*),
+                                  hipMemcpyHostToDevice, streams_[0]));
+        HIP_CHECK(hipMemcpyAsync(d_xs_batch_B_, h_B.data(), total_batch * sizeof(Scalar*),
+                                  hipMemcpyHostToDevice, streams_[0]));
+        HIP_CHECK(hipMemcpyAsync(d_xs_batch_C_, h_C.data(), total_batch * sizeof(Scalar*),
+                                  hipMemcpyHostToDevice, streams_[0]));
+
+        ROCBLAS_CHECK(Traits::gemm_batched(handles_[0],
+            Traits::op_t, rocblas_operation_none,
+            cL, cR, cL,
+            &one,
+            (const Scalar**)d_xs_batch_A_, cL * D,
+            (const Scalar**)d_xs_batch_B_, cL * dd,
+            &zero_val,
+            d_xs_batch_C_, cL,
+            total_batch));
+    }
+
+    // Step 2: Dense GEMM per segment — T1 × WW (different WW per site)
+    for (int b = 0; b < n_batch; b++) {
+        int site = sites[b];
+        int si = seg_indices[b];
+        ROCBLAS_CHECK(Traits::gemm(handles_[0],
+            rocblas_operation_none, rocblas_operation_none,
+            cL * cR, dd * D, D * dd,
+            &one,
+            workspaces_[si].d_T1, cL * cR,
+            d_WW_[site], D * dd,
+            &zero_val,
+            workspaces_[si].d_T2, cL * cR));
+    }
+
+    // Step 3: Per-segment — T2 × R_env (different R_env per site)
+    for (int b = 0; b < n_batch; b++) {
+        int site = sites[b];
+        int si = seg_indices[b];
+        Scalar* T2 = workspaces_[si].d_T2;
+        Scalar* R_env = d_R_envs_[site + 2];
+
+        if (cL >= 16 && cR >= 16 && d <= 2) {
+            for (int s2p = 0; s2p < d; s2p++) {
+                for (int n = 0; n < D; n++) {
+                    Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
+                    ROCBLAS_CHECK(Traits::gemm_strided_batched(handles_[0],
+                        rocblas_operation_none, rocblas_operation_none,
+                        cL, cR, cR, &one,
+                        T2 + (size_t)(n * dd + s2p) * cL * cR, cL, (rocblas_stride)(d * cL * cR),
+                        R_env + (size_t)n * cR, cR * D, (rocblas_stride)0,
+                        &beta, d_results[b] + (size_t)s2p * cL * d, cL * dd, (rocblas_stride)cL, d));
+                }
+            }
+        } else {
+            for (int s1p = 0; s1p < d; s1p++) {
+                for (int s2p = 0; s2p < d; s2p++) {
+                    for (int n = 0; n < D; n++) {
+                        Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
+                        int ws_out = n * dd + s1p * d + s2p;
+                        ROCBLAS_CHECK(Traits::gemm(handles_[0],
+                            rocblas_operation_none, rocblas_operation_none,
+                            cL, cR, cR,
+                            &one,
+                            T2 + (size_t)ws_out * cL * cR, cL,
+                            R_env + (size_t)n * cR, cR * D,
+                            &beta,
+                            d_results[b] + s1p * cL + (size_t)s2p * cL * d, cL * dd));
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Batched Lanczos: lock-step across N segments, batched matvec when dims match
+// All segments must have the same theta_size.
+// ============================================================================
+
+template<typename Scalar>
+double PDMRGGPUOpt<Scalar>::batched_lanczos_eigensolver(
+    const int* sites, const int* seg_indices, int n_batch,
+    Scalar** d_thetas, int theta_size) {
+
+    int n = theta_size;
+    int max_iter = std::min(max_lanczos_iter_, n);
+    double tol_lanczos = 1e-12;
+    double tol_eig_conv = 1e-12;
+
+    // Per-segment Lanczos state
+    struct SegState {
+        Scalar* d_lanczos_v;
+        std::vector<double> h_alpha, h_beta;
+        double prev_energy;
+        bool converged;
+        int niter;
+    };
+    std::vector<SegState> states(n_batch);
+    for (int b = 0; b < n_batch; b++) {
+        int si = seg_indices[b];
+        states[b].d_lanczos_v = workspaces_[si].d_lanczos_v;
+        states[b].h_alpha.resize(max_iter);
+        states[b].h_beta.resize(max_iter);
+        states[b].prev_energy = 1e30;
+        states[b].converged = false;
+        states[b].niter = max_iter;
+    }
+
+    // Normalize initial vectors (all on stream 0)
+    for (int b = 0; b < n_batch; b++) {
+        int si = seg_indices[b];
+        auto& ws = workspaces_[si];
+        double norm;
+        ROCBLAS_CHECK(Traits::nrm2(handles_[0], n, d_thetas[b], 1, &norm));
+        if (norm < 1e-14) {
+            std::vector<Scalar> h_init(n);
+            srand(42 + sites[b]);
+            for (int i = 0; i < n; i++) h_init[i] = Traits::random_val();
+            HIP_CHECK(hipMemcpy(d_thetas[b], h_init.data(), n * sizeof(Scalar), hipMemcpyHostToDevice));
+            ROCBLAS_CHECK(Traits::nrm2(handles_[0], n, d_thetas[b], 1, &norm));
+        }
+        Scalar inv_norm = Traits::make_scalar(1.0 / norm);
+        ROCBLAS_CHECK(Traits::scal(handles_[0], n, &inv_norm, d_thetas[b], 1));
+        HIP_CHECK(hipMemcpyAsync(states[b].d_lanczos_v, d_thetas[b],
+                                  n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[0]));
+    }
+    HIP_CHECK(hipStreamSynchronize(streams_[0]));
+
+    int global_iter;
+    for (global_iter = 0; global_iter < max_iter; global_iter++) {
+
+        // Check if all segments have converged
+        bool all_converged = true;
+        for (int b = 0; b < n_batch; b++) {
+            if (!states[b].converged) { all_converged = false; break; }
+        }
+        if (all_converged) break;
+
+        // Batched apply_heff: compute H|v_i> for all segments
+        std::vector<const Scalar*> v_ptrs(n_batch);
+        std::vector<Scalar*> hv_ptrs(n_batch);
+        for (int b = 0; b < n_batch; b++) {
+            int si = seg_indices[b];
+            v_ptrs[b] = states[b].d_lanczos_v + (size_t)global_iter * n;
+            hv_ptrs[b] = workspaces_[si].d_heff_result;
+        }
+
+        batched_apply_heff_two_site(sites, seg_indices, n_batch,
+                                     v_ptrs.data(), hv_ptrs.data());
+
+        // Per-segment Lanczos update (on stream 0 sequentially — these are cheap BLAS-1 ops)
+        for (int b = 0; b < n_batch; b++) {
+            if (states[b].converged) continue;
+
+            int si = seg_indices[b];
+            auto& ws = workspaces_[si];
+            auto& st = states[b];
+            Scalar* d_vi = st.d_lanczos_v + (size_t)global_iter * n;
+            Scalar* d_w = ws.d_heff_result;
+
+            // alpha = <v_i, H v_i>
+            Scalar h_dot;
+            ROCBLAS_CHECK(Traits::dot(handles_[0], n, d_vi, 1, d_w, 1, &h_dot));
+            double alpha_val = Traits::real_part(h_dot);
+            st.h_alpha[global_iter] = alpha_val;
+
+            // w -= alpha * v_i
+            Scalar neg_alpha = Traits::make_scalar(-alpha_val);
+            ROCBLAS_CHECK(Traits::axpy(handles_[0], n, &neg_alpha, d_vi, 1, d_w, 1));
+
+            // w -= beta_{i-1} * v_{i-1}
+            if (global_iter > 0) {
+                Scalar neg_beta = Traits::make_scalar(-st.h_beta[global_iter - 1]);
+                Scalar* d_vim1 = st.d_lanczos_v + (size_t)(global_iter - 1) * n;
+                ROCBLAS_CHECK(Traits::axpy(handles_[0], n, &neg_beta, d_vim1, 1, d_w, 1));
+            }
+
+            // Full reorthogonalization
+            if (global_iter > 0) {
+                Scalar h_one = Traits::one(), h_zero = Traits::zero(), h_neg_one = Traits::neg(Traits::one());
+                // coeffs = V^H w
+                ROCBLAS_CHECK(Traits::gemv(handles_[0], Traits::op_h,
+                    n, global_iter + 1, &h_one,
+                    st.d_lanczos_v, n,
+                    d_w, 1,
+                    &h_zero, ws.d_ritz_coeffs, 1));
+                // w -= V * coeffs
+                ROCBLAS_CHECK(Traits::gemv(handles_[0], rocblas_operation_none,
+                    n, global_iter + 1, &h_neg_one,
+                    st.d_lanczos_v, n,
+                    ws.d_ritz_coeffs, 1,
+                    &h_one, d_w, 1));
+            } else {
+                Scalar h_overlap;
+                ROCBLAS_CHECK(Traits::dot(handles_[0], n, st.d_lanczos_v, 1, d_w, 1, &h_overlap));
+                Scalar neg_overlap = Traits::neg(h_overlap);
+                ROCBLAS_CHECK(Traits::axpy(handles_[0], n, &neg_overlap, st.d_lanczos_v, 1, d_w, 1));
+            }
+
+            // beta = ||w||
+            double beta_val;
+            ROCBLAS_CHECK(Traits::nrm2(handles_[0], n, d_w, 1, &beta_val));
+            st.h_beta[global_iter] = beta_val;
+
+            // v_{i+1} = w / beta
+            if (global_iter + 1 < max_iter) {
+                Scalar* d_vip1 = st.d_lanczos_v + (size_t)(global_iter + 1) * n;
+                HIP_CHECK(hipMemcpyAsync(d_vip1, d_w, n * sizeof(Scalar),
+                                          hipMemcpyDeviceToDevice, streams_[0]));
+                if (beta_val > 1e-14) {
+                    Scalar inv_beta = Traits::make_scalar(1.0 / beta_val);
+                    ROCBLAS_CHECK(Traits::scal(handles_[0], n, &inv_beta, d_vip1, 1));
+                }
+            }
+        }
+
+        // Convergence check every 3 iterations
+        if (global_iter >= 4 && global_iter % 3 == 0) {
+            HIP_CHECK(hipStreamSynchronize(streams_[0]));
+
+            for (int b = 0; b < n_batch; b++) {
+                if (states[b].converged) continue;
+                auto& st = states[b];
+                int ncheck = global_iter + 1;
+
+                // Check for small beta (invariant subspace)
+                bool early_break = false;
+                for (int j = 0; j <= global_iter; j++) {
+                    if (st.h_beta[j] < tol_lanczos) {
+                        st.niter = j + 1;
+                        st.converged = true;
+                        early_break = true;
+                        break;
+                    }
+                }
+                if (early_break) continue;
+
+                // Tridiagonal eigenvalue check
+                std::vector<double> h_D(ncheck), h_E(ncheck);
+                std::copy(st.h_alpha.begin(), st.h_alpha.begin() + ncheck, h_D.begin());
+                for (int i = 0; i < ncheck - 1; i++) h_E[i] = st.h_beta[i];
+                h_E[ncheck - 1] = 0.0;
+                const char jobz_n = 'N';
+                const int n_chk = ncheck;
+                std::vector<double> h_work_chk(1);
+                int info_chk = 0;
+                dstev_(&jobz_n, &n_chk, h_D.data(), h_E.data(), nullptr, &n_chk, h_work_chk.data(), &info_chk);
+                if (info_chk == 0) {
+                    double cur_energy = h_D[0];
+                    if (std::abs(cur_energy - st.prev_energy) < tol_eig_conv) {
+                        st.niter = global_iter + 1;
+                        st.converged = true;
+                    }
+                    st.prev_energy = cur_energy;
+                }
+            }
+        }
+    }
+
+    HIP_CHECK(hipStreamSynchronize(streams_[0]));
+
+    // Extract Ritz vectors per segment
+    double total_energy = 0.0;
+    for (int b = 0; b < n_batch; b++) {
+        int si = seg_indices[b];
+        auto& ws = workspaces_[si];
+        auto& st = states[b];
+        int niter = st.converged ? st.niter : global_iter;
+        if (niter < 1) niter = 1;
+
+        std::vector<double> h_D(niter), h_E(niter), h_Z(niter * niter);
+        std::vector<double> h_work(std::max(1, 2*niter - 2));
+        int lapack_info = 0;
+
+        std::copy(st.h_alpha.begin(), st.h_alpha.begin() + niter, h_D.begin());
+        for (int i = 0; i < niter - 1; i++) h_E[i] = st.h_beta[i];
+        if (niter > 0) h_E[niter - 1] = 0.0;
+
+        const char jobz = 'V';
+        const int n_lapack = niter;
+        dstev_(&jobz, &n_lapack, h_D.data(), h_E.data(), h_Z.data(), &n_lapack,
+               h_work.data(), &lapack_info);
+
+        double energy = h_D[0];
+        total_energy += energy;
+
+        // Ritz vector: theta = V * z_0
+        std::vector<Scalar> h_ritz(niter);
+        for (int i = 0; i < niter; i++) h_ritz[i] = Traits::make_scalar(h_Z[i]);
+        HIP_CHECK(hipMemcpyAsync(ws.d_ritz_coeffs, h_ritz.data(),
+                  niter * sizeof(Scalar), hipMemcpyHostToDevice, streams_[0]));
+
+        Scalar h_one = Traits::one(), h_zero = Traits::zero();
+        ROCBLAS_CHECK(Traits::gemv(handles_[0], rocblas_operation_none,
+            n, niter, &h_one,
+            st.d_lanczos_v, n,
+            ws.d_ritz_coeffs, 1,
+            &h_zero, d_thetas[b], 1));
+
+        // Normalize
+        double nrm;
+        ROCBLAS_CHECK(Traits::nrm2(handles_[0], n, d_thetas[b], 1, &nrm));
+        if (nrm > 1e-14) {
+            Scalar inv_nrm = Traits::make_scalar(1.0 / nrm);
+            ROCBLAS_CHECK(Traits::scal(handles_[0], n, &inv_nrm, d_thetas[b], 1));
+        }
+    }
+
+    return total_energy / n_batch;
+}
+
+// ============================================================================
+// Batched segment sweep: lock-step across segments, batched GEMM in apply_heff
+// Replaces parallel_sweep when use_batched_sweep_ is true
+// ============================================================================
+
+template<typename Scalar>
+void PDMRGGPUOpt<Scalar>::batched_segment_sweep(bool even_LR) {
+    // Determine sweep direction per segment:
+    // even_LR=true: even segments go LR, odd go RL
+    // even_LR=false: even segments go RL, odd go LR
+    struct SegWork {
+        int seg_idx;
+        int first, last;
+        bool is_LR;
+        int sweep_len;  // number of two-site optimizations
+    };
+    std::vector<SegWork> work(n_segments_);
+    int max_sweep_len = 0;
+
+    for (int k = 0; k < n_segments_; k++) {
+        work[k].seg_idx = k;
+        work[k].first = seg_first_[k];
+        work[k].last = seg_last_[k];
+        bool even = (k % 2 == 0);
+        work[k].is_LR = (even == even_LR);
+        work[k].sweep_len = work[k].last - work[k].first;  // two-site: last-first bonds
+        max_sweep_len = std::max(max_sweep_len, work[k].sweep_len);
+    }
+
+    // Process lock-step: at each relative position, optimize all active segments
+    for (int step = 0; step < max_sweep_len; step++) {
+        // Collect active segments at this step
+        std::vector<int> active_sites;
+        std::vector<int> active_segs;
+        std::vector<char> active_dirs;
+
+        for (int k = 0; k < n_segments_; k++) {
+            if (step >= work[k].sweep_len) continue;
+            int site;
+            char dir;
+            if (work[k].is_LR) {
+                site = work[k].first + step;
+                dir = 'R';
+            } else {
+                site = work[k].last - 1 - step;
+                dir = 'L';
+            }
+            active_sites.push_back(site);
+            active_segs.push_back(k);
+            active_dirs.push_back(dir);
+        }
+
+        int n_active = (int)active_sites.size();
+        if (n_active == 0) continue;
+
+        // Check if all active segments have matching theta dimensions
+        bool dims_match = true;
+        int ref_cL = chi_L(active_sites[0]);
+        int ref_cR = chi_R(active_sites[0] + 1);
+        int theta_size = ref_cL * d_ * d_ * ref_cR;
+        for (int b = 1; b < n_active; b++) {
+            if (chi_L(active_sites[b]) != ref_cL || chi_R(active_sites[b] + 1) != ref_cR) {
+                dims_match = false;
+                break;
+            }
+        }
+
+        if (dims_match && n_active > 1) {
+            // === Batched path: form theta, batched Lanczos, split, env update ===
+
+            // Form theta for all segments (each on its own stream)
+            for (int b = 0; b < n_active; b++) {
+                form_theta_two_site(active_sites[b], active_segs[b]);
+            }
+            // Sync all segment streams before batched Lanczos on stream 0
+            for (int b = 0; b < n_active; b++) {
+                HIP_CHECK(hipStreamSynchronize(streams_[active_segs[b]]));
+            }
+
+            // Batched Lanczos eigensolver (runs on stream 0)
+            std::vector<Scalar*> d_thetas(n_active);
+            for (int b = 0; b < n_active; b++) {
+                d_thetas[b] = workspaces_[active_segs[b]].d_theta;
+            }
+
+            batched_lanczos_eigensolver(active_sites.data(), active_segs.data(),
+                                         n_active, d_thetas.data(), theta_size);
+
+            // Sync stream 0 before per-segment splits (they run on per-segment streams)
+            HIP_CHECK(hipStreamSynchronize(streams_[0]));
+
+            // Bond split per segment (each on its own stream for concurrency)
+            for (int b = 0; b < n_active; b++) {
+                int site = active_sites[b];
+                int si = active_segs[b];
+                char dir = active_dirs[b];
+                auto& ws = workspaces_[si];
+
+                if (use_ns_split_) {
+                    ns_split(site, ws.d_theta, dir, si);
+                } else if (use_rsvd_) {
+                    rsvd_split(site, ws.d_theta, dir, si);
+                } else {
+                    svd_split(site, ws.d_theta, dir, si);
+                }
+            }
+
+            // Sync all segment streams after splits before env updates
+            for (int b = 0; b < n_active; b++) {
+                HIP_CHECK(hipStreamSynchronize(streams_[active_segs[b]]));
+            }
+
+            // Environment updates — dispatch on per-segment streams for concurrency
+            for (int b = 0; b < n_active; b++) {
+                int site = active_sites[b];
+                int si = active_segs[b];
+                if (active_dirs[b] == 'R') {
+                    update_left_env(site, si);
+                } else {
+                    update_right_env(site + 1, si);
+                }
+            }
+            // Wait for all env updates
+            for (int b = 0; b < n_active; b++) {
+                HIP_CHECK(hipStreamSynchronize(streams_[active_segs[b]]));
+            }
+
+        } else {
+            // === Fallback: per-segment processing (different dims or single segment) ===
+            for (int b = 0; b < n_active; b++) {
+                int site = active_sites[b];
+                int si = active_segs[b];
+                char dir = active_dirs[b];
+                optimize_bond(site, dir, si);
+                if (dir == 'R') {
+                    update_left_env(site, si);
+                } else {
+                    update_right_env(site + 1, si);
+                }
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Form theta with V injection: θ = ψ_L · diag(V) · ψ_R  (Stoudenmire Eq. 5)
 // ============================================================================
 
@@ -2716,7 +3224,8 @@ double PDMRGGPUOpt<Scalar>::merge_and_optimize_boundaries(int parity) {
 template<typename Scalar>
 double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup) {
     const char* type_name = Traits::is_complex ? "complex128" : "float64";
-    printf("=== PDMRG-GPU-OPT (NS + Davidson + MFMA-16 pad + batched, %s) ===\n", type_name);
+    printf("=== PDMRG-GPU-OPT (NS + MFMA-16 pad + %s, %s) ===\n",
+           use_batched_sweep_ ? "cross-seg batched" : "per-seg streams", type_name);
     if (chi_max_ != chi_max_user_)
         printf("L = %d, d = %d, chi_max = %d (padded from %d), D_mpo = %d, segments = %d\n",
                L_, d_, chi_max_, chi_max_user_, D_mpo_, n_segments_);
@@ -2762,19 +3271,27 @@ double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_wa
 
     for (int outer = 0; outer < n_outer_sweeps; outer++) {
         for (int local_sw = 0; local_sw < n_local_sweeps; local_sw++) {
-            parallel_sweep([](PDMRGGPUOpt* self, int k) {
-                if (k % 2 == 0) self->segment_sweep_LR(k);
-                else             self->segment_sweep_RL(k);
-            });
+            if (use_batched_sweep_ && n_segments_ >= 2) {
+                batched_segment_sweep(true);   // even=LR, odd=RL
+            } else {
+                parallel_sweep([](PDMRGGPUOpt* self, int k) {
+                    if (k % 2 == 0) self->segment_sweep_LR(k);
+                    else             self->segment_sweep_RL(k);
+                });
+            }
 
             if (boundary_bonds_.size() > 0) {
                 energy_ = merge_and_optimize_boundaries(0);
             }
 
-            parallel_sweep([](PDMRGGPUOpt* self, int k) {
-                if (k % 2 == 0) self->segment_sweep_RL(k);
-                else             self->segment_sweep_LR(k);
-            });
+            if (use_batched_sweep_ && n_segments_ >= 2) {
+                batched_segment_sweep(false);  // even=RL, odd=LR
+            } else {
+                parallel_sweep([](PDMRGGPUOpt* self, int k) {
+                    if (k % 2 == 0) self->segment_sweep_RL(k);
+                    else             self->segment_sweep_LR(k);
+                });
+            }
 
             if (has_odd_boundaries) {
                 energy_ = merge_and_optimize_boundaries(1);

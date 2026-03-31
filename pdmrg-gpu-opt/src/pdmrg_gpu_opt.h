@@ -46,6 +46,7 @@ public:
     void set_use_ns_split(bool use_ns) { use_ns_split_ = use_ns; }
     void set_use_davidson(bool use_dav) { use_davidson_ = use_dav; }
     void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
+    void set_use_batched_sweep(bool b) { use_batched_sweep_ = b; }
     void set_quiet(bool) {}  // no-op
 
     int chi_L(int site) const { return bond_dims_[site]; }
@@ -179,11 +180,17 @@ private:
     bool use_davidson_;
     bool use_rsvd_;
     bool lanczos_use_1site_;  // when true, Lanczos calls apply_heff_single_site
+    bool use_batched_sweep_;  // cross-segment batched GEMM in lock-step sweep
     int rsvd_oversampling_;
     int theta_size_max_;
     int max_lanczos_iter_;
     int davidson_b_;
     int davidson_max_sub_;
+
+    // Cross-segment batched GEMM pointer arrays (for batched sweep mode)
+    Scalar** d_xs_batch_A_;   // size: n_segments * D_mpo * d * d
+    Scalar** d_xs_batch_B_;
+    Scalar** d_xs_batch_C_;
 
     // === Core methods ===
     void form_theta_two_site(int site, int si);
@@ -232,6 +239,11 @@ private:
     double sweep_RL_full_1site();  // full-chain R→L single-site (warmup/polish), stream 0
     void segment_sweep_LR(int seg_idx);
     void segment_sweep_RL(int seg_idx);
+    void batched_segment_sweep(bool even_LR);  // lock-step cross-segment batched sweep
+    double batched_lanczos_eigensolver(const int* sites, const int* seg_indices,
+                                        int n_batch, Scalar** d_thetas, int theta_size);
+    void batched_apply_heff_two_site(const int* sites, const int* seg_indices,
+                                      int n_batch, const Scalar** d_thetas_in, Scalar** d_results);
     double merge_and_optimize_boundaries(int parity = -1);  // Stoudenmire boundary coupling
     void form_theta_with_V(int site, int boundary_idx, int si);  // θ = ψ_L · diag(V) · ψ_R
     void initialize_boundary_states();  // V = ones at startup

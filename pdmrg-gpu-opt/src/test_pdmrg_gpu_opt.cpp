@@ -192,7 +192,7 @@ void build_josephson_mpo(int L, int d, int D_mpo,
 // ============================================================================
 int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
                     int n_local, int n_warmup, bool gpu_svd, bool ns_split,
-                    bool davidson, bool rsvd, bool quiet) {
+                    bool davidson, bool rsvd, bool quiet, bool batched_sweep) {
     int d = 2;
     int D_mpo = 5;
 
@@ -221,6 +221,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
     pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
     pdmrg.set_rsvd(rsvd);
+    pdmrg.set_use_batched_sweep(batched_sweep);
     pdmrg.set_quiet(quiet);
     pdmrg.initialize_mps_random();
 
@@ -251,7 +252,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
 // ============================================================================
 int test_tfim(int L, int chi_max, int n_outer, int n_segments,
               int n_local, int n_warmup, bool gpu_svd, bool ns_split,
-              bool davidson, bool rsvd, double J, double h_field, bool quiet) {
+              bool davidson, bool rsvd, double J, double h_field, bool quiet, bool batched_sweep) {
     int d = 2;
     int D_mpo = 3;
 
@@ -274,6 +275,7 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
     pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
     pdmrg.set_rsvd(rsvd);
+    pdmrg.set_use_batched_sweep(batched_sweep);
     pdmrg.set_quiet(quiet);
     pdmrg.initialize_mps_random();
 
@@ -295,7 +297,8 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
 // ============================================================================
 int test_josephson(int L, int chi_max, int n_outer, int n_segments,
                    int n_local, int n_warmup, bool gpu_svd, bool ns_split,
-                   bool davidson, bool rsvd, int n_max, double E_J, double E_C, double phi_ext, bool quiet) {
+                   bool davidson, bool rsvd, int n_max, double E_J, double E_C, double phi_ext,
+                   bool quiet, bool batched_sweep) {
     int d = 2 * n_max + 1;
     int D_mpo = 4;
 
@@ -328,6 +331,7 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
     pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
     pdmrg.set_rsvd(rsvd);
+    pdmrg.set_use_batched_sweep(batched_sweep);
     pdmrg.set_quiet(quiet);
     pdmrg.initialize_mps_random();
 
@@ -368,6 +372,7 @@ int main(int argc, char** argv) {
     bool davidson = false;  // default: use Lanczos eigensolver
     bool rsvd = false;      // default: no randomized SVD
     bool quiet = false;
+    bool batched_sweep = true;  // default: cross-segment batched sweep
     bool run_josephson = false;
     bool run_tfim = false;
     int n_max = 1;
@@ -384,6 +389,8 @@ int main(int argc, char** argv) {
             if (std::string(argv[i]) == "--rsvd") { rsvd = true; ns_split = false; continue; }
             if (std::string(argv[i]) == "--davidson") { davidson = true; continue; }
             if (std::string(argv[i]) == "--quiet") { quiet = true; continue; }
+            if (std::string(argv[i]) == "--batched-sweep") { batched_sweep = true; continue; }
+            if (std::string(argv[i]) == "--no-batched-sweep") { batched_sweep = false; continue; }
             if (std::string(argv[i]) == "--josephson") { run_josephson = true; continue; }
             if (std::string(argv[i]) == "--tfim") { run_tfim = true; continue; }
             if (std::string(argv[i]) == "--hfield" && i+1 < argc) { h_field = std::atof(argv[++i]); continue; }
@@ -405,13 +412,15 @@ int main(int argc, char** argv) {
     try {
         if (run_josephson) {
             return test_josephson(L, chi_max, n_outer, n_segments, n_local, n_warmup,
-                                  gpu_svd, ns_split, davidson, rsvd, n_max, E_J, E_C, phi_ext, quiet);
+                                  gpu_svd, ns_split, davidson, rsvd, n_max, E_J, E_C, phi_ext,
+                                  quiet, batched_sweep);
         } else if (run_tfim) {
             return test_tfim(L, chi_max, n_outer, n_segments, n_local, n_warmup,
-                             gpu_svd, ns_split, davidson, rsvd, J_tfim, h_field, quiet);
+                             gpu_svd, ns_split, davidson, rsvd, J_tfim, h_field,
+                             quiet, batched_sweep);
         } else {
             return test_heisenberg(L, chi_max, n_outer, n_segments, n_local, n_warmup,
-                                   gpu_svd, ns_split, davidson, rsvd, quiet);
+                                   gpu_svd, ns_split, davidson, rsvd, quiet, batched_sweep);
         }
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << std::endl;
