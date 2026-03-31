@@ -40,8 +40,13 @@
 
 template<typename Scalar>
 PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_segments, double tol)
-    : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), tol_(tol), energy_(0.0),
+    : L_(L), d_(d), chi_max_(pad_mfma16(chi_max)), chi_max_user_(chi_max),
+      D_mpo_(D_mpo), tol_(tol), energy_(0.0),
       n_segments_(n_segments) {
+
+    if (chi_max_ != chi_max_user_) {
+        printf("[OPT] MFMA-16 padding: chi_max %d -> %d\n", chi_max_user_, chi_max_);
+    }
 
     if (L < 2 * n_segments) {
         throw std::runtime_error("Need at least 2 sites per segment: L >= 2*n_segments");
@@ -619,19 +624,34 @@ void PDMRGGPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
         T2, cL * cR));
 
     // Step 3: Loop of GEMMs — T2 × R_env
-    for (int s1p = 0; s1p < d; s1p++) {
+    // Strided batched over s1p when d<=2 and chi>=16 (avoids cache contention at batch_count>2)
+    if (cL >= 16 && cR >= 16 && d <= 2) {
         for (int s2p = 0; s2p < d; s2p++) {
             for (int n = 0; n < D; n++) {
                 Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
-                int ws_out = n * dd + s1p * d + s2p;
-                ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                ROCBLAS_CHECK(Traits::gemm_strided_batched(handles_[si],
                     rocblas_operation_none, rocblas_operation_none,
-                    cL, cR, cR,
-                    &one,
-                    T2 + (size_t)ws_out * cL * cR, cL,
-                    R_env + (size_t)n * cR, cR * D,
-                    &beta,
-                    d_result + s1p * cL + (size_t)s2p * cL * d, cL * dd));
+                    cL, cR, cR, &one,
+                    T2 + (size_t)(n * dd + s2p) * cL * cR, cL, (rocblas_stride)(d * cL * cR),
+                    R_env + (size_t)n * cR, cR * D, (rocblas_stride)0,
+                    &beta, d_result + (size_t)s2p * cL * d, cL * dd, (rocblas_stride)cL, d));
+            }
+        }
+    } else {
+        for (int s1p = 0; s1p < d; s1p++) {
+            for (int s2p = 0; s2p < d; s2p++) {
+                for (int n = 0; n < D; n++) {
+                    Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
+                    int ws_out = n * dd + s1p * d + s2p;
+                    ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                        rocblas_operation_none, rocblas_operation_none,
+                        cL, cR, cR,
+                        &one,
+                        T2 + (size_t)ws_out * cL * cR, cL,
+                        R_env + (size_t)n * cR, cR * D,
+                        &beta,
+                        d_result + s1p * cL + (size_t)s2p * cL * d, cL * dd));
+                }
             }
         }
     }
@@ -2249,10 +2269,20 @@ void PDMRGGPUOpt<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta
         &zero_val,
         U, cL * cR));
 
-    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']  (batched)
-    // Batch d GEMMs per wp (safe: different sp write to different C locations).
-    {
-        Scalar* h_A3[D * d], *h_B3[D * d], *h_C3[D * d];
+    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
+    // Strided batched over sp when d<=2 and chi>=16 (eliminates host pointer DMA)
+    if (cL >= 16 && cR >= 16 && d <= 2) {
+        for (int wp = 0; wp < D; wp++) {
+            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
+            ROCBLAS_CHECK(Traits::gemm_strided_batched(handles_[si],
+                rocblas_operation_none, rocblas_operation_none,
+                cL, cR, cR, &one,
+                U + (size_t)wp * d * cL * cR, cL, (rocblas_stride)(cL * cR),
+                R_env + wp * cR, cR * D, (rocblas_stride)0,
+                &beta, d_result, cL * d, (rocblas_stride)cL, d));
+        }
+    } else {
+        Scalar* h_A3[256], *h_B3[256], *h_C3[256];
         for (int wp = 0; wp < D; wp++) {
             Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
             for (int sp = 0; sp < d; sp++) {

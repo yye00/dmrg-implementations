@@ -19,7 +19,13 @@
  *
  * ALL tensor contractions on GPU via rocBLAS gemm.
  * Fused two-site MPO (WW) precomputed for efficient H_eff application.
+ * 3. Dimension padding to MFMA-16 multiples for MI300X tile alignment
+ * 4. Strided batched Step-3 GEMMs to reduce kernel launch overhead
  */
+
+// Round up to next multiple of 16 for MI300X MFMA FP64 tile alignment
+static inline int pad_mfma16(int x) { return (x + 15) & ~15; }
+
 template<typename Scalar>
 class DMRG2GPUOpt {
     using Traits = ScalarTraits<Scalar>;
@@ -45,7 +51,7 @@ public:
 
 private:
     // System parameters
-    int L_, d_, chi_max_, D_mpo_;
+    int L_, d_, chi_max_, chi_max_user_, D_mpo_;
     double tol_;
     double energy_;
 

@@ -40,7 +40,12 @@ static int prof_heff_calls = 0;
 
 template<typename Scalar>
 DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
-    : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), tol_(tol), energy_(0.0) {
+    : L_(L), d_(d), chi_max_(pad_mfma16(chi_max)), chi_max_user_(chi_max),
+      D_mpo_(D_mpo), tol_(tol), energy_(0.0) {
+
+    if (chi_max_ != chi_max_user_) {
+        printf("[OPT] MFMA-16 padding: chi_max %d -> %d\n", chi_max_user_, chi_max_);
+    }
 
     // Bond dimensions (same as single-site: min-cut formula capped at chi_max)
     bond_dims_.resize(L + 1);
@@ -469,19 +474,38 @@ void DMRG2GPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
         T2, cL * cR));
 
     // Step 3: Loop of GEMMs — contract R_env
-    for (int s1p = 0; s1p < d; s1p++) {
+    // Strided batched over s1p when d<=2 and chi>=16 (avoids cache contention at batch_count>2)
+    if (cL >= 16 && cR >= 16 && d <= 2) {
         for (int s2p = 0; s2p < d; s2p++) {
             for (int n = 0; n < D; n++) {
                 Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
-                int ws_out = n * dd + s1p * d + s2p;
-                ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                // Batch over s1p: T2 columns at offsets n*dd+s1p*d+s2p are spaced by d in ws_out
+                // A: T2 + (n*dd + 0*d + s2p)*cL*cR, strideA = d*cL*cR
+                // B: R_env + n*cR, strideB = 0 (shared)
+                // C: d_result + 0*cL + s2p*cL*d, strideC = cL (interleaved by s1p)
+                ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
                     rocblas_operation_none, rocblas_operation_none,
-                    cL, cR, cR,
-                    &one,
-                    T2 + ws_out * cL * cR, cL,
-                    R_env + n * cR, cR * D,
-                    &beta,
-                    d_result + s1p * cL + s2p * cL * d, cL * dd));
+                    cL, cR, cR, &one,
+                    T2 + (size_t)(n * dd + s2p) * cL * cR, cL, (rocblas_stride)(d * cL * cR),
+                    R_env + n * cR, cR * D, (rocblas_stride)0,
+                    &beta, d_result + s2p * cL * d, cL * dd, (rocblas_stride)cL, d));
+            }
+        }
+    } else {
+        for (int s1p = 0; s1p < d; s1p++) {
+            for (int s2p = 0; s2p < d; s2p++) {
+                for (int n = 0; n < D; n++) {
+                    Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
+                    int ws_out = n * dd + s1p * d + s2p;
+                    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                        rocblas_operation_none, rocblas_operation_none,
+                        cL, cR, cR,
+                        &one,
+                        T2 + ws_out * cL * cR, cL,
+                        R_env + n * cR, cR * D,
+                        &beta,
+                        d_result + s1p * cL + s2p * cL * d, cL * dd));
+                }
             }
         }
     }
@@ -1577,8 +1601,12 @@ double DMRG2GPUOpt<Scalar>::sweep_right_to_left() {
 template<typename Scalar>
 double DMRG2GPUOpt<Scalar>::run(int n_sweeps) {
     const char* type_name = Traits::is_complex ? "complex128" : "float64";
-    printf("=== GPU-Native Two-Site DMRG-OPT (Newton-Schulz + Block-Davidson, %s) ===\n", type_name);
-    printf("L = %d, d = %d, chi_max = %d, D_mpo = %d\n", L_, d_, chi_max_, D_mpo_);
+    printf("=== GPU-Native Two-Site DMRG-OPT (NS + Davidson + MFMA-16 pad + batched, %s) ===\n", type_name);
+    if (chi_max_ != chi_max_user_)
+        printf("L = %d, d = %d, chi_max = %d (padded from %d), D_mpo = %d\n",
+               L_, d_, chi_max_, chi_max_user_, D_mpo_);
+    else
+        printf("L = %d, d = %d, chi_max = %d, D_mpo = %d\n", L_, d_, chi_max_, D_mpo_);
     printf("Running %d sweeps...\n\n", n_sweeps);
 
     auto t_start = std::chrono::high_resolution_clock::now();
