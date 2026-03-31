@@ -620,9 +620,9 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
                              hipMemcpyDeviceToDevice, stream_));
 
     // Fixed iteration count — no convergence check, no mid-loop sync.
-    // Cap at 30: Lanczos converges in ~10-15 iters with a good initial guess.
-    // Running past convergence corrupts the basis (beta→0 causes 1/beta→∞).
-    int niter = std::min(30, max_iter);
+    // Cap at 15: Lanczos typically converges in 5-10 iters after first sweep.
+    // Beta clamping in kernel prevents basis corruption past convergence.
+    int niter = std::min(15, max_iter);
     for (int iter = 0; iter < niter; iter++) {
         Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
 
