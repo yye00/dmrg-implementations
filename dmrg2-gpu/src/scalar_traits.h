@@ -48,7 +48,7 @@ struct ScalarTraits<double> {
     static Scalar neg(Scalar x) { return -x; }
 
     // Scale a scalar by a real value
-    static Scalar scale_by_real(RealType s, Scalar v) { return s * v; }
+    static __host__ __device__ Scalar scale_by_real(RealType s, Scalar v) { return s * v; }
 
     // Random value for initialization
     static Scalar random_val() { return 2.0 * rand() / RAND_MAX - 1.0; }
@@ -147,7 +147,7 @@ struct ScalarTraits<hipDoubleComplex> {
     static RealType real_part(Scalar x) { return hipCreal(x); }
     static Scalar neg(Scalar x) { return make_hipDoubleComplex(-hipCreal(x), -hipCimag(x)); }
 
-    static Scalar scale_by_real(RealType s, Scalar v) {
+    static __host__ __device__ Scalar scale_by_real(RealType s, Scalar v) {
         return make_hipDoubleComplex(s * hipCreal(v), s * hipCimag(v));
     }
 
@@ -303,6 +303,62 @@ __device__ inline hipDoubleComplex dev_negate(hipDoubleComplex x) {
 template<typename Scalar>
 __global__ void negate_scalar_kernel(const Scalar* in, Scalar* out) {
     out[0] = dev_negate(in[0]);
+}
+
+template<typename RealType>
+__global__ void invert_nrm_kernel(const RealType* nrm, RealType* inv_nrm) {
+    inv_nrm[0] = RealType(1.0) / nrm[0];
+}
+
+// ============================================================================
+// SVD post-processing kernels: keep U/S/Vh on GPU, avoid D2H→CPU→H2D roundtrip
+// ============================================================================
+
+template<typename RealType>
+__global__ void svd_truncate_kernel(const RealType* S, int max_k, double tol, int* d_new_k) {
+    int new_k = max_k;
+    for (int i = 0; i < max_k; i++) {
+        if (S[i] < tol) { new_k = i; break; }
+    }
+    if (new_k == 0) new_k = 1;
+    d_new_k[0] = new_k;
+}
+
+template<typename Scalar, typename RealType>
+__global__ void scale_rows_by_diag_kernel(const RealType* S, const Scalar* A, int lda,
+                                           Scalar* C, int ldc, int nrows, int ncols) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = nrows * ncols;
+    if (idx < total) {
+        int i = idx % nrows;
+        int j = idx / nrows;
+        C[i + j * ldc] = ScalarTraits<Scalar>::scale_by_real(S[i], A[i + j * lda]);
+    }
+}
+
+template<typename Scalar, typename RealType>
+__global__ void scale_cols_by_diag_kernel(const RealType* S, const Scalar* A, int lda,
+                                           Scalar* C, int ldc, int nrows, int ncols) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = nrows * ncols;
+    if (idx < total) {
+        int i = idx % nrows;
+        int j = idx / nrows;
+        C[i + j * ldc] = ScalarTraits<Scalar>::scale_by_real(S[j], A[i + j * lda]);
+    }
+}
+
+template<typename Scalar>
+__global__ void extract_cols_kernel(const Scalar* in, int lda_in,
+                                     Scalar* out, int lda_out,
+                                     int nrows, int ncols) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = nrows * ncols;
+    if (idx < total) {
+        int i = idx % nrows;
+        int j = idx / nrows;
+        out[i + j * lda_out] = in[i + j * lda_in];
+    }
 }
 
 // ============================================================================

@@ -325,8 +325,11 @@ void PDMRGGPU<Scalar>::free_gpu_resources() {
 
 template<typename Scalar>
 void PDMRGGPU<Scalar>::allocate_mps_tensor(int site, int cL, int cR) {
-    if (d_mps_tensors_[site]) HIP_CHECK(hipFree(d_mps_tensors_[site]));
-    HIP_CHECK(hipMalloc(&d_mps_tensors_[site], cL * d_ * cR * sizeof(Scalar)));
+    size_t max_sz = (size_t)chi_max_ * d_ * chi_max_ * sizeof(Scalar);
+    if (!d_mps_tensors_[site]) {
+        HIP_CHECK(hipMalloc(&d_mps_tensors_[site], max_sz));
+    }
+    (void)cL; (void)cR;
 }
 
 template<typename Scalar>
@@ -629,19 +632,29 @@ void PDMRGGPU<Scalar>::update_left_env(int site, int si) {
         &zero_val,
         U, chi_in * chi_out));
 
-    // Step 3: L_new_w'[b,b'] = sum_{a',s'} conj(U[a',ws',b])^H * A[a',s',b']
-    for (int wp = 0; wp < D; wp++) {
+    // Step 3: L_new_w'[b,b'] = sum_{a',s'} conj(U[a',ws',b])^H * A[a',s',b']  (batched)
+    // Batch D GEMMs per sp (safe: different wp write to different C locations).
+    {
+        Scalar* h_A3[D * d], *h_B3[D * d], *h_C3[D * d];
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+            for (int wp = 0; wp < D; wp++) {
+                h_A3[wp] = U + (wp * d + sp) * chi_in * chi_out;
+                h_B3[wp] = A + sp * chi_in;
+                h_C3[wp] = L_new + wp * chi_out;
+            }
+            HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, h_A3, D*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, h_B3, D*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, h_C3, D*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
                 Traits::op_h, rocblas_operation_none,
                 chi_out, chi_out, chi_in,
                 &one,
-                U + ws_out * chi_in * chi_out, chi_in,
-                A + sp * chi_in, chi_in * d,
+                (const Scalar**)ws.d_batch_A, chi_in,
+                (const Scalar**)ws.d_batch_B, chi_in * d,
                 &beta,
-                L_new + wp * chi_out, chi_out * D));
+                ws.d_batch_C, chi_out * D,
+                D));
         }
     }
 
@@ -698,19 +711,29 @@ void PDMRGGPU<Scalar>::update_right_env(int site, int si) {
         &zero_val,
         U, chi_out * chi_in));
 
-    // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
-    for (int w = 0; w < D; w++) {
+    // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']  (batched)
+    // Batch D GEMMs per sp (safe: different w write to different C locations).
+    {
+        Scalar* h_A3[D * d], *h_B3[D * d], *h_C3[D * d];
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            int ws_out = w * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+            for (int w = 0; w < D; w++) {
+                h_A3[w] = U + (w * d + sp) * chi_out * chi_in;
+                h_B3[w] = A + sp * chi_out;
+                h_C3[w] = R_new + w * chi_out;
+            }
+            HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, h_A3, D*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, h_B3, D*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, h_C3, D*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
                 rocblas_operation_none, Traits::op_h,
                 chi_out, chi_out, chi_in,
                 &one,
-                U + ws_out * chi_out * chi_in, chi_out,
-                A + sp * chi_out, chi_out * d,
+                (const Scalar**)ws.d_batch_A, chi_out,
+                (const Scalar**)ws.d_batch_B, chi_out * d,
                 &beta,
-                R_new + w * chi_out, chi_out * D));
+                ws.d_batch_C, chi_out * D,
+                D));
         }
     }
 }
@@ -767,10 +790,14 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
     std::vector<double> h_alpha(max_iter);
     std::vector<double> h_beta(max_iter);
 
-    // v[0] = theta / ||theta|| (host pointer mode for initial setup)
+    // v[0] = theta / ||theta|| — use device pointer mode to avoid implicit sync
     double norm;
-    ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &norm));
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
+    ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
 
+    // Check norm on host (need the value for near-zero check)
+    HIP_CHECK(hipMemcpy(&norm, ws.d_nrm2_result, sizeof(double), hipMemcpyDeviceToHost));
     if (norm < 1e-14) {
         std::vector<Scalar> h_init(n);
         srand(42 + site);
@@ -779,8 +806,12 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &norm));
     }
 
-    double inv_norm = 1.0 / norm;
-    ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, &inv_norm, d_theta, 1));
+    // Normalize using device pointer mode
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
+    hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
+                       ws.d_nrm2_result, ws.d_inv_nrm);
+    ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
     HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta, n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
 
     double prev_energy = 1e30;
@@ -929,7 +960,7 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
 
     double energy = h_D[0];
 
-    // Reconstruct ground state: |theta> = sum_i c[i] |v_i> (host pointer mode)
+    // Reconstruct ground state: |theta> = sum_i c[i] |v_i> (device pointer mode)
     std::vector<Scalar> h_ritz_scalar(niter);
     for (int i = 0; i < niter; i++) {
         h_ritz_scalar[i] = Traits::make_scalar(h_Z[i]);
@@ -937,19 +968,21 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
     HIP_CHECK(hipMemcpyAsync(ws.d_ritz_coeffs, h_ritz_scalar.data(),
               niter * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
 
-    Scalar one_sc = Traits::one(), zero_sc = Traits::zero();
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
     ROCBLAS_CHECK(Traits::gemv(
         handles_[si], rocblas_operation_none,
-        n, niter, &one_sc,
+        n, niter, ws.d_const_one,
         d_lanczos_v, n,
         ws.d_ritz_coeffs, 1,
-        &zero_sc, d_theta, 1
+        ws.d_const_zero, d_theta, 1
     ));
 
-    // Normalize
-    ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &norm));
-    inv_norm = 1.0 / norm;
-    ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, &inv_norm, d_theta, 1));
+    // Normalize on device
+    ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
+    hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
+                       ws.d_nrm2_result, ws.d_inv_nrm);
+    ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
 
     return energy;
 }
@@ -1005,18 +1038,23 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
             rocblas_outofplace,
             ws.d_svd_info);
 
-        // GPU SVD: U, S, Vh already on device. Only download S for truncation check.
-        HIP_CHECK(hipMemcpy(ws.h_svd_S.data(), ws.d_svd_S, full_k * sizeof(RealType), hipMemcpyDeviceToHost));
-        h_S_data = ws.h_svd_S.data();
         gpu_svd_path = true;
     }
 
     // Truncation
-    int new_k = k;
-    for (int i = 0; i < new_k; i++) {
-        if (h_S_data[i] < 1e-14) { new_k = i; break; }
+    int new_k;
+    if (gpu_svd_path) {
+        // GPU path: truncation on device, only copy 1 int back
+        hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, streams_[si],
+                           ws.d_svd_S, k, 1e-14, ws.d_svd_info);
+        HIP_CHECK(hipMemcpy(&new_k, ws.d_svd_info, sizeof(int), hipMemcpyDeviceToHost));
+    } else {
+        new_k = k;
+        for (int i = 0; i < new_k; i++) {
+            if (h_S_data[i] < 1e-14) { new_k = i; break; }
+        }
+        if (new_k == 0) new_k = 1;
     }
-    if (new_k == 0) new_k = 1;
 
     if (gpu_svd_path) {
         // GPU SVD path: U, S, Vh all on device already
@@ -1364,19 +1402,29 @@ void PDMRGGPU<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta_in
         &zero_val,
         U, cL * cR));
 
-    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
-    for (int wp = 0; wp < D; wp++) {
-        Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
-        for (int sp = 0; sp < d; sp++) {
-            int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']  (batched)
+    // Batch d GEMMs per wp (safe: different sp write to different C locations).
+    {
+        Scalar* h_A3[D * d], *h_B3[D * d], *h_C3[D * d];
+        for (int wp = 0; wp < D; wp++) {
+            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
+            for (int sp = 0; sp < d; sp++) {
+                h_A3[sp] = U + (wp * d + sp) * cL * cR;
+                h_B3[sp] = R_env + wp * cR;
+                h_C3[sp] = d_result + sp * cL;
+            }
+            HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, h_A3, d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, h_B3, d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, h_C3, d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
                 rocblas_operation_none, rocblas_operation_none,
                 cL, cR, cR,
                 &one,
-                U + ws_out * cL * cR, cL,
-                R_env + wp * cR, cR * D,
+                (const Scalar**)ws.d_batch_A, cL,
+                (const Scalar**)ws.d_batch_B, cR * D,
                 &beta,
-                d_result + sp * cL, cL * d));
+                ws.d_batch_C, cL * d,
+                d));
         }
     }
 }
@@ -1433,16 +1481,23 @@ void PDMRGGPU<Scalar>::svd_split_single_site(int site, Scalar* d_theta, char dir
             ws.d_svd_E,
             rocblas_outofplace,
             ws.d_svd_info);
-        HIP_CHECK(hipMemcpy(ws.h_svd_S.data(), ws.d_svd_S, full_k * sizeof(RealType), hipMemcpyDeviceToHost));
-        h_S_data = ws.h_svd_S.data();
     }
 
     // Truncation
-    int new_k = k;
-    for (int i = 0; i < new_k; i++) {
-        if (h_S_data[i] < 1e-14) { new_k = i; break; }
+    int new_k;
+    if (!use_cpu_svd_) {
+        // GPU path: truncation on device, only copy 1 int back
+        hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, streams_[si],
+                           ws.d_svd_S, k, 1e-14, ws.d_svd_info);
+        HIP_CHECK(hipMemcpy(&new_k, ws.d_svd_info, sizeof(int), hipMemcpyDeviceToHost));
+    } else {
+        h_S_data = ws.h_svd_S.data();
+        new_k = k;
+        for (int i = 0; i < new_k; i++) {
+            if (h_S_data[i] < 1e-14) { new_k = i; break; }
+        }
+        if (new_k == 0) new_k = 1;
     }
-    if (new_k == 0) new_k = 1;
 
     Scalar one = Traits::one(), zero_val = Traits::zero();
 
@@ -1834,9 +1889,11 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
             threads[k] = std::thread([this, k, &sweep_fn]{ sweep_fn(this, k); });
         }
         for (auto& t : threads) t.join();
-        // Sync all GPU streams — segment sweeps launch async GPU work that
+        // Sync per-segment GPU streams — segment sweeps launch async GPU work that
         // must complete before boundary coupling reads their outputs on stream 0
-        HIP_CHECK(hipDeviceSynchronize());
+        for (int s = 0; s < n_segments_; s++) {
+            HIP_CHECK(hipStreamSynchronize(streams_[s]));
+        }
     };
 
     bool has_odd_boundaries = ((int)boundary_bonds_.size() > 1);

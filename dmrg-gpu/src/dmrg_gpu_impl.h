@@ -192,8 +192,13 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
 
 template<typename Scalar>
 void DMRGGPU<Scalar>::allocate_mps_tensor(int site, int cL, int cR) {
-    if (d_mps_tensors_[site]) HIP_CHECK(hipFree(d_mps_tensors_[site]));
-    HIP_CHECK(hipMalloc(&d_mps_tensors_[site], cL * d_ * cR * sizeof(Scalar)));
+    // Pre-allocate at chi_max to avoid hipFree/hipMalloc per bond (sync points)
+    size_t needed = (size_t)cL * d_ * cR * sizeof(Scalar);
+    size_t max_sz = (size_t)chi_max_ * d_ * chi_max_ * sizeof(Scalar);
+    if (!d_mps_tensors_[site]) {
+        HIP_CHECK(hipMalloc(&d_mps_tensors_[site], max_sz));
+    }
+    (void)needed;  // logical size tracked by bond_dims_
 }
 
 template<typename Scalar>
@@ -345,19 +350,30 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
         &zero_val,
         U, cL * cR));
 
-    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
-    for (int wp = 0; wp < D; wp++) {
-        Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
-        for (int sp = 0; sp < d; sp++) {
-            int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']  (batched GEMM)
+    // Batch d GEMMs per wp (safe: different sp write to different C locations).
+    // Cannot batch across wp since same sp/different wp accumulate into same C.
+    {
+        Scalar* h_A3[D * d], *h_B3[D * d], *h_C3[D * d];
+        for (int wp = 0; wp < D; wp++) {
+            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
+            for (int sp = 0; sp < d; sp++) {
+                h_A3[sp] = U + (wp * d + sp) * cL * cR;
+                h_B3[sp] = R_env + wp * cR;
+                h_C3[sp] = d_result + sp * cL;
+            }
+            HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A3, d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B3, d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C3, d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
                 rocblas_operation_none, rocblas_operation_none,
                 cL, cR, cR,
                 &one,
-                U + ws_out * cL * cR, cL,
-                R_env + wp * cR, cR * D,
+                (const Scalar**)d_batch_A_, cL,
+                (const Scalar**)d_batch_B_, cR * D,
                 &beta,
-                d_result + sp * cL, cL * d));
+                d_batch_C_, cL * d,
+                d));
         }
     }
 }
@@ -416,23 +432,33 @@ void DMRGGPU<Scalar>::update_left_env(int site) {
         &zero_val,
         U, chi_in * chi_out));
 
-    // Step 3: L_new_w'[b,b'] = sum_{a',s'} U[a',ws',b] * conj(A[a',s',b'])
+    // Step 3: L_new_w'[b,b'] = sum_{a',s'} U[a',ws',b] * conj(A[a',s',b'])  (batched)
     //
     // gemm(op_h, N, U, A) computes U^H * A = conj(desired result) for complex.
     // For real, U^T * A is correct directly.
     // For complex, we conjugate L_new after the loop.
-    for (int wp = 0; wp < D; wp++) {
+    // Batch D GEMMs per sp (safe: different wp write to different C locations).
+    {
+        Scalar* h_A3[D * d], *h_B3[D * d], *h_C3[D * d];
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            for (int wp = 0; wp < D; wp++) {
+                h_A3[wp] = U + (wp * d + sp) * chi_in * chi_out;
+                h_B3[wp] = A + sp * chi_in;
+                h_C3[wp] = L_new + wp * chi_out;
+            }
+            HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A3, D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B3, D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C3, D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
                 Traits::op_h, rocblas_operation_none,
                 chi_out, chi_out, chi_in,
                 &one,
-                U + ws_out * chi_in * chi_out, chi_in,
-                A + sp * chi_in, chi_in * d,
+                (const Scalar**)d_batch_A_, chi_in,
+                (const Scalar**)d_batch_B_, chi_in * d,
                 &beta,
-                L_new + wp * chi_out, chi_out * D));
+                d_batch_C_, chi_out * D,
+                D));
         }
     }
 
@@ -496,20 +522,30 @@ void DMRGGPU<Scalar>::update_right_env(int site) {
         &zero_val,
         U, chi_out * chi_in));
 
-    // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
+    // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']  (batched)
     // For complex: use conjugate transpose (op_h) on A for <bra|
-    for (int w = 0; w < D; w++) {
+    // Batch D GEMMs per sp (safe: different w write to different C locations).
+    {
+        Scalar* h_A3[D * d], *h_B3[D * d], *h_C3[D * d];
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            int ws_out = w * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            for (int w = 0; w < D; w++) {
+                h_A3[w] = U + (w * d + sp) * chi_out * chi_in;
+                h_B3[w] = A + sp * chi_out;
+                h_C3[w] = R_new + w * chi_out;
+            }
+            HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A3, D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B3, D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C3, D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
                 rocblas_operation_none, Traits::op_h,
                 chi_out, chi_out, chi_in,
                 &one,
-                U + ws_out * chi_out * chi_in, chi_out,
-                A + sp * chi_out, chi_out * d,
+                (const Scalar**)d_batch_A_, chi_out,
+                (const Scalar**)d_batch_B_, chi_out * d,
                 &beta,
-                R_new + w * chi_out, chi_out * D));
+                d_batch_C_, chi_out * D,
+                D));
         }
     }
 }
@@ -724,18 +760,22 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     }
     HIP_CHECK(hipMemcpy(d_ritz_coeffs_, h_ritz_scalar.data(), niter * sizeof(Scalar), hipMemcpyHostToDevice));
 
-    Scalar one_sc = Traits::one(), zero_sc = Traits::zero();
+    // Use device pointer mode for finalization to avoid implicit GPU syncs
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_device));
     ROCBLAS_CHECK(Traits::gemv(
         rocblas_h_, rocblas_operation_none,
-        n, niter, &one_sc,
+        n, niter, d_const_one_,
         d_lanczos_v, n,
         d_ritz_coeffs_, 1,
-        &zero_sc, d_theta, 1
+        d_const_zero_, d_theta, 1
     ));
 
-    ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, &norm));
-    inv_norm = 1.0 / norm;
-    ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, &inv_norm, d_theta, 1));
+    // nrm2 writes to device, kernel computes 1/norm, scal normalizes
+    ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
+    hipLaunchKernelGGL(invert_nrm_kernel<RealType>, dim3(1), dim3(1), 0, 0,
+                       d_nrm2_result_, d_inv_nrm_);
+    ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
 
     return energy;
 }
@@ -769,38 +809,37 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
         rocblas_outofplace,
         d_svd_info_);
 
-    HIP_CHECK(hipMemcpy(h_svd_U_.data(), d_svd_U_, m * full_k * sizeof(Scalar), hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(h_svd_S_.data(), d_svd_S_, full_k * sizeof(RealType), hipMemcpyDeviceToHost));
-    HIP_CHECK(hipMemcpy(h_svd_Vh_.data(), d_svd_Vh_, full_k * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
+    // Truncation: find new_k on GPU, copy just 1 int back
+    hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
+                       d_svd_S_, k, 1e-14, d_svd_info_);
+    int new_k;
+    HIP_CHECK(hipMemcpy(&new_k, d_svd_info_, sizeof(int), hipMemcpyDeviceToHost));
 
-    Scalar* h_U_data = h_svd_U_.data();
-    RealType* h_S_data = h_svd_S_.data();
-    Scalar* h_Vh_data = h_svd_Vh_.data();
-
-    // Truncation (CPU, tiny loop)
-    int new_k = k;
-    for (int i = 0; i < new_k; i++) {
-        if (h_S_data[i] < 1e-14) { new_k = i; break; }
-    }
-    if (new_k == 0) new_k = 1;
+    int threads = 256;
 
     if (direction == 'R') {
         int new_chi_R = new_k;
 
-        // Compute S*Vh on CPU
-        for (int j = 0; j < n_svd; j++)
-            for (int i = 0; i < new_k; i++)
-                h_svd_tmp_[i + j * new_k] = Traits::scale_by_real(h_S_data[i], h_Vh_data[i + j * full_k]);
-
-        // Upload U[:, :new_k]
+        // MPS[site] = U[:, :new_k]  (column slice, on GPU)
         allocate_mps_tensor(site, cL, new_chi_R);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_U_data,
-                            m * new_chi_R * sizeof(Scalar), hipMemcpyHostToDevice));
+        if (new_k == full_k) {
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_svd_U_,
+                                m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice));
+        } else {
+            int total = m * new_k;
+            hipLaunchKernelGGL(extract_cols_kernel<Scalar>, dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
+                               d_svd_U_, m, d_mps_tensors_[site], m, m, new_k);
+        }
+
+        // S*Vh → d_svd_work_ (scale rows of Vh by S, on GPU)
+        {
+            int total = new_k * n_svd;
+            hipLaunchKernelGGL((scale_rows_by_diag_kernel<Scalar, RealType>), dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
+                               d_svd_S_, d_svd_Vh_, full_k, d_svd_work_, new_k, new_k, n_svd);
+        }
 
         // Absorb S*Vh into A[site+1]
         if (site + 1 < L_) {
-            HIP_CHECK(hipMemcpy(d_svd_work_, h_svd_tmp_.data(),
-                                new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
             int next_cR = chi_R(site + 1);
             Scalar one = Traits::one(), zero_val = Traits::zero();
             ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
@@ -818,28 +857,26 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
     } else {  // direction == 'L'
         int new_chi_L = new_k;
 
-        // Upload Vh[:new_k, :]
+        // MPS[site] = Vh[:new_k, :]  (row slice = column slice of Vh in col-major)
         allocate_mps_tensor(site, new_chi_L, cR);
         if (new_chi_L == full_k) {
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_Vh_data,
-                                full_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_svd_Vh_,
+                                full_k * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice));
         } else {
-            for (int j = 0; j < n_svd; j++)
-                for (int i = 0; i < new_chi_L; i++)
-                    h_svd_tmp_[i + j * new_chi_L] = h_Vh_data[i + j * full_k];
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_svd_tmp_.data(),
-                                new_chi_L * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+            int total = new_chi_L * n_svd;
+            hipLaunchKernelGGL(extract_cols_kernel<Scalar>, dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
+                               d_svd_Vh_, full_k, d_mps_tensors_[site], new_chi_L, new_chi_L, n_svd);
         }
 
-        // Compute U*S on CPU
-        for (int j = 0; j < new_k; j++)
-            for (int i = 0; i < m; i++)
-                h_svd_tmp_[i + j * m] = Traits::scale_by_real(h_S_data[j], h_U_data[i + j * m]);
+        // U*S → d_svd_work_ (scale columns of U by S, on GPU)
+        {
+            int total = m * new_k;
+            hipLaunchKernelGGL((scale_cols_by_diag_kernel<Scalar, RealType>), dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
+                               d_svd_S_, d_svd_U_, m, d_svd_work_, m, m, new_k);
+        }
 
         // Absorb U*S into A[site-1]
         if (site > 0) {
-            HIP_CHECK(hipMemcpy(d_svd_work_, h_svd_tmp_.data(),
-                                m * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
             int prev_cL = chi_L(site - 1);
             Scalar one = Traits::one(), zero_val = Traits::zero();
             ROCBLAS_CHECK(Traits::gemm(rocblas_h_,

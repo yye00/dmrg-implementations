@@ -402,6 +402,17 @@ inline void conjugate_inplace(hipDoubleComplex* data, int n, hipStream_t stream)
 // Replaces host-side scaling loops + H↔D round-trips.
 // ============================================================================
 
+// Find truncation point: first index where S[i] < tol, clamped to [1, max_k]
+template<typename RealType>
+__global__ void svd_truncate_kernel(const RealType* S, int max_k, double tol, int* d_new_k) {
+    int new_k = max_k;
+    for (int i = 0; i < max_k; i++) {
+        if (S[i] < tol) { new_k = i; break; }
+    }
+    if (new_k == 0) new_k = 1;
+    d_new_k[0] = new_k;
+}
+
 // Scale columns of A (m × n, column-major) by real diagonal d:
 //   C[i, j] = A[i, j] * d[j]     (each column j multiplied by d[j])
 // Used for U * diag(S): columns of U scaled by singular values.
