@@ -111,6 +111,15 @@ private:
         Scalar* d_const_one;         // constant 1.0
         Scalar* d_const_zero;        // constant 0.0
         Scalar* d_const_neg_one;     // constant -1.0
+        // GPU tridiagonal eigensolver workspace (rocsolver_dsteqr)
+        RealType* d_steqr_D;
+        RealType* d_steqr_E;
+        RealType* d_steqr_C;
+        int* d_steqr_info;
+        // GPU-side convergence detection
+        int* d_converged;
+        RealType* d_prev_energy;
+        int* d_effective_niter;
         // GPU SVD
         Scalar* d_svd_A;
         Scalar* d_svd_U;
