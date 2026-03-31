@@ -39,9 +39,14 @@ static int prof_heff_calls = 0;
 
 template<typename Scalar>
 DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
-    : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), tol_(tol), energy_(0.0) {
+    : L_(L), d_(d), chi_max_(pad_mfma16(chi_max)), chi_max_user_(chi_max),
+      D_mpo_(D_mpo), tol_(tol), energy_(0.0) {
 
-    // Bond dimensions
+    if (chi_max_ != chi_max_user_) {
+        printf("[OPT] MFMA-16 padding: chi_max %d -> %d\n", chi_max_user_, chi_max_);
+    }
+
+    // Bond dimensions (using padded chi_max for MFMA alignment)
     bond_dims_.resize(L + 1);
     bond_dims_[0] = 1;
     bond_dims_[L] = 1;
@@ -98,11 +103,16 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_lanczos_v_, (size_t)max_lanczos_iter_ * theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_ritz_coeffs_, max_lanczos_iter_ * sizeof(Scalar)));
 
-    // Batched GEMM pointer arrays
+    // Batched GEMM pointer arrays (Step 1)
     int batch_max = D_mpo_ * d_;
     HIP_CHECK(hipMalloc(&d_batch_A_, batch_max * sizeof(Scalar*)));
     HIP_CHECK(hipMalloc(&d_batch_B_, batch_max * sizeof(Scalar*)));
     HIP_CHECK(hipMalloc(&d_batch_C_, batch_max * sizeof(Scalar*)));
+
+    // Batched GEMM pointer arrays (Step 3)
+    HIP_CHECK(hipMalloc(&d_batch3_A_, batch_max * sizeof(Scalar*)));
+    HIP_CHECK(hipMalloc(&d_batch3_B_, batch_max * sizeof(Scalar*)));
+    HIP_CHECK(hipMalloc(&d_batch3_C_, batch_max * sizeof(Scalar*)));
 
     // SVD workspace (reused as NS scratch)
     int svd_max_dim = chi_max_ * d_;
@@ -214,6 +224,9 @@ void DMRGGPUOpt<Scalar>::free_gpu_resources() {
     if (d_batch_A_) hipFree(d_batch_A_);
     if (d_batch_B_) hipFree(d_batch_B_);
     if (d_batch_C_) hipFree(d_batch_C_);
+    if (d_batch3_A_) hipFree(d_batch3_A_);
+    if (d_batch3_B_) hipFree(d_batch3_B_);
+    if (d_batch3_C_) hipFree(d_batch3_C_);
     if (d_svd_A_) hipFree(d_svd_A_);
     if (d_svd_U_) hipFree(d_svd_U_);
     if (d_svd_S_) hipFree(d_svd_S_);
@@ -395,19 +408,18 @@ void DMRGGPUOpt<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* 
         U, cL * cR));
 
     // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
+    // Batched over s' (d elements) per w' iteration, using strided_batched GEMM
     for (int wp = 0; wp < D; wp++) {
         Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
-        for (int sp = 0; sp < d; sp++) {
-            int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-                rocblas_operation_none, rocblas_operation_none,
-                cL, cR, cR,
-                &one,
-                U + ws_out * cL * cR, cL,
-                R_env + wp * cR, cR * D,
-                &beta,
-                d_result + sp * cL, cL * d));
-        }
+        ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
+            rocblas_operation_none, rocblas_operation_none,
+            cL, cR, cR,
+            &one,
+            U + (size_t)wp * d * cL * cR, cL, (rocblas_stride)(cL * cR),  // A, lda, strideA
+            R_env + wp * cR, cR * D, (rocblas_stride)0,                    // B, ldb, strideB (same B)
+            &beta,
+            d_result, cL * d, (rocblas_stride)cL,                          // C, ldc, strideC
+            d));                                                            // batch_count
     }
 }
 
@@ -466,19 +478,19 @@ void DMRGGPUOpt<Scalar>::update_left_env(int site) {
         U, chi_in * chi_out));
 
     // Step 3: L_new_w'[b,b'] = sum_{a',s'} U[a',ws',b] * conj(A[a',s',b'])
-    for (int wp = 0; wp < D; wp++) {
-        for (int sp = 0; sp < d; sp++) {
-            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-                Traits::op_h, rocblas_operation_none,
-                chi_out, chi_out, chi_in,
-                &one,
-                U + ws_out * chi_in * chi_out, chi_in,
-                A + sp * chi_in, chi_in * d,
-                &beta,
-                L_new + wp * chi_out, chi_out * D));
-        }
+    // Batched over w' (D elements) per s' iteration, using strided_batched GEMM
+    for (int sp = 0; sp < d; sp++) {
+        Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+        ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
+            Traits::op_h, rocblas_operation_none,
+            chi_out, chi_out, chi_in,
+            &one,
+            U + (size_t)sp * chi_in * chi_out, chi_in,
+            (rocblas_stride)((size_t)d * chi_in * chi_out),                // strideA: skip d slots between w' values
+            A + sp * chi_in, chi_in * d, (rocblas_stride)0,               // B same for all w' (strideB=0)
+            &beta,
+            L_new, chi_out * D, (rocblas_stride)chi_out,                  // C, ldc, strideC
+            D));                                                           // batch_count = D
     }
 
     // For complex: L_new = conj(U^H * A) = U^T * conj(A), the correct bra contraction
@@ -542,19 +554,19 @@ void DMRGGPUOpt<Scalar>::update_right_env(int site) {
         U, chi_out * chi_in));
 
     // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
-    for (int w = 0; w < D; w++) {
-        for (int sp = 0; sp < d; sp++) {
-            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            int ws_out = w * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
-                rocblas_operation_none, Traits::op_h,
-                chi_out, chi_out, chi_in,
-                &one,
-                U + ws_out * chi_out * chi_in, chi_out,
-                A + sp * chi_out, chi_out * d,
-                &beta,
-                R_new + w * chi_out, chi_out * D));
-        }
+    // Batched over w (D elements) per s' iteration, using strided_batched GEMM
+    for (int sp = 0; sp < d; sp++) {
+        Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+        ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,
+            rocblas_operation_none, Traits::op_h,
+            chi_out, chi_out, chi_in,
+            &one,
+            U + (size_t)sp * chi_out * chi_in, chi_out,
+            (rocblas_stride)((size_t)d * chi_out * chi_in),               // strideA
+            A + sp * chi_out, chi_out * d, (rocblas_stride)0,             // B same for all w (strideB=0)
+            &beta,
+            R_new, chi_out * D, (rocblas_stride)chi_out,                  // C, ldc, strideC
+            D));                                                           // batch_count = D
     }
 }
 
@@ -1594,8 +1606,12 @@ double DMRGGPUOpt<Scalar>::sweep_right_to_left() {
 template<typename Scalar>
 double DMRGGPUOpt<Scalar>::run(int n_sweeps) {
     const char* type_name = Traits::is_complex ? "complex128" : "float64";
-    printf("=== GPU-Native Single-Site DMRG-OPT (Newton-Schulz + Block-Davidson, %s) ===\n", type_name);
-    printf("L = %d, d = %d, chi_max = %d, D_mpo = %d\n", L_, d_, chi_max_, D_mpo_);
+    printf("=== GPU-Native Single-Site DMRG-OPT (NS + Davidson + MFMA-16 pad + batched, %s) ===\n", type_name);
+    if (chi_max_ != chi_max_user_)
+        printf("L = %d, d = %d, chi_max = %d (padded from %d), D_mpo = %d\n",
+               L_, d_, chi_max_, chi_max_user_, D_mpo_);
+    else
+        printf("L = %d, d = %d, chi_max = %d, D_mpo = %d\n", L_, d_, chi_max_, D_mpo_);
     printf("Running %d sweeps...\n\n", n_sweeps);
 
     auto t_start = std::chrono::high_resolution_clock::now();

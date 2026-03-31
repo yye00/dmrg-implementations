@@ -14,14 +14,20 @@
  *
  * Key algorithmic changes from dmrg-gpu:
  * 1. Newton-Schulz polar decomposition replaces SVD for bond splitting
- *    (BLAS-3 GEMM-heavy, GPU-native)
+ *    (BLAS-3 GEMM-heavy, GPU-native), handles both tall and wide matrices
  * 2. Block-Davidson eigensolver replaces Lanczos (BLAS-3 dominant)
+ * 3. Dimension padding to MFMA-16 multiples for MI300X tile alignment
+ * 4. Batched Step-3 GEMMs reduce kernel launch overhead
  *
  * ALL tensor contractions on GPU via rocBLAS gemm.
  * Only CPU work: control flow, convergence checks on scalars,
  *                small eigendecompositions (Davidson projected H, NS P^H P),
  *                loops over small MPO bond dimension (D=5, d=2) to dispatch GEMMs.
  */
+
+// Round up to next multiple of 16 for MI300X MFMA FP64 tile alignment
+static inline int pad_mfma16(int x) { return (x + 15) & ~15; }
+
 template<typename Scalar>
 class DMRGGPUOpt {
     using Traits = ScalarTraits<Scalar>;
@@ -47,7 +53,7 @@ public:
 
 private:
     // System parameters
-    int L_, d_, chi_max_, D_mpo_;
+    int L_, d_, chi_max_, chi_max_user_, D_mpo_;
     double tol_;
     double energy_;
 
@@ -88,6 +94,11 @@ private:
     Scalar** d_batch_A_;
     Scalar** d_batch_B_;
     Scalar** d_batch_C_;
+
+    // Step-3 batched GEMM pointer arrays (D*d entries for apply_heff/env update)
+    Scalar** d_batch3_A_;
+    Scalar** d_batch3_B_;
+    Scalar** d_batch3_C_;
 
     // SVD workspace (reused as NS scratch)
     Scalar* d_svd_A_;

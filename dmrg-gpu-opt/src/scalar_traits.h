@@ -83,6 +83,17 @@ struct ScalarTraits<double> {
         return rocblas_dgemm_batched(h, opA, opB, m, n, k, alpha, A, lda, B, ldb, beta, C, ldc, batch_count);
     }
 
+    static rocblas_status gemm_strided_batched(rocblas_handle h,
+            rocblas_operation opA, rocblas_operation opB,
+            int m, int n, int k, const Scalar* alpha,
+            const Scalar* A, int lda, rocblas_stride strideA,
+            const Scalar* B, int ldb, rocblas_stride strideB,
+            const Scalar* beta, Scalar* C, int ldc, rocblas_stride strideC,
+            int batch_count) {
+        return rocblas_dgemm_strided_batched(h, opA, opB, m, n, k, alpha,
+            A, lda, strideA, B, ldb, strideB, beta, C, ldc, strideC, batch_count);
+    }
+
     static rocblas_status gemv(rocblas_handle h, rocblas_operation op,
             int m, int n, const Scalar* alpha, const Scalar* A, int lda,
             const Scalar* x, int incx, const Scalar* beta, Scalar* y, int incy) {
@@ -201,6 +212,22 @@ struct ScalarTraits<hipDoubleComplex> {
             reinterpret_cast<const rocblas_double_complex* const*>(B), ldb,
             reinterpret_cast<const rocblas_double_complex*>(beta),
             reinterpret_cast<rocblas_double_complex**>(C), ldc, batch_count);
+    }
+
+    static rocblas_status gemm_strided_batched(rocblas_handle h,
+            rocblas_operation opA, rocblas_operation opB,
+            int m, int n, int k, const Scalar* alpha,
+            const Scalar* A, int lda, rocblas_stride strideA,
+            const Scalar* B, int ldb, rocblas_stride strideB,
+            const Scalar* beta, Scalar* C, int ldc, rocblas_stride strideC,
+            int batch_count) {
+        return rocblas_zgemm_strided_batched(h, opA, opB, m, n, k,
+            reinterpret_cast<const rocblas_double_complex*>(alpha),
+            reinterpret_cast<const rocblas_double_complex*>(A), lda, strideA,
+            reinterpret_cast<const rocblas_double_complex*>(B), ldb, strideB,
+            reinterpret_cast<const rocblas_double_complex*>(beta),
+            reinterpret_cast<rocblas_double_complex*>(C), ldc, strideC,
+            batch_count);
     }
 
     static rocblas_status gemv(rocblas_handle h, rocblas_operation op,
