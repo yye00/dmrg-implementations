@@ -58,7 +58,7 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
     bond_dims_[L] = 1;
     for (int i = 1; i < L; i++) {
         double exact_dim = pow((double)d_, std::min(i, L - i));
-        bond_dims_[i] = (exact_dim > chi_max_) ? chi_max_ : (int)exact_dim;
+        bond_dims_[i] = (exact_dim > chi_max_user_) ? chi_max_user_ : (int)exact_dim;
     }
 
     partition_chain();
@@ -1056,7 +1056,7 @@ void PDMRGGPUOpt<Scalar>::ns_split(int site, Scalar* d_theta, char direction, in
     int m = cL * d_;
     int n_svd = d_ * cR;
     int k = std::min(m, n_svd);
-    int max_k = std::min(k, chi_max_);
+    int max_k = std::min(k, chi_max_user_);
 
     // For very small systems, fall back to SVD
     if (k <= 4 || m < 2 || n_svd < 2) {
@@ -1269,7 +1269,7 @@ void PDMRGGPUOpt<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction, 
     int m = cL * d_;
     int n_svd = d_ * cR;
     int full_k = std::min(m, n_svd);
-    int k = std::min(full_k, chi_max_);
+    int k = std::min(full_k, chi_max_user_);
 
     // If matrix is small enough, fall back to full SVD (rSVD overhead not worth it)
     if (full_k <= k + rsvd_oversampling_ || m <= 2 * k) {
@@ -1425,7 +1425,7 @@ void PDMRGGPUOpt<Scalar>::svd_split(int site, Scalar* d_theta, char direction, i
     int m = cL * d_;
     int n_svd = d_ * cR;
     int full_k = std::min(m, n_svd);
-    int k = std::min(full_k, chi_max_);
+    int k = std::min(full_k, chi_max_user_);
 
     RealType* h_S_data;
     bool gpu_svd_path = false;
@@ -2322,7 +2322,7 @@ void PDMRGGPUOpt<Scalar>::svd_split_single_site(int site, Scalar* d_theta, char 
     if (direction == 'R') { m = cL * d_; n_svd = cR; }
     else                  { m = cL;      n_svd = d_ * cR; }
     int full_k = std::min(m, n_svd);
-    int k = std::min(full_k, chi_max_);
+    int k = std::min(full_k, chi_max_user_);
 
     Scalar* h_U_data = nullptr;
     RealType* h_S_data = nullptr;
