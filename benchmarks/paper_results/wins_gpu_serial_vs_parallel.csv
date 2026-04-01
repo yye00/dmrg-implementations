@@ -1,0 +1,25 @@
+Model,L,chi,Best Serial,Serial time(s),Best Parallel,Parallel time(s),Par/Ser,Winner
+heisenberg,12,20,dmrg2-gpu,0.86,pdmrg-gpu,1.16,1.35x,Serial
+heisenberg,12,50,dmrg-gpu,0.73,pdmrg-gpu,1.13,1.56x,Serial
+heisenberg,12,128,dmrg-gpu,0.73,pdmrg-gpu-opt,1.18,1.62x,Serial
+heisenberg,20,20,dmrg2-gpu,1.50,pdmrg-gpu,2.13,1.42x,Serial
+heisenberg,20,50,dmrg-gpu,1.49,pdmrg-gpu-opt,3.00,2.01x,Serial
+heisenberg,20,128,dmrg-gpu,1.70,pdmrg-gpu,3.88,2.28x,Serial
+josephson,8,20,dmrg2-gpu,2.28,pdmrg-gpu,2.51,1.10x,Serial
+josephson,8,50,dmrg-gpu,1.23,pdmrg-gpu,13.65,11.10x,Serial
+josephson,8,128,dmrg-gpu,1.08,pdmrg-gpu,15.27,14.16x,Serial
+josephson,16,20,dmrg-gpu,6.36,pdmrg-gpu,14.24,2.24x,Serial
+josephson,16,50,dmrg-gpu,10.17,pdmrg-gpu,56.73,5.58x,Serial
+josephson,16,128,dmrg-gpu,4.48,pdmrg-gpu,290.41,64.80x,Serial
+josephson,32,50,dmrg-gpu,30.46,pdmrg-gpu,153.07,5.03x,Serial
+josephson,32,128,dmrg-gpu,29.34,pdmrg-gpu,595.27,20.29x,Serial
+josephson,48,50,dmrg-gpu,59.81,pdmrg-gpu,323.05,5.40x,Serial
+tfim,12,20,dmrg-gpu,0.69,pdmrg-gpu-opt,1.46,2.11x,Serial
+tfim,12,50,dmrg-gpu,0.73,pdmrg-gpu-opt,1.20,1.64x,Serial
+tfim,12,128,dmrg-gpu,0.74,pdmrg-gpu,1.28,1.73x,Serial
+tfim,20,20,dmrg-gpu,1.04,pdmrg-gpu,5.31,5.10x,Serial
+tfim,20,50,dmrg-gpu,1.29,pdmrg-gpu,4.51,3.49x,Serial
+tfim,20,128,dmrg-gpu,1.88,pdmrg-gpu,4.58,2.44x,Serial
+tfim,32,20,dmrg-gpu,1.65,pdmrg-gpu,6.04,3.66x,Serial
+
+Serial wins: 22,Parallel wins: 0

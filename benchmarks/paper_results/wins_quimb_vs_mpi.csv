@@ -1,0 +1,25 @@
+Model,L,chi,Best quimb,quimb time(s),Best MPI,MPI time(s),MPI/quimb,Winner
+heisenberg,12,20,quimb-dmrg2,0.15,pdmrg-opt,0.62,4.2x,quimb
+heisenberg,12,50,quimb-dmrg1,0.13,pdmrg-opt,0.64,5.0x,quimb
+heisenberg,12,128,quimb-dmrg2,0.16,pdmrg-opt,0.69,4.2x,quimb
+heisenberg,20,20,quimb-dmrg2,0.28,pdmrg,95.84,342.3x,quimb
+heisenberg,32,20,quimb-dmrg2,0.77,pdmrg,36.74,47.6x,quimb
+josephson,8,20,quimb-dmrg2,0.67,pdmrg-opt,7.27,10.9x,quimb
+josephson,8,50,quimb-dmrg1,0.60,pdmrg-opt,15.88,26.6x,quimb
+josephson,8,128,quimb-dmrg1,2.87,pdmrg-opt,56.51,19.7x,quimb
+josephson,16,20,quimb-dmrg1,1.64,pdmrg-opt,30.67,18.7x,quimb
+josephson,16,50,quimb-dmrg1,3.07,pdmrg-opt,113.75,37.1x,quimb
+josephson,32,50,quimb-dmrg1,16.38,pdmrg-opt,520.41,31.8x,quimb
+tfim,12,20,quimb-dmrg1,0.12,pdmrg-opt,0.69,5.9x,quimb
+tfim,12,50,quimb-dmrg1,0.12,pdmrg-opt,0.89,7.1x,quimb
+tfim,12,128,quimb-dmrg1,0.17,pdmrg-opt,0.94,5.4x,quimb
+tfim,20,20,quimb-dmrg1,0.23,pdmrg-opt,1.62,7.1x,quimb
+tfim,20,50,quimb-dmrg1,0.37,pdmrg-opt,5.26,14.1x,quimb
+tfim,20,128,quimb-dmrg2,1.19,pdmrg-opt,24.08,20.2x,quimb
+tfim,32,20,quimb-dmrg1,0.48,pdmrg-opt,2.86,6.0x,quimb
+tfim,32,50,quimb-dmrg1,0.99,pdmrg-opt,19.85,20.1x,quimb
+tfim,32,128,quimb-dmrg1,5.12,pdmrg-opt,474.45,92.6x,quimb
+tfim,64,50,quimb-dmrg1,3.29,pdmrg-opt,58.71,17.8x,quimb
+tfim,100,50,quimb-dmrg1,6.96,pdmrg-opt,294.40,42.3x,quimb
+
+quimb wins: 22,MPI wins: 0
