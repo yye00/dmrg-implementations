@@ -153,13 +153,15 @@ Our parallel DMRG implementation follows the real-space decomposition of Stouden
 The $L$-site chain is partitioned into $P$ segments, each assigned to an independent HIP stream and rocBLAS handle.
 The algorithm proceeds in three phases:
 \begin{enumerate}
-  \item \textbf{Warmup}: Full-chain two-site DMRG sweeps on a single stream to establish an initial converged MPS.
-  \item \textbf{Outer loop}: Parallel segment sweeps (one \texttt{std::thread} per segment, each on its own HIP stream), followed by a full-chain coupling sweep that rebuilds environments and resweeps the entire chain.
-  \item \textbf{Polish}: Full-chain sweeps until convergence.
+  \item \textbf{Warmup}: Full-chain \emph{single-site} DMRG sweeps on a single stream to establish an initial converged MPS at fixed bond dimension $\chi$.
+  Single-site is used because the eigensolver problem is smaller ($\chi d$ vs.\ $\chi d^2$ for two-site), making warmup cheaper.
+  \item \textbf{Outer loop}: Parallel two-site segment sweeps (one \texttt{std::thread} per segment, each on its own HIP stream) using staggered directions, followed by boundary merge-and-optimize coupling via the Stoudenmire $V = \Lambda^{-1}$ prescription.
+  \item \textbf{Polish}: Full-chain \emph{single-site} sweeps until convergence.
+  Single-site is again used for the polish phase, as the bond dimension is already established and single-site sweeps are cheaper per bond.
 \end{enumerate}
 
-The coupling sweep is essential: segment sweeps disrupt the global entanglement structure of the MPS, and only full-chain resweeping restores the correct ground state.
-Experiments with boundary-only coupling sweeps (optimizing only sites near segment boundaries) failed to converge (energy errors $> 8$~Ha), confirming that full-chain coupling is necessary.
+The coupling step is essential: segment sweeps disrupt the global entanglement structure of the MPS, and only boundary coupling or full-chain resweeping restores the correct ground state.
+Experiments with boundary-only coupling sweeps (optimizing only sites near segment boundaries) failed to converge (energy errors $> 8$~Ha), confirming that coupling at every boundary is necessary.
 
 
 %% ============================================================

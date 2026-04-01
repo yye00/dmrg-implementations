@@ -14,9 +14,9 @@
 PDMRG partitions an L-site chain into P segments, each assigned a HIP stream
 and rocBLAS handle. The algorithm has three phases:
 
-1. **Warmup**: Full-chain two-site DMRG sweeps on stream 0 (identical to dmrg2-gpu)
-2. **Outer loop**: Parallel segment sweeps (one `std::thread` per segment, each with its own HIP stream) followed by a full-chain coupling sweep (env rebuild + LR + RL on stream 0)
-3. **Polish**: Full-chain sweeps on stream 0 until convergence
+1. **Warmup**: Full-chain **single-site** DMRG sweeps on stream 0 (cheaper eigensolve: χ·d vs χ·d² for two-site)
+2. **Outer loop**: Parallel **two-site** segment sweeps (one `std::thread` per segment, each with its own HIP stream) with staggered directions, followed by boundary merge+optimize coupling via V = Λ⁻¹
+3. **Polish**: Full-chain **single-site** sweeps on stream 0 until convergence
 
 The hot path per bond optimization is:
 `form_theta_two_site` (1 GEMM) → `lanczos_eigensolver` (10-50 iterations of `apply_heff_two_site` + reductions) → `svd_split` (CPU LAPACK SVD + H2D upload).
