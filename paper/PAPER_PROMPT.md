@@ -4,9 +4,75 @@
 
 A systematic benchmarking study of DMRG implementations spanning Python/CPU to hand-tuned GPU (HIP/rocBLAS on AMD MI300X). The paper honestly reports what worked, what didn't, and where the crossover points are. It includes significant negative results (Newton-Schulz, Chebyshev, batched sweep all failed to improve performance) that are valuable for the community.
 
-**Target journal**: Computer Physics Communications (Elsevier)
+**Target journal**: Computer Physics Communications (CPC), Elsevier
 **Style**: Clear, direct scientific writing. No hype. Honest about negative results. ~15-20 pages including figures and tables.
-**Format**: LaTeX. Write in `paper/` subdirectory.
+**Format**: LaTeX (`elsarticle` class). Write in `paper/` subdirectory.
+
+---
+
+## CPC Submission Guidelines
+
+### Submission Category
+**Regular Research Article** (computational physics with detailed benchmarking). Not a "Computer Programs in Physics" submission — we are not releasing a standalone software package, but a systematic performance study with open-source code.
+
+### Format Requirements
+- **Document class**: `\documentclass[preprint,12pt]{elsarticle}` for review submission (single-column, 12pt, double-spaced). Final production uses `\documentclass[5p,twocolumn]{elsarticle}`.
+- **Abstract**: 250-500 words (CPC allows longer abstracts than most journals). Should summarize the models, hardware, key positive and negative results, and the main takeaway.
+- **Keywords**: 4-6 keywords after abstract. E.g.: *DMRG, GPU computing, tensor networks, AMD MI300X, parallel algorithms, performance benchmarking*
+- **References**: Numbered [1], [2], ... in order of appearance (Vancouver style). Use `\bibliographystyle{elsarticle-num}`.
+- **Figures**: Vector PDF preferred (matplotlib `savefig('fig.pdf')`). Minimum 300 DPI for raster. Must be readable in grayscale — use markers/line styles in addition to color.
+- **Line numbering**: Enable with `\usepackage{lineno}` and `\linenumbers` for review.
+
+### Required Sections (CPC standard structure)
+1. **Introduction** — Context, motivation, what gap this fills
+2. **Methods** — Models, algorithms, implementation details
+3. **Computational Details** — Hardware specs, software versions, benchmark methodology
+4. **Results** — Performance data, comparisons, analysis
+5. **Discussion** — Negative results analysis, bottleneck identification, lessons learned
+6. **Conclusions** — Summary of findings, when to use GPU DMRG, future directions
+7. **Acknowledgments** — Hardware access, funding
+8. **Data Availability Statement** — REQUIRED. Point to GitHub repository with code and benchmark data.
+9. **References**
+
+### CPC-Specific Requirements
+- **Code availability**: Mandatory. Include GitHub URL, commit hash, and brief build instructions. CPC strongly values reproducibility.
+- **Data availability statement**: Required even for non-program papers. Template: *"The source code, benchmark scripts, and raw benchmark data are available at [GitHub URL]. The repository includes build instructions for ROCm 7.2 on AMD MI300X."*
+- **Reproducibility**: CPC reviewers will check that results can in principle be reproduced. Include: exact compiler flags, ROCm version, GPU model, number of runs, whether times are best-of or average.
+
+### LaTeX Preamble
+```latex
+\documentclass[preprint,12pt,authoryear]{elsarticle}
+\usepackage{lineno}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{siunitx}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+
+\linenumbers
+
+\journal{Computer Physics Communications}
+
+\begin{document}
+\begin{frontmatter}
+\title{GPU-Accelerated DMRG on AMD MI300X: Systematic Benchmarking and Lessons from Failed Optimizations}
+
+\author[inst1]{...}
+\affiliation[inst1]{organization={...}, city={...}, country={...}}
+
+\begin{abstract}
+% 250-500 words
+\end{abstract}
+
+\begin{keyword}
+DMRG \sep GPU computing \sep tensor networks \sep AMD MI300X \sep performance benchmarking
+\end{keyword}
+
+\end{frontmatter}
+```
 
 ---
 
@@ -320,15 +386,48 @@ with open("benchmarks/paper_results/bench_opt_results.csv") as f:
 
 ```
 paper/
-├── main.tex              # Main document
-├── figures/              # Generated figures (PDF/PNG)
-├── tables/               # Generated table data
+├── main.tex              # Main document (elsarticle preprint format)
+├── figures/              # Generated figures (vector PDF from matplotlib)
 ├── scripts/              # Python scripts to generate figures/tables from JSON data
-├── refs.bib              # Bibliography
-└── cpc.cls / elsarticle.cls  # Journal class file
+├── refs.bib              # Bibliography (elsarticle-num style)
+└── Makefile              # Build: pdflatex + bibtex
 ```
 
-Use `elsarticle` document class (Elsevier). Two-column format for final, single-column for review.
+Use `elsarticle` document class with `preprint,12pt` options for review submission. Enable line numbering with `\linenumbers`. Use `\bibliographystyle{elsarticle-num}` for numbered references.
+
+### Manuscript Sections (CPC order)
+```latex
+\section{Introduction}
+\section{Methods}
+  \subsection{DMRG algorithm}
+  \subsection{Two-site optimization and bond adaptation}
+  \subsection{Parallel DMRG (domain decomposition)}
+  \subsection{GPU implementation strategy}
+\section{Algorithmic variants}
+  \subsection{Newton-Schulz polar decomposition}
+  \subsection{Block-Davidson eigensolver}
+  \subsection{Chebyshev-filtered subspace iteration}
+  \subsection{Cross-segment batched GEMM}
+\section{Computational details}
+  \subsection{Hardware and software environment}
+  \subsection{Benchmark methodology}
+  \subsection{Physics models}
+\section{Results}
+  \subsection{CPU vs GPU crossover}
+  \subsection{Single-site vs two-site convergence}
+  \subsection{Parallel segment scaling}
+  \subsection{Algorithmic variant performance}
+\section{Discussion}
+  \subsection{Why BLAS-3 replacements fail at moderate chi}
+  \subsection{CPU SVD bottleneck analysis}
+  \subsection{Implications for future GPU DMRG}
+\section{Conclusions}
+
+% CPC required sections:
+\section*{Declaration of competing interest}
+\section*{Data availability}
+\section*{Acknowledgments}
+```
 
 ---
 
