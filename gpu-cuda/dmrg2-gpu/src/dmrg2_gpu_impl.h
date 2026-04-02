@@ -917,8 +917,16 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
     // GPU SVD via cuSOLVER gesvd
     CUDA_CHECK(cudaMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar), cudaMemcpyDeviceToDevice));
 
-    fprintf(stderr, "SVD: m=%d n=%d lda=%d ldu=%d ldvt=%d full_k=%d lwork=%d\n",
-            m, n_svd, m, m, full_k, full_k, svd_lwork_);
+    // Sync + check for prior errors before SVD
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    // Query optimal workspace for these exact dimensions
+    int svd_lwork_actual = 0;
+    CUSOLVER_CHECK(Traits::cusolver_gesvd_bufferSize(cusolver_h_, m, n_svd, &svd_lwork_actual));
+    int lwork_use = std::max(svd_lwork_, svd_lwork_actual);
+
+    fprintf(stderr, "SVD: m=%d n=%d lda=%d ldu=%d ldvt=%d full_k=%d lwork=%d (actual=%d)\n",
+            m, n_svd, m, m, full_k, full_k, svd_lwork_, svd_lwork_actual);
 
     CUSOLVER_CHECK(Traits::cusolver_gesvd(cusolver_h_,
         'S', 'S',
@@ -927,7 +935,7 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
         d_svd_S_,
         d_svd_U_, m,
         d_svd_Vh_, full_k,
-        d_svd_work_, svd_lwork_,
+        d_svd_work_, lwork_use,
         d_svd_rwork_,
         d_svd_info_));
 
