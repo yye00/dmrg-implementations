@@ -7,12 +7,12 @@ Each subdirectory is a fully independent codebase — no shared code with gpu-ro
 
 | Implementation | Algorithm | Status |
 |---------------|-----------|--------|
-| dmrg-gpu | Single-site, Lanczos + SVD | Compiles (H100), SVD fix pending |
-| dmrg-gpu-opt | Single-site, Block-Davidson + Newton-Schulz | Compiles (H100), SVD fix pending |
+| dmrg-gpu | Single-site, Lanczos + SVD | **Tested** (H100) - L=4 PASS |
+| dmrg-gpu-opt | Single-site, Block-Davidson + Newton-Schulz | **Tested** (H100) - L=4 PASS |
 | dmrg2-gpu | Two-site, Lanczos + SVD | **Tested** (H100) - L=4 PASS |
-| dmrg2-gpu-opt | Two-site, Block-Davidson + Newton-Schulz | Compiles (H100), SVD fix pending |
-| pdmrg-gpu | Parallel two-site, Lanczos + SVD | Compiles (H100), SVD fix pending |
-| pdmrg-gpu-opt | Parallel two-site, Block-Davidson + Newton-Schulz | Compiles (H100), SVD fix pending |
+| dmrg2-gpu-opt | Two-site, Block-Davidson + Newton-Schulz | **Tested** (H100) - L=4 PASS |
+| pdmrg-gpu | Parallel two-site, Lanczos + SVD | **Tested** (H100) - L=8 runs |
+| pdmrg-gpu-opt | Parallel two-site, Block-Davidson + Newton-Schulz | **Tested** (H100) - L=8 runs |
 
 ## Building
 
