@@ -504,6 +504,24 @@ __global__ void setup_renv_step3_ptrs(Scalar** d_A, Scalar** d_B, Scalar** d_C,
 }
 
 // ============================================================================
+// Matrix transpose kernel: out(n,m) = in(m,n)^T  (column-major)
+// ============================================================================
+
+template<typename Scalar>
+__global__ void transpose_kernel(const Scalar* __restrict__ in, int lda_in,
+                                  Scalar* __restrict__ out, int lda_out,
+                                  int rows_in, int cols_in) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int total = rows_in * cols_in;
+    if (idx < total) {
+        int i = idx % rows_in;  // row in input
+        int j = idx / rows_in;  // col in input
+        // out[j + i * lda_out] = in[i + j * lda_in]
+        out[j + i * lda_out] = in[i + j * lda_in];
+    }
+}
+
+// ============================================================================
 // In-place conjugation of GPU arrays (no-op for real)
 // ============================================================================
 

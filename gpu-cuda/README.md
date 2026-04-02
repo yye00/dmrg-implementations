@@ -7,12 +7,12 @@ Each subdirectory is a fully independent codebase — no shared code with gpu-ro
 
 | Implementation | Algorithm | Status |
 |---------------|-----------|--------|
-| dmrg-gpu | Single-site, Lanczos + SVD | Ported (untested) |
-| dmrg-gpu-opt | Single-site, Block-Davidson + Newton-Schulz | Ported (untested) |
-| dmrg2-gpu | Two-site, Lanczos + SVD | Ported (untested) |
-| dmrg2-gpu-opt | Two-site, Block-Davidson + Newton-Schulz | Ported (untested) |
-| pdmrg-gpu | Parallel two-site, Lanczos + SVD | Ported (untested) |
-| pdmrg-gpu-opt | Parallel two-site, Block-Davidson + Newton-Schulz | Ported (untested) |
+| dmrg-gpu | Single-site, Lanczos + SVD | Compiles (H100), SVD fix pending |
+| dmrg-gpu-opt | Single-site, Block-Davidson + Newton-Schulz | Compiles (H100), SVD fix pending |
+| dmrg2-gpu | Two-site, Lanczos + SVD | **Tested** (H100) - L=4 PASS |
+| dmrg2-gpu-opt | Two-site, Block-Davidson + Newton-Schulz | Compiles (H100), SVD fix pending |
+| pdmrg-gpu | Parallel two-site, Lanczos + SVD | Compiles (H100), SVD fix pending |
+| pdmrg-gpu-opt | Parallel two-site, Block-Davidson + Newton-Schulz | Compiles (H100), SVD fix pending |
 
 ## Building
 
@@ -42,6 +42,14 @@ CMakeLists include `--allow-unsupported-compiler` for GCC 15 compatibility.
 # Parallel two-site Heisenberg L=8 chi=8 np=2
 ./pdmrg_gpu 8 8 10 2
 ```
+
+## Known Issues
+
+- **cuSOLVER 13.0 gesvd m<n restriction**: `cusolverDnDgesvd` in CUDA 13.0
+  returns `CUSOLVER_STATUS_INVALID_VALUE` for wide matrices (m < n). All
+  implementations include a workaround that transposes the matrix before SVD
+  and swaps U/Vh results. The SVD workspace is also dynamically requeried
+  since non-square matrices may require larger workspaces than the max-size query.
 
 ## Dependencies
 
