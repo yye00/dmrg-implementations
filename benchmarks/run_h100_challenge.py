@@ -301,7 +301,7 @@ def main():
                         help="heisenberg, josephson, tfim (default: all)")
     parser.add_argument("--skip-warmup", action="store_true")
     parser.add_argument("--output-dir", type=str,
-                        default=os.path.join(REPO_ROOT, "benchmarks", "paper_results", "h100"))
+                        default=os.path.join(REPO_ROOT, "benchmarks", "paper_results", "h100", "challenge"))
     args = parser.parse_args()
 
     if args.impl:
