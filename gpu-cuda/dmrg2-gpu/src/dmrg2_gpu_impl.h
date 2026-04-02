@@ -934,6 +934,17 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
         CUDA_CHECK(cudaMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar), cudaMemcpyDeviceToDevice));
     }
 
+    // cuSOLVER workspace depends on actual dimensions; requery and grow if needed
+    {
+        int lwork_needed = 0;
+        CUSOLVER_CHECK(Traits::cusolver_gesvd_bufferSize(cusolver_h_, svd_m, svd_n, &lwork_needed));
+        if (lwork_needed > svd_lwork_) {
+            cudaFree(d_svd_work_);
+            svd_lwork_ = lwork_needed;
+            CUDA_CHECK(cudaMalloc(&d_svd_work_, svd_lwork_ * sizeof(Scalar)));
+        }
+    }
+
     CUSOLVER_CHECK(Traits::cusolver_gesvd(cusolver_h_,
         'S', 'S',
         svd_m, svd_n,
