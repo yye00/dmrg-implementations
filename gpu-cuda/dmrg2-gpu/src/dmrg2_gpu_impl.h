@@ -917,6 +917,9 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
     // GPU SVD via cuSOLVER gesvd
     CUDA_CHECK(cudaMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar), cudaMemcpyDeviceToDevice));
 
+    fprintf(stderr, "SVD: m=%d n=%d lda=%d ldu=%d ldvt=%d full_k=%d lwork=%d\n",
+            m, n_svd, m, m, full_k, full_k, svd_lwork_);
+
     CUSOLVER_CHECK(Traits::cusolver_gesvd(cusolver_h_,
         'S', 'S',
         m, n_svd,
