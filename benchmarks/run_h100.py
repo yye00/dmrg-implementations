@@ -92,6 +92,7 @@ def run_gpu(impl_name, model, L, chi, max_sweeps, n_max=2, np_count=None):
     cmd = [exe, str(L), str(chi), str(max_sweeps)]
     if model == "josephson":
         cmd.append("--josephson")
+        cmd.extend(["--nmax", str(n_max)])
     if cfg["type"] == "parallel" and np_count and np_count > 1:
         cmd.extend(["--segments", str(np_count)])
         cmd.extend(["--warmup", "3"])
