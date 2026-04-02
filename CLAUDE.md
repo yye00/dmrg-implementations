@@ -51,7 +51,7 @@ ssh hotaisle@23.183.40.87
 tmux attach -t test_remote
 
 # Send commands to remote session (from local)
-tmux send-keys -t test_remote 'cd ~/dmrg-implementations/pdmrg-gpu' Enter
+tmux send-keys -t test_remote 'cd ~/dmrg-implementations/gpu-rocm/pdmrg-gpu' Enter
 
 # Capture output from remote session
 tmux capture-pane -t test_remote -p | tail -20
@@ -77,7 +77,7 @@ rocm-smi --showproductname
 2. **SSH connection is passwordless** - no password prompt
 3. **GitHub token is configured** on remote for commits/pushes
 4. **Working directory**: `/home/hotaisle/dmrg-implementations`
-5. **GPU code location**: `/home/hotaisle/dmrg-implementations/pdmrg-gpu`
+5. **GPU code location**: `/home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu`
 
 ---
 
@@ -96,4 +96,15 @@ rocm-smi --showproductname
 ---
 
 **Last Updated**: 2026-03-10
-**Purpose**: GPU-CPU parity fixes for pdmrg-gpu implementation
+**Purpose**: GPU-CPU parity fixes for gpu-rocm/pdmrg-gpu implementation
+
+## Local Directory Layout (updated 2026-04-02)
+
+After repository reorganization:
+- **`cpu/`** -- CPU Python implementations: `pdmrg/`, `pdmrg-cotengra/`, `pdmrg-opt/`, `a2dmrg/`
+- **`gpu-rocm/`** -- AMD MI300X GPU implementations: `dmrg-gpu/`, `dmrg-gpu-opt/`, `dmrg2-gpu/`, `dmrg2-gpu-opt/`, `pdmrg-gpu/`, `pdmrg-gpu-opt/`
+- **`gpu-cuda/`** -- Planned NVIDIA H100 CUDA ports (empty scaffolding)
+- **`benchmarks/results/{mi300x,h100}/`** -- Raw benchmark results tagged by architecture
+- **`benchmarks/paper_results/{mi300x,h100}/`** -- Publication-grade results tagged by architecture
+- **`reports/{mi300x,h100}/`** -- Timing report JSONs tagged by architecture
+- **`docs/`** -- GPU development prompts and reference docs

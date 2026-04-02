@@ -11,8 +11,8 @@ This repository contains **in-house MPI-parallel DMRG implementations** validate
 - **PDMRG**: Parallel two-site DMRG with MPI domain decomposition and boundary merge protocol
 - **A2DMRG**: Additive two-level DMRG with parallel warmup and coarse-space correction
 - **PDMRG-OPT**: ⚠️ **Specification only** — GEMM-optimized CPU implementation (see `pdmrg_gpu_opt.md`)
-- **PDMRG-GPU**: 🔬 **Experimental** — GPU-accelerated implementation using hipTensor/rocBLAS (see `pdmrg-gpu/`)
-- **DMRG-GPU**: GPU-native single-site DMRG using rocBLAS/rocSOLVER on AMD MI300X (see `dmrg-gpu/`)
+- **PDMRG-GPU**: 🔬 **Experimental** — GPU-accelerated implementation using hipTensor/rocBLAS (see `gpu-rocm/pdmrg-gpu/`)
+- **DMRG-GPU**: GPU-native single-site DMRG using rocBLAS/rocSOLVER on AMD MI300X (see `gpu-rocm/dmrg-gpu/`)
 
 ### Reference Baselines (External)
 
@@ -40,16 +40,41 @@ All implementations achieve machine precision agreement (ΔE < 1e-14) on correct
 ## Directory Structure
 
 ```
-├── a2dmrg/                  # A2DMRG implementation
-├── pdmrg/                   # PDMRG implementation
-├── dmrg-gpu/                # GPU-native DMRG (C++/HIP, rocBLAS/rocSOLVER)
-├── pdmrg-gpu/               # Experimental GPU implementation (C++/hipTensor)
-├── benchmarks/              # Benchmark scripts and results
-├── reports/                 # Performance and analysis reports
-├── debug/                   # Debugging utilities
-├── IMPLEMENTATION_MATRIX.md # Comprehensive implementation taxonomy
-└── pdmrg_gpu_opt.md            # PDMRG-OPT CPU optimization specification
+├── cpu/                         # CPU Python implementations
+│   ├── pdmrg/                   #   Parallel two-site DMRG (MPI + numpy)
+│   ├── pdmrg-cotengra/          #   PDMRG with cotengra contractions
+│   ├── pdmrg-opt/               #   PDMRG with GEMM optimizations
+│   └── a2dmrg/                  #   Additive two-level DMRG
+├── gpu-rocm/                    # AMD MI300X GPU implementations (C++/HIP)
+│   ├── dmrg-gpu/                #   Single-site DMRG (rocBLAS/rocSOLVER)
+│   ├── dmrg-gpu-opt/            #   Optimized single-site DMRG
+│   ├── dmrg2-gpu/               #   Two-site DMRG
+│   ├── dmrg2-gpu-opt/           #   Optimized two-site DMRG
+│   ├── pdmrg-gpu/               #   Parallel DMRG on GPU (hipTensor)
+│   └── pdmrg-gpu-opt/           #   Optimized parallel DMRG on GPU
+├── gpu-cuda/                    # NVIDIA H100 GPU implementations (planned)
+│   ├── README.md                #   Porting status
+│   └── (empty subdirs)          #   Mirrors gpu-rocm/ structure
+├── benchmarks/                  # Benchmark scripts and results
+│   ├── results/mi300x/          #   Raw validation results (MI300X)
+│   ├── results/h100/            #   Raw validation results (H100, future)
+│   ├── paper_results/mi300x/    #   Publication-grade results (MI300X)
+│   └── paper_results/h100/      #   Publication-grade results (H100, future)
+├── reports/                     # Timing reports
+│   ├── mi300x/                  #   MI300X timing JSONs
+│   └── h100/                    #   H100 timing JSONs (future)
+├── docs/                        # GPU development prompts and references
+├── paper/                       # CPC manuscript
+├── IMPLEMENTATION_MATRIX.md     # Comprehensive implementation taxonomy
+└── pdmrg_gpu_opt.md             # PDMRG-OPT CPU optimization specification
 ```
+
+### Architecture Split
+
+- **`cpu/`** -- Pure-Python implementations using numpy/scipy/quimb, parallelized with MPI.
+- **`gpu-rocm/`** -- C++/HIP implementations targeting AMD MI300X via rocBLAS, rocSOLVER, and hipTensor. All current GPU benchmarks were run on MI300X.
+- **`gpu-cuda/`** -- Planned CUDA ports targeting NVIDIA H100. Each subdirectory will be a fully independent codebase (no shared code with gpu-rocm/).
+- **Benchmark results** are tagged by GPU architecture (`mi300x/`, `h100/`) under both `benchmarks/results/` and `benchmarks/paper_results/`.
 
 ## Known Issues and Current Status
 
@@ -94,7 +119,7 @@ python benchmarks/heisenberg_benchmark.py
 python benchmarks/heisenberg_long_benchmark.py
 
 # Josephson junction correctness test (complex128)
-python a2dmrg/benchmarks/josephson_correctness_benchmark.py
+python cpu/a2dmrg/benchmarks/josephson_correctness_benchmark.py
 ```
 
 **Note:** A2DMRG speedup benefits appear at larger system sizes (L > 20). At L=12, cotengra contraction overhead may dominate, making it slower than PDMRG in wall time.
@@ -105,10 +130,10 @@ Each implementation has its own virtual environment:
 
 ```bash
 # PDMRG
-pdmrg/venv/bin/python run_pdmrg_np1.py
+cpu/pdmrg/venv/bin/python run_pdmrg_np1.py
 
 # A2DMRG
-a2dmrg/venv/bin/python run_a2dmrg_np1.py
+cpu/a2dmrg/venv/bin/python run_a2dmrg_np1.py
 ```
 
 ## Development
@@ -125,7 +150,7 @@ Key planned changes:
 
 **Implementation Status**: Specification complete, no code written yet.
 
-### GPU-Native DMRG (`dmrg-gpu/`)
+### GPU-Native DMRG (`gpu-rocm/dmrg-gpu/`)
 
 Single-site DMRG with all tensor contractions on GPU via rocBLAS `dgemm`. Targets AMD MI300X (gfx942) with ROCm 7.2+.
 
@@ -133,7 +158,7 @@ Single-site DMRG with all tensor contractions on GPU via rocBLAS `dgemm`. Target
 
 **Build & Run** (on MI300X host):
 ```bash
-cd dmrg-gpu && mkdir build && cd build
+cd gpu-rocm/dmrg-gpu && mkdir build && cd build
 cmake .. -DGPU_TARGETS=gfx942
 make -j
 ./dmrg_gpu 32 64 30          # L=32, chi=64, 30 sweeps
@@ -171,7 +196,7 @@ All benchmarks: single-site DMRG, 5 sweeps to convergence, Heisenberg OBC.
 
 ### GPU Experimental Path (legacy)
 
-The `pdmrg-gpu/` directory contains experimental GPU implementations using hipTensor and rocBLAS. This is research code under active development and not production-ready.
+The `gpu-rocm/pdmrg-gpu/` directory contains experimental GPU implementations using hipTensor and rocBLAS. This is research code under active development and not production-ready.
 
 ## License
 
