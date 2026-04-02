@@ -91,7 +91,7 @@ GPU_IMPLS = {
 
 CPU_IMPLS = {"quimb-dmrg1", "quimb-dmrg2"}
 
-ALL_IMPLS = sorted(GPU_IMPLS.keys()) | CPU_IMPLS
+ALL_IMPLS = sorted(GPU_IMPLS.keys()) + sorted(CPU_IMPLS)
 
 # Josephson parameters (must match GPU defaults)
 JOSEPHSON_NMAX = 2
