@@ -21,28 +21,23 @@
 
 \title{GPU-Accelerated DMRG on AMD MI300X:\\Systematic Benchmarking and Lessons from Failed Optimizations}
 
-%% Authors — fill in before submission
-\author[inst1]{First Author\corref{cor1}}
-\ead{email@example.com}
-\author[inst1]{Second Author}
-
+\author[inst1]{Yaakoub El~Khamra\corref{cor1}}
 \cortext[cor1]{Corresponding author.}
-\affiliation[inst1]{organization={Department}, city={City}, country={Country}}
+\affiliation[inst1]{organization={}, city={}, country={}}
 
 \begin{abstract}
-We present a systematic performance study of ten density matrix renormalization group (DMRG) implementations, ranging from Python/CPU to hand-tuned GPU kernels in HIP/C++ targeting the AMD Instinct MI300X.
-The implementations span single-site and two-site DMRG, real-space parallel DMRG with domain decomposition, and an additive two-level parallel variant, tested across three physics models: the Heisenberg spin-$\frac{1}{2}$ chain ($d=2$, real), a Josephson junction array ($d=5$, complex), and the transverse-field Ising model at criticality ($d=2$, real).
+We present a systematic performance study of eleven density matrix renormalization group (DMRG) implementations, ranging from Python/CPU to hand-tuned GPU kernels in HIP/C++ targeting the AMD Instinct MI300X.
+The implementations span single-site and two-site DMRG, real-space parallel DMRG with domain decomposition, and an additive two-level parallel variant (A2DMRG), tested across three physics models: the Heisenberg spin-$\frac{1}{2}$ chain ($d=2$, real), a Josephson junction array ($d=5$, complex), and the transverse-field Ising model at criticality ($d=2$, real).
 Benchmarks cover system sizes $L = 8$--$128$ and bond dimensions $\chi = 20$--$256$ on a single MI300X GPU with 192~GB HBM3.
 
-The GPU implementations achieve speedups over optimized CPU code (quimb with OpenBLAS) at bond dimensions $\chi \geq 128$, with a 74\% win rate at $\chi = 128$ and 100\% at $\chi = 256$.
-Below $\chi = 50$, CPU code with 4-thread BLAS consistently wins due to GPU kernel launch overhead.
+The GPU implementations achieve speedups over optimized CPU code (quimb with OpenBLAS) that depend on both bond dimension and system size: at $\chi = 128$ the GPU wins 100\% of short-chain ($L \leq 20$) configurations but only 50\% at $L \geq 100$, while at $\chi \leq 50$ the CPU wins all medium-to-large systems ($L \geq 32$).
 Two-site DMRG converges $3.3\times$ faster than single-site at large system sizes ($L = 100$, $\chi = 128$: 53~s vs.\ 177~s).
 
 We report extensive negative results on algorithmic optimizations designed to exploit the MI300X's BLAS-3 throughput.
 Newton--Schulz iterative polar decomposition, intended to replace SVD with GEMM-heavy iterations, achieves 0\% win rate across 50 configurations and diverges numerically at $\chi \geq 128$.
 Chebyshev-filtered subspace iteration, designed for computing many eigenvalues in density functional theory, is $1.9$--$11\times$ slower than Lanczos for DMRG's single ground state.
 Cross-segment batched GEMM dispatch is slower in 18 of 19 configurations tested.
-Profiling reveals the root cause: CPU LAPACK SVD consumes 97--98\% of per-sweep wall time at $\chi \geq 128$, and iterative GPU replacements cannot match LAPACK's optimized divide-and-conquer algorithm at these matrix sizes.
+Profiling reveals the root cause: CPU LAPACK SVD consumes 97--98\% of per-sweep wall time at $\chi = 256$, and iterative GPU replacements cannot match LAPACK's optimized QR-iteration algorithm at these matrix sizes.
 All source code, benchmark scripts, and raw data are publicly available.
 \end{abstract}
 
@@ -61,7 +56,8 @@ The density matrix renormalization group (DMRG) \cite{White1992,White1993} is th
 In the modern tensor network formulation \cite{Schollwoeck2011,Orus2014}, DMRG variationally optimizes a matrix product state (MPS) by sweeping through the chain and solving local eigenvalue problems at each bond.
 The computational cost is dominated by tensor contractions (matrix--matrix multiplications) and singular value decompositions (SVDs), both of which scale as $O(\chi^3 d^2)$ per bond, where $\chi$ is the bond dimension and $d$ is the local Hilbert space dimension.
 
-Graphics processing units (GPUs) are natural candidates for accelerating DMRG, since the tensor contractions map directly to general matrix--matrix multiplication (GEMM), a workload for which modern GPUs achieve near-peak throughput.
+Mature CPU implementations exist in several software packages, including ITensor \cite{Fishman2022} and quimb \cite{Gray2018}, which leverage optimized BLAS libraries for the tensor contractions.
+Graphics processing units (GPUs) are natural candidates for further accelerating DMRG, since the tensor contractions map directly to general matrix--matrix multiplication (GEMM), a workload for which modern GPUs achieve near-peak throughput.
 Prior work has explored GPU acceleration of DMRG and related tensor network methods \cite{Nemes2014}, typically focusing on NVIDIA hardware with CUDA.
 The AMD Instinct MI300X, with 304 compute units and 192~GB of HBM3 memory providing 5.3~TB/s bandwidth, represents a new class of GPU hardware for scientific computing.
 Its matrix fused multiply-add (MFMA) units deliver 81.7~TFLOPS of FP64 matrix throughput, making it particularly attractive for the GEMM-dominated tensor contractions in DMRG.
@@ -70,7 +66,7 @@ However, the practical performance of GPU DMRG depends on a complex interplay of
 It is not obvious a priori at what problem sizes GPU acceleration becomes worthwhile, or whether algorithmic modifications designed to increase GEMM utilization will improve performance.
 
 In this work, we present a systematic benchmarking study that addresses these questions directly.
-We implement ten DMRG variants---four CPU-based and six GPU-based---and benchmark them across three physics models at system sizes $L = 8$--$128$ and bond dimensions $\chi = 20$--$256$.
+We implement eleven DMRG variants---five CPU-based (including an MPI-parallel additive two-level variant) and six GPU-based---and benchmark them across three physics models at system sizes $L = 8$--$128$ and bond dimensions $\chi = 20$--$256$.
 Beyond the baseline GPU implementations, we investigate several algorithmic modifications specifically designed to exploit the MI300X's BLAS-3 throughput:
 \begin{itemize}
   \item Newton--Schulz iterative polar decomposition to replace SVD with GEMM iterations,
@@ -95,25 +91,69 @@ Section~\ref{sec:conclusions} summarizes our findings.
 \label{sec:methods}
 %% ============================================================
 
-\subsection{DMRG and matrix product states}
-\label{sec:dmrg}
+\subsection{Tensor trains and matrix product states}
+\label{sec:mps}
 
 We consider a one-dimensional quantum lattice of $L$ sites with open boundary conditions.
-The Hamiltonian is represented as a matrix product operator (MPO) with bond dimension $D$, and the variational ground state is sought in the space of matrix product states (MPS) with maximum bond dimension $\chi$.
-The MPS ansatz for a state $|\psi\rangle$ takes the form
+The Hilbert space has dimension $d^L$, where $d$ is the local basis size (e.g., $d = 2$ for spin-$\frac{1}{2}$), making exact diagonalization intractable beyond $L \approx 20$.
+The key insight enabling DMRG is the \emph{area law} of entanglement \cite{Eisert2010}: ground states of gapped local Hamiltonians in one dimension have entanglement entropy bounded by a constant independent of system size, which means they can be efficiently represented by matrix product states (MPS) with moderate bond dimension $\chi$.
+
+An MPS (equivalently, a tensor train in the numerical mathematics literature \cite{Oseledets2011}) parametrizes the $d^L$-dimensional state vector as a product of $L$ three-index tensors:
 \begin{equation}
   |\psi\rangle = \sum_{\sigma_1,\ldots,\sigma_L} A^{\sigma_1}_{1} A^{\sigma_2}_{2} \cdots A^{\sigma_L}_{L} \, |\sigma_1 \cdots \sigma_L\rangle,
 \end{equation}
 where each $A^{\sigma_i}_{i}$ is a $\chi_{i-1} \times \chi_i$ matrix (with $\chi_0 = \chi_L = 1$) and $\sigma_i = 1, \ldots, d$ labels the local basis states.
+The bond dimension $\chi = \max_i \chi_i$ controls the expressiveness of the ansatz: $\chi = 1$ yields a product state, while $\chi = d^{L/2}$ can represent any state exactly.
+For ground states of local Hamiltonians, $\chi = O(\text{poly}(L))$ typically suffices for fixed accuracy, giving an exponential compression from $d^L$ to $O(L \chi^2 d)$ parameters.
 
-The DMRG algorithm optimizes the MPS by sweeping left-to-right and right-to-left through the chain.
-At each bond, it forms the effective Hamiltonian $H_\text{eff}$ by contracting the left environment $L_\text{env}$, MPO tensors $W$, and right environment $R_\text{env}$ with the current MPS tensor(s), then solves the local eigenvalue problem
+\subsection{Canonical forms}
+\label{sec:canonical}
+
+A central concept in MPS algorithms is the \emph{canonical form} \cite{Schollwoeck2011}.
+An MPS is in \emph{left-canonical form} up to site $k$ if each tensor $A_i$ ($i < k$) satisfies $\sum_\sigma A^{\sigma\dagger}_i A^\sigma_i = I$, i.e., each tensor is a (partial) isometry when viewed as a matrix from left to right.
+Similarly, \emph{right-canonical form} from site $k$ means $\sum_\sigma A^\sigma_i A^{\sigma\dagger}_i = I$ for $i > k$.
+An MPS in \emph{mixed-canonical form} centered at site $k$ is left-canonical for $i < k$ and right-canonical for $i > k$, so that the tensor at site $k$ (the ``active'' tensor) contains all the variational freedom.
+
+Canonical form is established and maintained by QR or SVD decompositions.
+To left-canonicalize site $i$, reshape $A_i$ into a $(\chi_{i-1} d) \times \chi_i$ matrix and compute the thin QR factorization $A_i = QR$; replace $A_i \leftarrow Q$ and absorb $R$ into $A_{i+1}$.
+To truncate the bond dimension (as needed after two-site optimization), SVD is used instead: $A_i = U S V^\dagger$, truncate to the $\chi_\text{max}$ largest singular values, and split the factors between sites $i$ and $i+1$.
+The truncation error $\epsilon = \sqrt{\sum_{k > \chi_\text{max}} s_k^2}$ is bounded by the discarded singular values, providing a controlled approximation.
+
+\subsection{Matrix product operators}
+\label{sec:mpo}
+
+The Hamiltonian $H$ is represented as a matrix product operator (MPO) \cite{Schollwoeck2011,Orus2014}:
 \begin{equation}
-  H_\text{eff} |\theta\rangle = E |\theta\rangle
-  \label{eq:local_eigenproblem}
+  H = \sum_{\boldsymbol{\sigma}, \boldsymbol{\sigma}'} W^{\sigma_1 \sigma'_1}_1 W^{\sigma_2 \sigma'_2}_2 \cdots W^{\sigma_L \sigma'_L}_L \, |\boldsymbol{\sigma}\rangle\langle\boldsymbol{\sigma}'|,
 \end{equation}
-for the ground state energy $E$ and optimal local tensor $\theta$.
-After optimization, the updated tensor is split via SVD (or QR) to restore the MPS canonical form, and the environments are updated for the next bond.
+where each $W^{\sigma_i \sigma'_i}_i$ is a $D_{i-1} \times D_i$ matrix and $D = \max_i D_i$ is the MPO bond dimension.
+For nearest-neighbor Hamiltonians, $D$ is a small constant: $D = 5$ for the Heisenberg model, $D = 3$ for the transverse-field Ising model, and $D = 4$ for the Josephson junction array.
+The MPO provides an exact, compact representation of the Hamiltonian that enables efficient computation of expectation values and $H_\text{eff}$ applications in $O(\chi^2 d D)$ operations per bond.
+
+\subsection{The DMRG sweep}
+\label{sec:dmrg}
+
+The density matrix renormalization group (DMRG) \cite{White1992,White1993} variationally optimizes the MPS by sweeping through the chain.
+In the modern formulation \cite{Schollwoeck2011}, a left-to-right sweep followed by a right-to-left sweep constitutes one ``sweep'' of the algorithm.
+At each bond $b$, the algorithm:
+\begin{enumerate}
+  \item Forms the \emph{effective Hamiltonian} $H_\text{eff}$ by contracting the left environment $L_\text{env}$ (encoding all sites $< b$), the MPO tensor(s) $W_b$, and the right environment $R_\text{env}$ (encoding all sites $> b$) into a linear operator acting on the active tensor(s) at bond $b$.
+  \item Solves the \emph{local eigenvalue problem}
+  \begin{equation}
+    H_\text{eff} |\theta\rangle = E |\theta\rangle
+    \label{eq:local_eigenproblem}
+  \end{equation}
+  for the ground-state energy $E$ and optimal local tensor $\theta$, using a Krylov eigensolver (Lanczos).
+  \item \emph{Restores canonical form}: decomposes the updated tensor via SVD or QR and shifts the canonical center to the next bond.
+  \item \emph{Updates the environment}: incorporates the newly optimized tensor into $L_\text{env}$ (left sweep) or $R_\text{env}$ (right sweep) for the next bond.
+\end{enumerate}
+
+The environment tensors $L_\text{env}$ and $R_\text{env}$ are rank-3 tensors of dimension $\chi \times D \times \chi$ that encode the contraction of all MPS and MPO tensors to the left (or right) of the active bond.
+They are updated incrementally as the sweep progresses, at a cost of $O(\chi^2 d D + \chi^2 D^2)$ per bond.
+The total cost per sweep is $O(L \chi^3 d^2 D)$ for the eigensolve (dominated by the $H_\text{eff}$ matrix--vector product) plus $O(L \chi^3 d)$ for the SVD/QR step.
+
+In \emph{single-site} DMRG, one MPS tensor is optimized at a time, giving an eigensolve on a vector of dimension $\chi d$.
+The bond dimension is fixed throughout the sweep, which is efficient but can trap the optimization in local minima if the initial bond dimension profile is poor.
 
 \subsection{Two-site DMRG}
 \label{sec:two_site}
@@ -124,14 +164,15 @@ The two-site tensor $\theta$ has dimensions $\chi_L d \times d \chi_R$, and afte
   \theta = U S V^\dagger,
 \end{equation}
 where $S$ is truncated to the $\chi_\text{max}$ largest singular values.
-This allows the bond dimension to adapt during the sweep, which is critical for convergence from a random initial state.
+This allows the bond dimension to \emph{adapt} during the sweep, which is critical for convergence from a random initial state: new Schmidt coefficients can appear that were absent in the initial MPS.
+The cost per bond is $O(\chi^2 d^2 D)$ for the eigensolve and $O(\chi^3 d^2)$ for the SVD, both scaling with $d^2$ rather than $d$ compared to single-site.
 
 We precompute fused MPO tensors $\widetilde{W}[b] = W_L[b] \otimes W_R[b]$ for each bond $b$, so the two-site $H_\text{eff}$ application uses the same three-step GEMM pattern as single-site but with $d \to d^2$.
 
 \subsection{GPU implementation}
 \label{sec:gpu_impl}
 
-All GPU implementations target the AMD MI300X via HIP/C++ and use rocBLAS for BLAS operations.
+All GPU implementations target the AMD MI300X via HIP/C++ and use rocBLAS \cite{rocBLAS2024} for BLAS operations.
 The code is templated on the scalar type, supporting both \texttt{double} (real) and \texttt{hipDoubleComplex} (complex) through a \texttt{ScalarTraits} dispatch layer.
 
 The application of $H_\text{eff}$ to a vector, the innermost operation of the Lanczos eigensolver, is implemented as three batched GEMM steps:
@@ -144,7 +185,7 @@ The pointer arrays for batched GEMMs are computed by lightweight GPU kernels (ty
 
 The Lanczos eigensolver runs entirely on the GPU using device-pointer mode for all rocBLAS reductions (\texttt{dot}, \texttt{nrm2}), eliminating implicit stream synchronizations.
 Only the final tridiagonal eigensolve (a $k \times k$ problem with $k \approx 15$--$50$) is performed on the CPU via LAPACK \texttt{dstev}.
-SVD is performed on the CPU via LAPACK \texttt{dgesvd} (or \texttt{zgesvd} for complex), as profiling showed this to be faster than GPU rocsolver for $\chi \leq 256$ (see Section~\ref{sec:svd_bottleneck}).
+SVD is performed on the CPU via LAPACK \texttt{dgesvd} (QR-iteration based; or \texttt{zgesvd} for complex), as profiling showed this to be faster than GPU rocsolver for $\chi \leq 256$ (see Section~\ref{sec:svd_bottleneck}).
 
 \subsection{Parallel DMRG}
 \label{sec:pdmrg}
@@ -161,7 +202,7 @@ The algorithm proceeds in three phases:
 \end{enumerate}
 
 The coupling step is essential: segment sweeps disrupt the global entanglement structure of the MPS, and only boundary coupling or full-chain resweeping restores the correct ground state.
-Experiments with boundary-only coupling sweeps (optimizing only sites near segment boundaries) failed to converge (energy errors $> 8$~Ha), confirming that coupling at every boundary is necessary.
+Experiments with boundary-only coupling sweeps (optimizing only sites near segment boundaries) failed to converge (energy errors $> 8$), confirming that coupling at every boundary is necessary.
 
 
 %% ============================================================
@@ -180,7 +221,7 @@ The Newton--Schulz iteration computes the unitary polar factor $U$ of a matrix $
   X_0 = A / \|A\|_F, \qquad X_{k+1} = \tfrac{1}{2} X_k (3I - X_k^\dagger X_k).
   \label{eq:newton_schulz}
 \end{equation}
-This converges cubically to the unitary polar factor, requiring 5--10 iterations (each consisting of two GEMMs) to reach $\|X^\dagger X - I\|_F < 10^{-10}$.
+This converges cubically to the unitary polar factor, with a maximum of 30 iterations (each consisting of two GEMMs) and convergence criterion $\|X^\dagger X - I\|_F < 10^{-10}$.
 After convergence, the singular values are obtained from the eigendecomposition of $P = U^\dagger A$, performed on the CPU.
 
 The intent was to replace the LAPACK SVD call with $\sim$10--20 GPU GEMMs, shifting the computation from a BLAS-2-dominated factorization to pure BLAS-3.
@@ -216,6 +257,33 @@ We tested it for DMRG's single ground state search with polynomial degree $p = 1
 For parallel DMRG, we implemented a lock-step sweep mode that batches GEMM calls across segments.
 Instead of each segment independently dispatching GEMMs on its own stream, segments with matching bond dimensions are grouped and their GEMMs are dispatched as a single \texttt{rocblas\_gemm\_batched} call.
 This was intended to reduce per-kernel launch overhead by combining $P$ small GEMMs into one batched dispatch.
+
+\subsection{Additive two-level parallel DMRG (A2DMRG)}
+\label{sec:a2dmrg}
+
+We also implemented the additive two-level parallel DMRG (A2DMRG) algorithm of Grigori and Hassan \cite{Grigori2025} in Python with MPI parallelization.
+Unlike the real-space decomposition of Section~\ref{sec:pdmrg}, which partitions the chain into segments, A2DMRG updates \emph{all} sites independently and combines the results via a coarse-space correction.
+
+The algorithm proceeds in five phases per sweep:
+\begin{enumerate}
+  \item \textbf{Orthogonal decompositions}: Construct $d$ $i$-orthogonal MPS forms, one centered at each site.
+  \item \textbf{Parallel local micro-steps}: Solve the local eigenvalue problem~\eqref{eq:local_eigenproblem} independently at every site, producing $L$ candidate tensors.  These are embarrassingly parallel across $P$ processors.
+  \item \textbf{Coarse-space correction}: Form the $(d+1) \times (d+1)$ projected Hamiltonian and overlap matrices $H_\text{coarse}$, $S_\text{coarse}$ in the subspace spanned by the $d$ candidates plus the current MPS, and solve the generalized eigenvalue problem to find the optimal linear combination.
+  \item \textbf{Linear combination}: Assemble the updated MPS as the coarse-space eigenvector applied to the candidate tensors.  This produces a bond dimension of up to $(L-1) \times \chi$.
+  \item \textbf{Compression}: Project back to the target bond dimension $\chi$ via TT-SVD (sequential truncated SVD from left to right).
+\end{enumerate}
+
+The algorithm is an additive Schwarz method with coarse-space correction, analogous to the relationship between Jacobi (additive) and Gauss--Seidel (multiplicative) iterations for linear systems.
+Standard DMRG's sequential sweep is the multiplicative variant and converges faster per sweep, but the additive structure allows all local problems to be solved in parallel.
+
+Our implementation includes three optimizations not in the original paper:
+(i)~incremental environment caching (reducing the per-sweep cost from $O(L^2 \chi^2 D)$ to $O(L \chi^2 D)$),
+(ii)~a pure numpy hot path replacing quimb tensor objects in the sweep phases, and
+(iii)~configurable warm-up sweeps (serial DMRG2 via quimb) before entering the parallel A2DMRG loop.
+
+To our knowledge, this is the first independent implementation of A2DMRG.
+The original paper \cite{Grigori2025} tested only quantum chemistry Hamiltonians (hydrogen chains H$_6$--H$_{12}$, C$_2$, N$_2$) with system sizes $d \leq 24$ using an in-house Julia implementation that is not publicly available.
+Our implementation extends the algorithm to lattice spin models (Heisenberg, Josephson, TFIM) and tests larger system sizes ($L$ up to 64).
 
 
 %% ============================================================
@@ -268,7 +336,7 @@ This is the standard DMRG benchmark \cite{White1992}, with the exact ground stat
   \label{eq:josephson}
 \end{equation}
 with $E_J = 1.0$, $E_C = 0.5$, external flux $\varphi_\text{ext} = \pi/4$, and charge basis truncation $n_\text{max} = 2$ giving $d = 5$ and complex arithmetic \cite{Fazio2001}.
-The MPO bond dimension is $D = 3$.
+The MPO bond dimension is $D = 4$.
 The nonzero external flux breaks time-reversal symmetry, requiring full complex-valued MPS and MPO tensors.
 
 \paragraph{Transverse-field Ising model (TFIM).}
@@ -299,10 +367,9 @@ A ``win'' is assigned to the fastest implementation for each $(L, \chi, \text{mo
 \toprule
 $\chi$ & D1-GPU & D2-GPU & Q-D1 & Q-D2 \\
 \midrule
-20  & 25.0\% & 37.5\% & 37.5\% & 0\% \\
-50  & 36.8\% & 5.3\%  & 47.4\% & 10.5\% \\
-128 & 73.7\% & 10.5\% & 10.5\% & 5.3\% \\
-256 & 100\%  & 0\%    & 0\%    & 0\% \\
+20  & 25.0\% & 25.0\% & 37.5\% & 12.5\% \\
+50  & 26.7\% & 0\%    & 60.0\% & 13.3\% \\
+128 & 80.0\% & 0\%    & 20.0\% & 0\% \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -310,9 +377,77 @@ $\chi$ & D1-GPU & D2-GPU & Q-D1 & Q-D2 \\
 At $\chi = 20$--$50$, CPU implementations (quimb with 4-thread OpenBLAS) win the majority of configurations.
 The individual GEMMs at $\chi = 50$ (matrices of size $\sim 50 \times 50$) fit entirely in CPU L2 cache, while on the GPU, kernel launch overhead ($\sim$5--10~$\mu$s per launch) across hundreds of launches per Lanczos iteration outweighs the compute.
 
-At $\chi = 128$, GPU wins 84.2\% of configurations.
-At $\chi = 256$, the GPU wins every configuration.
-The crossover occurs at $\chi \approx 64$--$128$, depending on the model and system size.
+The crossover depends on \emph{both} bond dimension and system size.
+Table~\ref{tab:crossover_Lchi} stratifies the GPU vs.\ CPU win rate by $L$ range and $\chi$.
+At small $L$ ($\leq 20$), the GPU already wins 67\% of configurations even at $\chi = 20$, because short chains require few sweeps and the per-bond GPU advantage dominates.
+At medium $L$ (32--64), the CPU wins every configuration at $\chi \leq 50$---the increased number of bonds amplifies kernel launch overhead---and the GPU recovers only at $\chi = 128$ (71\%).
+At large $L$ ($\geq 100$), even $\chi = 128$ yields only a 50\% GPU win rate, because the many-sweep convergence behavior favors the CPU's lower per-iteration overhead at moderate matrix sizes.
+
+\begin{table}[h]
+\centering
+\caption{GPU vs.\ CPU win rates stratified by system size range and bond dimension.  Each cell shows GPU wins / total configurations (win rate).  CPU wins are the complement.}
+\label{tab:crossover_Lchi}
+\begin{tabular}{lccc}
+\toprule
+$L$ range & $\chi = 20$ & $\chi = 50$ & $\chi = 128$ \\
+\midrule
+$8$--$20$   & 4/6~~(67\%) & 4/6~~(67\%) & 6/6~~(100\%) \\
+$32$--$64$  & 0/2~~(0\%)  & 0/7~~(0\%)  & 5/7~~(71\%) \\
+$\geq 100$  & ---         & 0/2~~(0\%)  & 1/2~~(50\%) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Recommended CPU implementation}
+
+Among CPU implementations, quimb single-site DMRG (quimb-dmrg1) with 4-thread OpenBLAS dominates at all system sizes and bond dimensions, winning 83--100\% of configurations across all $(L, \chi)$ cells (Table~\ref{tab:cpu_wins}).
+The only exception is at large $L$ ($\geq 64$) with $\chi = 50$, where quimb two-site DMRG wins half of the configurations---the same regime where two-site convergence advantages appear.
+Our custom Python PDMRG never wins.
+For CPU-only deployments, quimb single-site DMRG with modest thread parallelism (4 threads) is the clear recommendation.
+
+\begin{table}[h]
+\centering
+\caption{CPU implementation win rates by system size and bond dimension.  Only converged runs included.  Cells show quimb-dmrg1 / quimb-dmrg2 wins (total configs).}
+\label{tab:cpu_wins}
+\begin{tabular}{lccc}
+\toprule
+$L$ range & $\chi = 20$ & $\chi = 50$ & $\chi = 128$ \\
+\midrule
+$8$--$20$   & 5/1 (6)  & 6/0 (6)  & 5/1 (6) \\
+$32$--$64$  & 2/0 (2)  & 6/1 (7)  & 5/0 (5) \\
+$\geq 100$  & ---      & 1/1 (2)  & 2/0 (2) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsubsection{Recommended GPU implementation}
+
+The choice between single-site (dmrg-gpu) and two-site (dmrg2-gpu) on the GPU depends on both system size and bond dimension (Table~\ref{tab:gpu_wins}).
+At $\chi \geq 50$, single-site wins the majority of configurations at all system sizes (71--100\%).
+Single-site's advantage comes from the smaller local eigensolve ($\chi d$ vs.\ $\chi d^2$), which is particularly pronounced for the Josephson model ($d = 5$, so $d^2 = 25$).
+
+At $\chi = 20$, the picture reverses for medium-to-large systems: two-site wins 100\% of $L = 32$--$64$ configurations because adaptive bond dimension growth converges in 2--3 sweeps vs.\ 5--10 for single-site, and the per-bond cost penalty from $d^2$ is modest at small $\chi$.
+At large $L$ ($\geq 100$) with $\chi = 128$, the split is 50/50---two-site's convergence advantage is balanced against its higher per-bond cost when many sweeps are needed.
+
+Parallel DMRG (pdmrg-gpu) never wins on a single GPU.
+
+\begin{table}[h]
+\centering
+\caption{GPU implementation win rates (single-site / two-site) by system size and bond dimension.  Only converged runs with both implementations available.}
+\label{tab:gpu_wins}
+\begin{tabular}{lccc}
+\toprule
+$L$ range & $\chi = 20$ & $\chi = 50$ & $\chi = 128$ \\
+\midrule
+$8$--$20$   & 3/3 (6)  & 5/1 (6)  & 6/0 (6) \\
+$32$--$64$  & 0/2 (2)  & 5/2 (7)  & 6/1 (7) \\
+$\geq 100$  & ---      & 1/1 (2)  & 1/1 (2) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The practical recommendation is: use single-site dmrg-gpu at $\chi \geq 50$ for most problems.
+Switch to two-site dmrg2-gpu when convergence is slow ($L \geq 64$ with small $d$) or when $\chi$ is small ($\leq 20$) and the system is not tiny.
 
 \subsection{Single-site vs.\ two-site convergence}
 \label{sec:single_vs_two}
@@ -365,7 +500,7 @@ $L$ & $\chi$ & $P = 2$ & $P = 4$ \\
 Parallel DMRG is slower than serial two-site DMRG (dmrg2-gpu) at all tested sizes.
 At $L = 64$, $\chi = 128$, pdmrg-gpu takes 49~s with $P = 2$ segments vs.\ 23~s for dmrg2-gpu.
 The overhead comes from three sources:
-(i)~warmup sweeps are serial and identical to dmrg2-gpu,
+(i)~warmup sweeps are serial single-site sweeps,
 (ii)~segment sweeps disrupt the global MPS entanglement structure, requiring expensive full-chain coupling sweeps to restore,
 (iii)~the coupling sweep is itself a full serial sweep.
 
@@ -390,16 +525,16 @@ Model & $L$ & $\chi$ & Type & Baseline & Opt \\
 \midrule
 Heisenberg & 16  & 20  & 1-site & 1.7 & 3.5 \\
 Heisenberg & 32  & 50  & 2-site & 3.5 & 8.0 \\
-Heisenberg & 64  & 20  & 1-site & 14.0 & 41.9 \\
+Heisenberg & 64  & 20  & 1-site & 16.6 & 55.1 \\
 Josephson  & 16  & 50  & 2-site & 2.9 & 8.4 \\
 Josephson  & 32  & 256 & 1-site & 18.4 & 104.6 \\
-TFIM       & 32  & 128 & 1-site & 5.2 & 24.2 \\
+TFIM       & 32  & 128 & 1-site & 9.8 & 24.2 \\
 TFIM       & 128 & 50  & 2-site & 28.1 & 39.3 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The slowdown ranges from $1.3\times$ (best case, TFIM $L = 128$ $\chi = 50$) to $5.7\times$ (Josephson $L = 32$ $\chi = 256$).
+The slowdown ranges from $1.4\times$ (best case, TFIM $L = 128$ $\chi = 50$) to $5.7\times$ (Josephson $L = 32$ $\chi = 256$).
 
 At $\chi \geq 128$, Newton--Schulz diverges catastrophically for the Heisenberg model.
 The Frobenius-norm-scaled iteration~\eqref{eq:newton_schulz} fails to converge when the condition number of the two-site tensor $\theta$ is large, producing MPS tensors with corrupted entries that cause the energy to diverge to $O(10^6)$--$O(10^{20})$.
@@ -459,6 +594,74 @@ The batched mode fails because:
 (ii)~segments often have mismatched bond dimensions, preventing effective GEMM batching;
 (iii)~at $\chi = 256$ with only $P = 2$ segments, the individual GEMMs are large enough that batching the pointer array dispatch provides modest savings.
 
+\subsubsection{Additive two-level parallel DMRG (A2DMRG)}
+
+The A2DMRG algorithm (Section~\ref{sec:a2dmrg}) was tested on the Heisenberg model with $P = 2$ MPI ranks and 2 serial DMRG2 warm-up sweeps, followed by up to 20 A2DMRG iterations.
+Table~\ref{tab:a2dmrg} shows accuracy and wall times compared to serial quimb DMRG2.
+
+\begin{table}[h]
+\centering
+\caption{A2DMRG vs.\ serial DMRG2 (quimb) on the Heisenberg chain, $P = 2$, 2 warm-up sweeps.  $|\Delta E|$ is the absolute energy error vs.\ converged reference.}
+\label{tab:a2dmrg}
+\begin{tabular}{rrrrrr}
+\toprule
+$L$ & $\chi$ & $|\Delta E|$ & A2DMRG (s) & DMRG2 (s) & Status \\
+\midrule
+8  & 20  & $3 \times 10^{-15}$ & 0.1 & 0.1 & PASS \\
+12 & 20  & $7 \times 10^{-15}$ & 0.2 & 0.1 & PASS \\
+12 & 50  & $7 \times 10^{-15}$ & 0.3 & 0.2 & PASS \\
+16 & 50  & $2 \times 10^{-14}$ & 0.7 & 0.4 & PASS \\
+20 & 50  & $5 \times 10^{-11}$ & 2.1 & 0.8 & PASS \\
+32 & 50  & $2.7 \times 10^{-7}$ & 7.4 & 5.2 & FAIL \\
+32 & 100 & $8.9 \times 10^{-9}$ & 35.6 & 11.4 & WARN \\
+48 & 50  & $3.1 \times 10^{-6}$ & 15.9 & 11.4 & FAIL \\
+48 & 100 & $1.9 \times 10^{-5}$ & 104.3 & 26.8 & FAIL \\
+64 & 50  & $5.7 \times 10^{-5}$ & 32.7 & 17.4 & FAIL \\
+64 & 100 & $1.9 \times 10^{-5}$ & 198.3 & 44.4 & FAIL \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+A2DMRG achieves machine-precision accuracy ($|\Delta E| < 10^{-10}$) for $L \leq 20$, matching the system sizes tested in the original paper \cite{Grigori2025} ($d \leq 24$).
+However, accuracy degrades rapidly beyond $L \approx 30$: at $L = 64$, errors reach $10^{-5}$, and the algorithm is 2--4$\times$ slower than serial DMRG2 even with only $P = 2$ ranks.
+
+The degradation has a clear structural cause: the linear combination phase produces bond dimensions up to $(L-1) \times \chi$, which must be compressed back to $\chi$ via TT-SVD.
+At $L = 32$, $\chi = 20$, this is a 31:1 compression ratio, causing significant information loss.
+The original paper avoids this regime by testing quantum chemistry Hamiltonians with $d \leq 24$ and using a rank-growth strategy that starts with small bond dimensions and gradually increases them, yielding gentler compression ratios in early sweeps.
+
+A diagnostic experiment reveals a deeper issue with the algorithm's practical utility.
+Table~\ref{tab:a2dmrg_warmup} shows how A2DMRG accuracy at $L = 32$ depends on the number of serial DMRG2 warm-up sweeps.
+
+\begin{table}[h]
+\centering
+\caption{A2DMRG accuracy vs.\ number of serial DMRG2 warm-up sweeps (Heisenberg $L = 32$, $\chi = 20$, $P = 4$).}
+\label{tab:a2dmrg_warmup}
+\begin{tabular}{rrrl}
+\toprule
+Warm-up & $|\Delta E|$ & Total time (s) & Note \\
+\midrule
+0 & $1.27$               & 74.8 & Not converged \\
+1 & $5.7 \times 10^{-3}$ & 0.2  & --- \\
+2 & $4.4 \times 10^{-6}$ & 0.3  & --- \\
+3 & $1.5 \times 10^{-8}$ & 0.3  & --- \\
+5 & $5.2 \times 10^{-12}$ & 0.4  & Machine precision \\
+10 & $2.9 \times 10^{-13}$ & 0.4  & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Each additional warm-up sweep buys 2--3 orders of magnitude in accuracy.
+By 5 warm-up sweeps, A2DMRG reaches machine precision---but the A2DMRG phase itself then converges in 1--2 iterations taking $< 0.1$~s, because the serial warm-up has already produced a nearly-converged state.
+This creates a paradox: sufficient warm-up makes the algorithm accurate but also makes the parallel phase redundant, since serial DMRG2 alone would have converged in the same time.
+
+We also tested A2DMRG on a complex-valued Bose--Hubbard/Josephson Hamiltonian ($d = 5$, $L = 16$), where it failed catastrophically ($|\Delta E| \sim 10^3$).
+The original paper tests only real-valued quantum chemistry Hamiltonians, and the complex eigensolver and TT-SVD compression path may require additional stabilization for non-Hermitian effective Hamiltonians.
+
+Three important caveats apply to our A2DMRG results.
+First, the original paper reports theoretical per-processor FLOP counts, not wall-clock times, assuming $d - 1$ processors (one per site); our $P = 2$ tests are in the algorithm's worst operating regime.
+Second, quantum chemistry Hamiltonians have all-to-all MPO structure that may favor the coarse-space correction more than the constant-$D$ MPOs of lattice models.
+Third, the rank-growth initialization strategy used in the original paper avoids the large compression ratios that degrade our cold-start results.
+
 
 %% ============================================================
 \section{Discussion}
@@ -474,9 +677,9 @@ This contradicts the natural expectation that GPU hardware optimized for matrix 
 The failure has three causes:
 
 \paragraph{LAPACK SVD is highly optimized.}
-LAPACK's divide-and-conquer SVD (\texttt{dgesdd}) performs a single $O(n^3)$ factorization with low constant factors, exploiting decades of numerical linear algebra optimization \cite{Anderson1999}.
-Newton--Schulz replaces this with 10--20 GEMM iterations at $O(n^3)$ each, plus a CPU-side eigendecomposition.
-The total FLOP count is 10--$20\times$ higher, and the GEMM throughput advantage on the MI300X does not compensate at $n = \chi \leq 256$.
+LAPACK's QR-iteration SVD (\texttt{dgesvd}) performs a single $O(n^3)$ factorization with low constant factors, exploiting decades of numerical linear algebra optimization \cite{Anderson1999}.
+Newton--Schulz replaces this with up to 30 GEMM iterations at $O(n^3)$ each, plus a CPU-side eigendecomposition.
+The total FLOP count is up to $30\times$ higher, and the GEMM throughput advantage on the MI300X does not compensate at $n = \chi \leq 256$.
 At $\chi = 128$, the matrices are $256 \times 256$ (two-site) --- far below the $\sim$2048 $\times$ 2048 threshold where the MI300X's MFMA units reach peak occupancy.
 
 \paragraph{Lanczos is near-optimal for a single eigenvalue.}
@@ -511,7 +714,7 @@ Environment updates & 0.03~s & $< 0.1$\% \\
 \end{table}
 
 The SVD operates on matrices of size $(\chi d, d \chi) = (512, 512)$ at $\chi = 256$ for the Heisenberg model.
-Each LAPACK \texttt{dgesvd} call takes $\sim$0.6~ms, and $\sim$126 SVDs per sweep (63 bonds $\times$ 2 directions) total $\sim$38~s.
+Each LAPACK \texttt{dgesvd} call takes $\sim$300~ms, and $\sim$126 SVDs per sweep (63 bonds $\times$ 2 directions) total $\sim$38~s.
 
 This profile explains why all non-SVD optimizations have negligible impact: even if the Lanczos eigensolver and environment updates were made infinitely fast, the wall time would decrease by at most 2--3\%.
 
@@ -541,12 +744,13 @@ Mixed-precision approaches (single-precision for warmup, double for final conver
 \label{sec:conclusions}
 %% ============================================================
 
-We have presented a systematic benchmark of ten DMRG implementations on the AMD MI300X GPU, spanning three physics models and a range of system sizes and bond dimensions.
+We have presented a systematic benchmark of eleven DMRG implementations on the AMD MI300X GPU, spanning three physics models and a range of system sizes and bond dimensions.
 Our main findings are:
 
 \begin{enumerate}
-  \item GPU DMRG provides clear speedups over optimized CPU code at bond dimensions $\chi \geq 128$, with the crossover occurring at $\chi \approx 64$--$128$ depending on the model.
-  At $\chi = 256$, the GPU wins 100\% of tested configurations.
+  \item The GPU vs.\ CPU crossover depends on both $\chi$ and $L$.
+  At $\chi = 128$, the GPU wins 100\% of short-chain ($L \leq 20$) configurations but only 71\% at $L = 32$--$64$ and 50\% at $L \geq 100$.
+  At $\chi \leq 50$, the CPU wins all medium-to-large systems ($L \geq 32$).
 
   \item Two-site DMRG is $\sim$3$\times$ faster than single-site at large systems ($L = 100$) due to faster convergence from adaptive bond dimension growth.
 
@@ -555,17 +759,21 @@ Our main findings are:
   Chebyshev filtering is $1.9$--$11\times$ slower.
   Cross-segment batched GEMM is slower in 18 of 19 configurations.
 
-  \item CPU SVD consumes 97--98\% of per-sweep wall time at $\chi \geq 128$.
+  \item CPU SVD consumes 97--98\% of per-sweep wall time at $\chi = 256$.
   This bottleneck cannot be addressed by any optimization that targets the remaining 2--3\% of runtime.
 
   \item Parallel DMRG on a single GPU is slower than serial two-site DMRG at all tested sizes, limited by the serial coupling sweep required to maintain global MPS consistency.
+
+  \item The additive two-level parallel DMRG (A2DMRG) algorithm \cite{Grigori2025} achieves machine-precision accuracy for $L \leq 20$ but degrades to $10^{-5}$ errors at $L = 64$ due to TT-SVD compression loss.
+  With $P = 2$ ranks, it is 2--4$\times$ slower than serial DMRG2, and sufficient serial warm-up renders the parallel phase redundant.
+  This is the first independent reproduction of the algorithm and the first test on lattice spin models.
 \end{enumerate}
 
 These negative results delineate the boundary between problem regimes where GPU algorithmic variants can and cannot compete with mature CPU linear algebra.
 At moderate bond dimensions ($\chi \leq 256$), LAPACK's optimized SVD and the Lanczos algorithm's efficiency for single-eigenvalue problems make them difficult targets.
 The regime where BLAS-3 replacements would be expected to help---$\chi \gtrsim 1024$ on multi-GPU systems---remains to be explored.
 
-All source code (10 implementations in Python and C++/HIP), benchmark scripts, and raw benchmark data (712 configurations) are available at \url{https://github.com/yye00/dmrg-implementations}.
+All source code (11 implementations in Python, Python/MPI, and C++/HIP), benchmark scripts, and raw benchmark data are available at \url{https://github.com/yye00/dmrg-implementations}.
 
 %% ============================================================
 \section*{Declaration of competing interest}
@@ -590,5 +798,106 @@ We acknowledge access to AMD Instinct MI300X hardware for benchmarking.
 
 \bibliographystyle{elsarticle-num}
 \bibliography{refs}
+
+%% ============================================================
+\appendix
+\section{Complete benchmark results}
+\label{app:full_results}
+%% ============================================================
+
+Tables~\ref{tab:full_heisenberg}--\ref{tab:full_tfim} report wall times (seconds) for all converged benchmark configurations.
+For CPU implementations (Q-D1: quimb-dmrg1, Q-D2: quimb-dmrg2), the reported time is the best across thread counts (1, 2, 4, 8, 12).
+For GPU implementations (D1-GPU: dmrg-gpu, D2-GPU: dmrg2-gpu, PD-GPU: pdmrg-gpu with $P = 2$ segments), all runs use a single MI300X with CPU SVD.
+The fastest implementation for each configuration is shown in \textbf{bold}.
+A dash (---) indicates the implementation was not tested or did not converge for that configuration.
+
+\begin{table}[h]
+\centering
+\caption{Complete wall times (seconds) for the Heisenberg spin-$\frac{1}{2}$ chain (OBC, $d = 2$, $D = 5$, real). Bold indicates fastest.}
+\label{tab:full_heisenberg}
+\begin{tabular}{rr|rr|rrr}
+\toprule
+$L$ & $\chi$ & Q-D1 & Q-D2 & D1-GPU & D2-GPU & PD-GPU \\
+\midrule
+12 & 20  & 0.81 & 1.10 & 0.67 & \textbf{0.52} & 0.71 \\
+12 & 50  & 0.78 & 1.06 & \textbf{0.42} & 0.56 & 0.65 \\
+12 & 128 & 0.83 & 0.99 & \textbf{0.42} & 0.54 & 0.66 \\
+20 & 20  & 1.11 & 1.12 & 2.31 & \textbf{1.07} & 1.89 \\
+20 & 50  & \textbf{1.08} & 1.43 & 1.42 & 1.45 & 2.26 \\
+20 & 128 & 2.05 & 4.82 & \textbf{1.36} & 2.36 & 3.36 \\
+32 & 20  & \textbf{1.50} & 1.69 & 5.06 & 2.27 & --- \\
+32 & 50  & \textbf{1.82} & 2.91 & 6.20 & 2.91 & --- \\
+32 & 128 & 5.24 & 15.24 & \textbf{4.24} & 5.67 & --- \\
+64 & 50  & 5.67 & \textbf{5.05} & 26.99 & 9.27 & 24.50 \\
+64 & 128 & \textbf{20.59} & 37.69 & 24.01 & 22.80 & --- \\
+100 & 50  & 11.36 & \textbf{8.50} & 74.22 & 43.09 & --- \\
+100 & 128 & \textbf{40.70} & 75.68 & 149.40 & 53.57 & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Complete wall times (seconds) for the Josephson junction array (OBC, $d = 5$, $D = 4$, complex).  Bold indicates fastest.}
+\label{tab:full_josephson}
+\begin{tabular}{rr|rr|rrr}
+\toprule
+$L$ & $\chi$ & Q-D1 & Q-D2 & D1-GPU & D2-GPU & PD-GPU \\
+\midrule
+8  & 20  & 1.46 & \textbf{1.31} & 2.67 & 1.49 & 4.70 \\
+8  & 50  & 1.25 & 3.18 & \textbf{1.10} & 1.16 & 19.05 \\
+8  & 128 & 3.55 & 6.52 & \textbf{0.97} & 2.54 & 20.01 \\
+16 & 20  & \textbf{2.30} & 3.53 & 6.19 & 6.38 & 12.40 \\
+16 & 50  & \textbf{3.73} & 16.32 & 10.70 & 8.03 & 55.61 \\
+16 & 128 & 26.19 & 228.10 & \textbf{4.67} & 29.17 & 314.34 \\
+32 & 50  & \textbf{17.07} & 59.69 & 32.30 & 126.23 & 239.93 \\
+32 & 128 & 107.98 & 891.90 & \textbf{33.02} & 107.87 & 800.42 \\
+48 & 50  & \textbf{31.00} & 360.51 & 64.69 & 244.94 & 326.85 \\
+48 & 128 & \textbf{172.77} & --- & 191.16 & 1347.92 & --- \\
+64 & 50  & \textbf{41.62} & 1287.38 & 88.55 & 568.37 & --- \\
+64 & 128 & 300.79 & --- & \textbf{295.82} & 981.48 & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[h]
+\centering
+\caption{Complete wall times (seconds) for the transverse-field Ising model at criticality (OBC, $d = 2$, $D = 3$, real).  Bold indicates fastest.}
+\label{tab:full_tfim}
+\begin{tabular}{rr|rr|rrr}
+\toprule
+$L$ & $\chi$ & Q-D1 & Q-D2 & D1-GPU & D2-GPU & PD-GPU \\
+\midrule
+12 & 20  & 0.77 & 0.79 & \textbf{0.39} & 0.51 & 5.18 \\
+12 & 50  & 0.78 & 0.80 & \textbf{0.41} & 0.49 & 4.54 \\
+12 & 128 & 0.83 & 0.84 & \textbf{0.41} & 0.52 & 1.38 \\
+20 & 20  & 0.88 & 1.00 & \textbf{0.69} & 1.01 & 12.41 \\
+20 & 50  & 1.03 & 1.20 & \textbf{0.98} & 1.76 & 16.46 \\
+20 & 128 & 1.95 & 1.87 & \textbf{1.52} & 3.47 & 13.48 \\
+32 & 20  & \textbf{1.14} & 1.26 & 1.50 & 1.50 & 18.71 \\
+32 & 50  & \textbf{1.64} & 1.83 & 1.78 & 3.78 & 29.75 \\
+32 & 128 & 5.81 & 6.17 & \textbf{4.89} & 13.46 & 45.78 \\
+64 & 50  & \textbf{3.97} & 4.80 & 4.96 & 8.67 & 27.36 \\
+64 & 128 & 22.11 & 26.59 & \textbf{20.45} & 51.75 & 45.55 \\
+100 & 50  & \textbf{7.66} & 9.31 & 8.36 & 15.97 & 59.89 \\
+100 & 128 & 40.81 & 55.31 & \textbf{36.31} & 96.98 & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Several patterns emerge from the full results:
+\begin{itemize}
+  \item \textbf{GPU single-site (D1-GPU) dominates the TFIM}: it wins 10 of 13 TFIM configurations, including all of $L \leq 20$.
+  The TFIM's small MPO bond dimension ($D = 3$) and fast convergence (2--3 sweeps) keep per-bond costs low, favoring the GPU even at moderate $\chi$.
+  \item \textbf{Josephson is hardest for the GPU}: complex arithmetic doubles the GEMM cost, and $d = 5$ inflates the two-site eigensolve dimension to $\chi d^2 = 25\chi$.
+  D2-GPU is never the fastest for Josephson at $\chi \geq 50$.
+  The CPU (Q-D1) wins all Josephson configurations at $\chi = 50$, and the GPU only overtakes at $\chi = 128$ for $L \leq 32$.
+  \item \textbf{Parallel DMRG (PD-GPU) never wins}: across all 28 configurations where it was tested, pdmrg-gpu is always slower than both the best serial GPU and best CPU implementation.
+  Its closest approach to competitiveness is Heisenberg $L = 12$, $\chi = 20$ (0.71~s vs.\ 0.52~s for D2-GPU), but even there it loses.
+  The overhead of warmup, coupling, and polish sweeps exceeds any benefit from parallel segment execution on a single GPU.
+  \item \textbf{Large Heisenberg systems favor CPU or two-site GPU}: at $L \geq 64$, the CPU (Q-D1 or Q-D2) wins at $\chi \leq 128$.
+  When the GPU wins (e.g., $L = 32$, $\chi = 128$), it is always D1-GPU.
+  D2-GPU is competitive at $L = 64$, $\chi = 128$ (22.80~s vs.\ 24.01~s for D1-GPU) but does not win.
+\end{itemize}
 
 \end{document}

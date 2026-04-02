@@ -197,7 +197,7 @@ The explicit sync in the sweep loop was therefore redundant.
 
 ### A2: Pinned Host Memory for SVD Buffers
 
-**Rationale**: Would enable truly asynchronous D2H/H2D for SVD data. However, with CPU SVD dominating at 98% of runtime, the transfer time (~0.1ms per bond) is negligible compared to the LAPACK computation (~30ms per bond at chi=256). Not worth the added complexity.
+**Rationale**: Would enable truly asynchronous D2H/H2D for SVD data. However, with CPU SVD dominating at 98% of runtime, the transfer time (~0.1ms per bond) is negligible compared to the LAPACK computation (~302ms per bond at chi=256). Not worth the added complexity.
 
 ### A5: GPU-Side SVD Singular Value Scaling
 
@@ -221,7 +221,7 @@ At chi=256, CPU LAPACK SVD consumes **97-98% of per-sweep runtime**. All Lanczos
 Sweep 2: lanczos=467ms (990 iters) svd=38132ms env=26ms other=4ms
 ```
 
-The SVD operates on matrices of size (chi×d, d×chi) = (512, 512) at chi=256. Each LAPACK `dgesvd` call takes ~0.6ms, and there are ~63 bonds × 2 directions = ~126 SVDs per sweep, totaling ~38s.
+The SVD operates on matrices of size (chi×d, d×chi) = (512, 512) at chi=256. Each LAPACK `dgesvd` call takes ~302ms, and there are ~63 bonds × 2 directions = ~126 SVDs per sweep, totaling ~38s.
 
 ### 2. GPU SVD (rocsolver) Provides Modest Improvement
 
