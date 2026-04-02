@@ -1,0 +1,50 @@
+cmake_minimum_required(VERSION 3.21)
+project(DMRG2_GPU_OPT_CUDA LANGUAGES CXX CUDA)
+
+# ==========================================
+# GPU-Native Two-Site DMRG-OPT (NS + Davidson) — CUDA port
+# ==========================================
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+
+# GPU target architecture
+set(CMAKE_CUDA_ARCHITECTURES 89 CACHE STRING "CUDA architectures to compile for")
+
+find_package(CUDAToolkit REQUIRED)
+find_package(LAPACK REQUIRED)
+
+# Include directories
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+# ==========================================
+# GPU-Native Two-Site DMRG-OPT executable
+# ==========================================
+add_executable(dmrg2_gpu_opt
+    src/test_dmrg2_gpu_opt.cu
+    src/dmrg2_gpu_opt.cu
+)
+
+target_compile_options(dmrg2_gpu_opt PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:-O3 --allow-unsupported-compiler>
+)
+
+target_link_libraries(dmrg2_gpu_opt
+    CUDA::cublas
+    CUDA::cusolver
+    ${LAPACK_LIBRARIES}
+)
+
+# ==========================================
+# Build info
+# ==========================================
+message(STATUS "==============================================")
+message(STATUS "GPU-Native Two-Site DMRG-OPT Build Configuration (CUDA)")
+message(STATUS "==============================================")
+message(STATUS "CUDA architectures: ${CMAKE_CUDA_ARCHITECTURES}")
+message(STATUS "Backend: cuBLAS GEMM (Newton-Schulz + Block-Davidson)")
+message(STATUS "==============================================")

@@ -1,0 +1,1732 @@
+#ifndef DMRG_GPU_OPT_IMPL_H
+#define DMRG_GPU_OPT_IMPL_H
+
+#include <cusolverDn.h>
+#include <iostream>
+#include <cmath>
+#include <algorithm>
+#include <cstring>
+#include <chrono>
+
+#define CUDA_CHECK(call) \
+    do { \
+        cudaError_t err = call; \
+        if (err != cudaSuccess) { \
+            std::cerr << "CUDA error in " << __FILE__ << ":" << __LINE__ \
+                      << " - " << cudaGetErrorString(err) << std::endl; \
+            throw std::runtime_error("CUDA error"); \
+        } \
+    } while(0)
+
+#define CUBLAS_CHECK(call) \
+    do { \
+        cublasStatus_t status = call; \
+        if (status != CUBLAS_STATUS_SUCCESS) { \
+            std::cerr << "cuBLAS error in " << __FILE__ << ":" << __LINE__ \
+                      << " - status " << status << std::endl; \
+            throw std::runtime_error("cuBLAS error"); \
+        } \
+    } while(0)
+
+// Profiling counters (reset per sweep pair)
+static double prof_davidson_ms = 0, prof_ns_ms = 0, prof_env_ms = 0;
+static int prof_davidson_iters = 0, prof_ns_iters = 0, prof_site_count = 0;
+static int prof_heff_calls = 0;
+
+// ============================================================================
+// Constructor
+// ============================================================================
+
+template<typename Scalar>
+DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
+    : L_(L), d_(d), chi_max_(pad_mfma16(chi_max)), chi_max_user_(chi_max),
+      D_mpo_(D_mpo), tol_(tol), energy_(0.0) {
+
+    if (chi_max_ != chi_max_user_) {
+        printf("[OPT] MFMA-16 padding: chi_max %d -> %d\n", chi_max_user_, chi_max_);
+    }
+
+    // Bond dimensions (using padded chi_max for alignment)
+    bond_dims_.resize(L + 1);
+    bond_dims_[0] = 1;
+    bond_dims_[L] = 1;
+    for (int i = 1; i < L; i++) {
+        double exact_dim = pow((double)d_, std::min(i, L - i));
+        bond_dims_[i] = (exact_dim > chi_max_user_) ? chi_max_user_ : (int)exact_dim;
+    }
+
+    // GPU handles
+    CUDA_CHECK(cudaStreamCreate(&stream_));
+    CUBLAS_CHECK(cublasCreate(&cublas_h_));
+    CUBLAS_CHECK(cublasSetStream(cublas_h_, stream_));
+
+    // Contraction intermediates
+    int t_max = D_mpo_ * d_ * chi_max_ * chi_max_;
+    CUDA_CHECK(cudaMalloc(&d_T1_, t_max * sizeof(Scalar)));
+    CUDA_CHECK(cudaMalloc(&d_T2_, t_max * sizeof(Scalar)));
+
+    // MPS tensors
+    d_mps_tensors_.resize(L, nullptr);
+    for (int i = 0; i < L; i++) {
+        allocate_mps_tensor(i, chi_L(i), chi_R(i));
+    }
+
+    // MPO tensors
+    d_mpo_tensors_.resize(L, nullptr);
+
+    // W matrices (allocated in set_mpo)
+    d_W_left_.resize(L, nullptr);
+    d_W_right_.resize(L, nullptr);
+
+    // Environments
+    d_L_envs_.resize(L + 1, nullptr);
+    d_R_envs_.resize(L + 1, nullptr);
+    L_env_alloc_chi_.resize(L + 1, 0);
+    R_env_alloc_chi_.resize(L + 1, 0);
+
+    for (int i = 0; i <= L; i++) {
+        int chi_alloc = (i == 0 || i == L) ? 1 : chi_max_;
+        int sz = chi_alloc * D_mpo_ * chi_alloc;
+        CUDA_CHECK(cudaMalloc(&d_L_envs_[i], sz * sizeof(Scalar)));
+        CUDA_CHECK(cudaMalloc(&d_R_envs_[i], sz * sizeof(Scalar)));
+        CUDA_CHECK(cudaMemset(d_L_envs_[i], 0, sz * sizeof(Scalar)));
+        CUDA_CHECK(cudaMemset(d_R_envs_[i], 0, sz * sizeof(Scalar)));
+        L_env_alloc_chi_[i] = chi_alloc;
+        R_env_alloc_chi_[i] = chi_alloc;
+    }
+
+    // Lanczos workspace (fallback)
+    theta_size_max_ = chi_max_ * d_ * chi_max_;
+    max_lanczos_iter_ = std::min(100, theta_size_max_);
+    CUDA_CHECK(cudaMalloc(&d_theta_, theta_size_max_ * sizeof(Scalar)));
+    CUDA_CHECK(cudaMalloc(&d_heff_result_, theta_size_max_ * sizeof(Scalar)));
+    CUDA_CHECK(cudaMalloc(&d_lanczos_v_, (size_t)max_lanczos_iter_ * theta_size_max_ * sizeof(Scalar)));
+    CUDA_CHECK(cudaMalloc(&d_ritz_coeffs_, max_lanczos_iter_ * sizeof(Scalar)));
+
+    // Batched GEMM pointer arrays (Step 1)
+    int batch_max = D_mpo_ * d_;
+    CUDA_CHECK(cudaMalloc(&d_batch_A_, batch_max * sizeof(Scalar*)));
+    CUDA_CHECK(cudaMalloc(&d_batch_B_, batch_max * sizeof(Scalar*)));
+    CUDA_CHECK(cudaMalloc(&d_batch_C_, batch_max * sizeof(Scalar*)));
+
+    // Batched GEMM pointer arrays (Step 3)
+    CUDA_CHECK(cudaMalloc(&d_batch3_A_, batch_max * sizeof(Scalar*)));
+    CUDA_CHECK(cudaMalloc(&d_batch3_B_, batch_max * sizeof(Scalar*)));
+    CUDA_CHECK(cudaMalloc(&d_batch3_C_, batch_max * sizeof(Scalar*)));
+
+    // SVD workspace (reused as NS scratch)
+    int svd_max_dim = chi_max_ * d_;
+    CUDA_CHECK(cudaMalloc(&d_svd_A_,    theta_size_max_ * sizeof(Scalar)));
+    CUDA_CHECK(cudaMalloc(&d_svd_U_,    (size_t)svd_max_dim * chi_max_ * sizeof(Scalar)));
+    CUDA_CHECK(cudaMalloc(&d_svd_S_,    chi_max_ * sizeof(RealType)));
+    CUDA_CHECK(cudaMalloc(&d_svd_Vh_,   (size_t)chi_max_ * svd_max_dim * sizeof(Scalar)));
+
+    // CPU SVD workspace
+    h_svd_A_.resize(theta_size_max_);
+    h_svd_U_.resize((size_t)svd_max_dim * chi_max_);
+    h_svd_S_.resize(chi_max_);
+    h_svd_Vh_.resize((size_t)chi_max_ * svd_max_dim);
+    h_svd_tmp_.resize((size_t)svd_max_dim * chi_max_);
+    h_svd_rwork_.resize(Traits::svd_rwork_size(svd_max_dim, svd_max_dim));
+
+    // Query optimal LAPACK workspace for ALL possible (m, n) combinations
+    {
+        int max_lwork = 0;
+        const char jobu = 'S', jobvt = 'S';
+        int dims[][2] = {
+            {svd_max_dim, svd_max_dim},  // square
+            {svd_max_dim, chi_max_},      // tall: m = chi*d, n = chi (direction R)
+            {chi_max_, svd_max_dim},      // wide: m = chi, n = chi*d (direction L)
+        };
+        for (auto& dim : dims) {
+            int qm = dim[0], qn = dim[1];
+            int qk = std::min(qm, qn);
+            int lwork_query = -1;
+            Scalar work_opt;
+            int info;
+            Traits::lapack_gesvd(&jobu, &jobvt, &qm, &qn, nullptr, &qm, nullptr,
+                    nullptr, &qm, nullptr, &qk, &work_opt, &lwork_query,
+                    h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
+            int opt_size;
+            if constexpr (Traits::is_complex) {
+                opt_size = (int)Traits::real_part(work_opt) + 1;
+            } else {
+                opt_size = (int)work_opt + 1;
+            }
+            if (opt_size > max_lwork) max_lwork = opt_size;
+        }
+        h_svd_work_.resize(max_lwork);
+    }
+
+    // Newton-Schulz workspace
+    // Single-site: theta is at most (chi_max*d, chi_max), so NS matrices are at most (chi_max, chi_max)
+    int ns_max_m = chi_max_ * d_;   // max tall dim
+    int ns_max_n = chi_max_;        // max short dim
+    CUDA_CHECK(cudaMalloc(&d_ns_U_,     (size_t)ns_max_m * ns_max_n * sizeof(Scalar)));
+    CUDA_CHECK(cudaMalloc(&d_ns_U_new_, (size_t)ns_max_m * ns_max_n * sizeof(Scalar)));
+    CUDA_CHECK(cudaMalloc(&d_ns_gram_,  (size_t)ns_max_n * ns_max_n * sizeof(Scalar)));
+    CUDA_CHECK(cudaMalloc(&d_ns_P_,     (size_t)ns_max_n * ns_max_n * sizeof(Scalar)));
+    h_ns_PtP_.resize(ns_max_n * ns_max_n);
+    h_ns_eigvals_.resize(ns_max_n);
+    h_ns_syev_rwork_.resize(Traits::syev_rwork_size(ns_max_n));
+    {
+        int lwork_q = -1; Scalar work_opt; int info_q;
+        const char jobz_q = 'V', uplo_q = 'U';
+        Traits::lapack_syev(&jobz_q, &uplo_q, &ns_max_n, h_ns_PtP_.data(), &ns_max_n,
+                            h_ns_eigvals_.data(), &work_opt, &lwork_q,
+                            h_ns_syev_rwork_.empty() ? nullptr : h_ns_syev_rwork_.data(), &info_q);
+        int opt_lwork;
+        if constexpr (Traits::is_complex) opt_lwork = (int)Traits::real_part(work_opt) + 1;
+        else opt_lwork = (int)work_opt + 1;
+        h_ns_syev_work_.resize(opt_lwork);
+    }
+
+    // Block-Davidson workspace
+    davidson_b_ = 4;
+    davidson_max_sub_ = std::min(davidson_b_ * 8, theta_size_max_);
+    CUDA_CHECK(cudaMalloc(&d_dav_V_,     (size_t)theta_size_max_ * davidson_max_sub_ * sizeof(Scalar)));
+    CUDA_CHECK(cudaMalloc(&d_dav_AV_,    (size_t)theta_size_max_ * davidson_max_sub_ * sizeof(Scalar)));
+    {
+        size_t dav_work_sz = std::max((size_t)theta_size_max_ * davidson_b_,
+                                       (size_t)davidson_max_sub_ * davidson_max_sub_);
+        CUDA_CHECK(cudaMalloc(&d_dav_work_,  dav_work_sz * sizeof(Scalar)));
+        CUDA_CHECK(cudaMalloc(&d_dav_work2_, dav_work_sz * sizeof(Scalar)));
+    }
+    h_dav_H_proj_.resize(davidson_max_sub_ * davidson_max_sub_);
+    h_dav_eigvals_.resize(davidson_max_sub_);
+    h_dav_eigvecs_.resize(davidson_max_sub_ * davidson_max_sub_);
+}
+
+// ============================================================================
+// Destructor
+// ============================================================================
+
+template<typename Scalar>
+DMRGGPUOpt<Scalar>::~DMRGGPUOpt() {
+    free_gpu_resources();
+}
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::free_gpu_resources() {
+    for (auto ptr : d_mps_tensors_) if (ptr) cudaFree(ptr);
+    for (auto ptr : d_mpo_tensors_) if (ptr) cudaFree(ptr);
+    for (auto ptr : d_W_left_) if (ptr) cudaFree(ptr);
+    for (auto ptr : d_W_right_) if (ptr) cudaFree(ptr);
+    for (auto ptr : d_L_envs_) if (ptr) cudaFree(ptr);
+    for (auto ptr : d_R_envs_) if (ptr) cudaFree(ptr);
+
+    if (d_theta_) cudaFree(d_theta_);
+    if (d_heff_result_) cudaFree(d_heff_result_);
+    if (d_lanczos_v_) cudaFree(d_lanczos_v_);
+    if (d_ritz_coeffs_) cudaFree(d_ritz_coeffs_);
+    if (d_T1_) cudaFree(d_T1_);
+    if (d_T2_) cudaFree(d_T2_);
+    if (d_batch_A_) cudaFree(d_batch_A_);
+    if (d_batch_B_) cudaFree(d_batch_B_);
+    if (d_batch_C_) cudaFree(d_batch_C_);
+    if (d_batch3_A_) cudaFree(d_batch3_A_);
+    if (d_batch3_B_) cudaFree(d_batch3_B_);
+    if (d_batch3_C_) cudaFree(d_batch3_C_);
+    if (d_svd_A_) cudaFree(d_svd_A_);
+    if (d_svd_U_) cudaFree(d_svd_U_);
+    if (d_svd_S_) cudaFree(d_svd_S_);
+    if (d_svd_Vh_) cudaFree(d_svd_Vh_);
+
+    // Newton-Schulz workspace
+    if (d_ns_U_) cudaFree(d_ns_U_);
+    if (d_ns_U_new_) cudaFree(d_ns_U_new_);
+    if (d_ns_gram_) cudaFree(d_ns_gram_);
+    if (d_ns_P_) cudaFree(d_ns_P_);
+
+    // Block-Davidson workspace
+    if (d_dav_V_) cudaFree(d_dav_V_);
+    if (d_dav_AV_) cudaFree(d_dav_AV_);
+    if (d_dav_work_) cudaFree(d_dav_work_);
+    if (d_dav_work2_) cudaFree(d_dav_work2_);
+
+    cublasDestroy(cublas_h_);
+    cudaStreamDestroy(stream_);
+}
+
+// ============================================================================
+// Memory management
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::allocate_mps_tensor(int site, int cL, int cR) {
+    if (d_mps_tensors_[site]) CUDA_CHECK(cudaFree(d_mps_tensors_[site]));
+    CUDA_CHECK(cudaMalloc(&d_mps_tensors_[site], cL * d_ * cR * sizeof(Scalar)));
+}
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::ensure_L_env_alloc(int idx, int chi) {
+    if (chi > L_env_alloc_chi_[idx]) {
+        if (d_L_envs_[idx]) CUDA_CHECK(cudaFree(d_L_envs_[idx]));
+        int sz = chi * D_mpo_ * chi;
+        CUDA_CHECK(cudaMalloc(&d_L_envs_[idx], sz * sizeof(Scalar)));
+        L_env_alloc_chi_[idx] = chi;
+    }
+}
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::ensure_R_env_alloc(int idx, int chi) {
+    if (chi > R_env_alloc_chi_[idx]) {
+        if (d_R_envs_[idx]) CUDA_CHECK(cudaFree(d_R_envs_[idx]));
+        int sz = chi * D_mpo_ * chi;
+        CUDA_CHECK(cudaMalloc(&d_R_envs_[idx], sz * sizeof(Scalar)));
+        R_env_alloc_chi_[idx] = chi;
+    }
+}
+
+// ============================================================================
+// MPS initialization
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::initialize_mps_random(double scale) {
+    for (int i = 0; i < L_; i++) {
+        int size = chi_L(i) * d_ * chi_R(i);
+        std::vector<Scalar> h_A(size);
+        for (int j = 0; j < size; j++) {
+            h_A[j] = Traits::scale_by_real(scale, Traits::random_val());
+        }
+        CUDA_CHECK(cudaMemcpy(d_mps_tensors_[i], h_A.data(),
+                            size * sizeof(Scalar), cudaMemcpyHostToDevice));
+    }
+}
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::initialize_mps_product() {
+    for (int i = 0; i < L_; i++) {
+        int cL = chi_L(i), cR = chi_R(i);
+        int size = cL * d_ * cR;
+        std::vector<Scalar> h_A(size, Traits::zero());
+        int chi_min = std::min(cL, cR);
+        for (int a = 0; a < chi_min; a++) {
+            h_A[a + 0*cL + a*cL*d_] = Traits::one();
+        }
+        CUDA_CHECK(cudaMemcpy(d_mps_tensors_[i], h_A.data(),
+                            size * sizeof(Scalar), cudaMemcpyHostToDevice));
+    }
+}
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::initialize_mps_neel() {
+    for (int i = 0; i < L_; i++) {
+        int cL = chi_L(i), cR = chi_R(i);
+        int size = cL * d_ * cR;
+        std::vector<Scalar> h_A(size, Traits::zero());
+        int spin = (i % 2 == 0) ? 0 : 1;
+        int chi_min = std::min(cL, cR);
+        for (int a = 0; a < chi_min; a++) {
+            h_A[a + spin*cL + a*cL*d_] = Traits::one();
+        }
+        CUDA_CHECK(cudaMemcpy(d_mps_tensors_[i], h_A.data(),
+                            size * sizeof(Scalar), cudaMemcpyHostToDevice));
+    }
+}
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
+    int D = D_mpo_, d = d_;
+    for (int i = 0; i < L_; i++) {
+        int size = D * d * d * D;
+        CUDA_CHECK(cudaMalloc(&d_mpo_tensors_[i], size * sizeof(Scalar)));
+        CUDA_CHECK(cudaMemcpy(d_mpo_tensors_[i], h_mpo_tensors[i],
+                            size * sizeof(Scalar), cudaMemcpyHostToDevice));
+
+        // Precompute W_left and W_right matrices
+        int wm_size = D * d * d * D;
+        std::vector<Scalar> h_WL(wm_size, Traits::zero());
+        std::vector<Scalar> h_WR(wm_size, Traits::zero());
+        for (int w = 0; w < D; w++)
+            for (int s = 0; s < d; s++)
+                for (int sp = 0; sp < d; sp++)
+                    for (int wp = 0; wp < D; wp++) {
+                        Scalar val = h_mpo_tensors[i][w + s*D + sp*D*d + wp*D*d*d];
+                        h_WL[(w*d+s) + (wp*d+sp) * D * d] = val;
+                        h_WR[(wp*d+s) + (w*d+sp) * D * d] = val;
+                    }
+        CUDA_CHECK(cudaMalloc(&d_W_left_[i], wm_size * sizeof(Scalar)));
+        CUDA_CHECK(cudaMemcpy(d_W_left_[i], h_WL.data(),
+                            wm_size * sizeof(Scalar), cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMalloc(&d_W_right_[i], wm_size * sizeof(Scalar)));
+        CUDA_CHECK(cudaMemcpy(d_W_right_[i], h_WR.data(),
+                            wm_size * sizeof(Scalar), cudaMemcpyHostToDevice));
+    }
+}
+
+// ============================================================================
+// GEMM-based tensor contractions
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_result) {
+    int cL = chi_L(site);
+    int cR = chi_R(site);
+    int D = D_mpo_, d = d_;
+    Scalar one = Traits::one(), zero_val = Traits::zero();
+
+    Scalar* L_env = d_L_envs_[site];
+    Scalar* R_env = d_R_envs_[site + 1];
+    Scalar* W_mat = d_W_left_[site];
+    Scalar* V = d_T1_;
+    Scalar* U = d_T2_;
+
+    // Step 1: V_ws[a',b] = L_w^T[a',a] * theta_s[a,b]  (batched GEMM)
+    {
+        std::vector<Scalar*> h_A(D * d), h_B(D * d), h_C(D * d);
+        for (int w = 0; w < D; w++)
+            for (int s = 0; s < d; s++) {
+                int ws = w * d + s;
+                h_A[ws] = L_env + w * cL;
+                h_B[ws] = const_cast<Scalar*>(d_theta_in) + s * cL;
+                h_C[ws] = V + ws * cL * cR;
+            }
+        CUDA_CHECK(cudaMemcpyAsync(d_batch_A_, h_A.data(), D*d*sizeof(Scalar*), cudaMemcpyHostToDevice, stream_));
+        CUDA_CHECK(cudaMemcpyAsync(d_batch_B_, h_B.data(), D*d*sizeof(Scalar*), cudaMemcpyHostToDevice, stream_));
+        CUDA_CHECK(cudaMemcpyAsync(d_batch_C_, h_C.data(), D*d*sizeof(Scalar*), cudaMemcpyHostToDevice, stream_));
+        CUBLAS_CHECK(Traits::gemm_batched(cublas_h_,
+            Traits::op_t, CUBLAS_OP_N,
+            cL, cR, cL,
+            &one,
+            (const Scalar**)d_batch_A_, cL * D,
+            (const Scalar**)d_batch_B_, cL * d,
+            &zero_val,
+            d_batch_C_, cL,
+            D * d));
+    }
+
+    // Step 2: U = V * W_matrix
+    CUBLAS_CHECK(Traits::gemm(cublas_h_,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        cL * cR, d * D, D * d,
+        &one,
+        V, cL * cR,
+        W_mat, D * d,
+        &zero_val,
+        U, cL * cR));
+
+    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
+    // Use strided_batched GEMM only when: large chi AND d<=2
+    // (d>=3 causes cache line contention from interleaved output layout)
+    if (cL >= 16 && cR >= 16 && d <= 2) {
+        for (int wp = 0; wp < D; wp++) {
+            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
+            CUBLAS_CHECK(Traits::gemm_strided_batched(cublas_h_,
+                CUBLAS_OP_N, CUBLAS_OP_N,
+                cL, cR, cR,
+                &one,
+                U + (size_t)wp * d * cL * cR, cL, (long long int)(cL * cR),
+                R_env + wp * cR, cR * D, (long long int)0,
+                &beta,
+                d_result, cL * d, (long long int)cL,
+                d));
+        }
+    } else {
+        for (int wp = 0; wp < D; wp++) {
+            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
+            for (int sp = 0; sp < d; sp++) {
+                int ws_out = wp * d + sp;
+                CUBLAS_CHECK(Traits::gemm(cublas_h_,
+                    CUBLAS_OP_N, CUBLAS_OP_N,
+                    cL, cR, cR,
+                    &one,
+                    U + ws_out * cL * cR, cL,
+                    R_env + wp * cR, cR * D,
+                    &beta,
+                    d_result + sp * cL, cL * d));
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Left environment update
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::update_left_env(int site) {
+    int chi_in = bond_dims_[site];
+    int chi_out = bond_dims_[site + 1];
+    int D = D_mpo_, d = d_;
+    Scalar one = Traits::one(), zero_val = Traits::zero();
+
+    ensure_L_env_alloc(site + 1, chi_out);
+
+    Scalar* L_env = d_L_envs_[site];
+    Scalar* A = d_mps_tensors_[site];
+    Scalar* W_mat = d_W_left_[site];
+    Scalar* L_new = d_L_envs_[site + 1];
+    Scalar* V = d_T1_;
+    Scalar* U = d_T2_;
+
+    // Step 1: V_ws[a',b] = L_w^T[a',a] * A_s[a,b]  (batched GEMM)
+    {
+        std::vector<Scalar*> h_A(D * d), h_B(D * d), h_C(D * d);
+        for (int w = 0; w < D; w++)
+            for (int s = 0; s < d; s++) {
+                int ws = w * d + s;
+                h_A[ws] = L_env + w * chi_in;
+                h_B[ws] = A + s * chi_in;
+                h_C[ws] = V + ws * chi_in * chi_out;
+            }
+        CUDA_CHECK(cudaMemcpyAsync(d_batch_A_, h_A.data(), D*d*sizeof(Scalar*), cudaMemcpyHostToDevice, stream_));
+        CUDA_CHECK(cudaMemcpyAsync(d_batch_B_, h_B.data(), D*d*sizeof(Scalar*), cudaMemcpyHostToDevice, stream_));
+        CUDA_CHECK(cudaMemcpyAsync(d_batch_C_, h_C.data(), D*d*sizeof(Scalar*), cudaMemcpyHostToDevice, stream_));
+        CUBLAS_CHECK(Traits::gemm_batched(cublas_h_,
+            Traits::op_t, CUBLAS_OP_N,
+            chi_in, chi_out, chi_in,
+            &one,
+            (const Scalar**)d_batch_A_, chi_in * D,
+            (const Scalar**)d_batch_B_, chi_in * d,
+            &zero_val,
+            d_batch_C_, chi_in,
+            D * d));
+    }
+
+    // Step 2: U = V * W_matrix
+    CUBLAS_CHECK(Traits::gemm(cublas_h_,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        chi_in * chi_out, d * D, D * d,
+        &one,
+        V, chi_in * chi_out,
+        W_mat, D * d,
+        &zero_val,
+        U, chi_in * chi_out));
+
+    // Step 3: L_new_w'[b,b'] = sum_{a',s'} U[a',ws',b] * conj(A[a',s',b'])
+    // Batched over w' only when D<=2 and chi large (D>=3 causes cache contention)
+    if (chi_in >= 16 && chi_out >= 16 && D <= 2) {
+        for (int sp = 0; sp < d; sp++) {
+            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+            CUBLAS_CHECK(Traits::gemm_strided_batched(cublas_h_,
+                Traits::op_h, CUBLAS_OP_N,
+                chi_out, chi_out, chi_in,
+                &one,
+                U + (size_t)sp * chi_in * chi_out, chi_in,
+                (long long int)((size_t)d * chi_in * chi_out),
+                A + sp * chi_in, chi_in * d, (long long int)0,
+                &beta,
+                L_new, chi_out * D, (long long int)chi_out,
+                D));
+        }
+    } else {
+        for (int wp = 0; wp < D; wp++) {
+            for (int sp = 0; sp < d; sp++) {
+                Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+                int ws_out = wp * d + sp;
+                CUBLAS_CHECK(Traits::gemm(cublas_h_,
+                    Traits::op_h, CUBLAS_OP_N,
+                    chi_out, chi_out, chi_in,
+                    &one,
+                    U + ws_out * chi_in * chi_out, chi_in,
+                    A + sp * chi_in, chi_in * d,
+                    &beta,
+                    L_new + wp * chi_out, chi_out * D));
+            }
+        }
+    }
+
+    // For complex: L_new = conj(U^H * A) = U^T * conj(A), the correct bra contraction
+    if constexpr (Traits::is_complex) {
+        conjugate_inplace(L_new, chi_out * D * chi_out, stream_);
+    }
+}
+
+// ============================================================================
+// Right environment update
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::update_right_env(int site) {
+    int chi_in = bond_dims_[site + 1];
+    int chi_out = bond_dims_[site];
+    int D = D_mpo_, d = d_;
+    Scalar one = Traits::one(), zero_val = Traits::zero();
+
+    ensure_R_env_alloc(site, chi_out);
+
+    Scalar* A = d_mps_tensors_[site];
+    Scalar* R_env = d_R_envs_[site + 1];
+    Scalar* W_mat = d_W_right_[site];
+    Scalar* R_new = d_R_envs_[site];
+    Scalar* V = d_T1_;
+    Scalar* U = d_T2_;
+
+    // Step 1: V_ws[a,b'] = A_s[a,b] * R_w'[b,b']  (batched GEMM)
+    {
+        std::vector<Scalar*> h_A(D * d), h_B(D * d), h_C(D * d);
+        for (int wp = 0; wp < D; wp++)
+            for (int s = 0; s < d; s++) {
+                int ws = wp * d + s;
+                h_A[ws] = A + s * chi_out;
+                h_B[ws] = R_env + wp * chi_in;
+                h_C[ws] = V + ws * chi_out * chi_in;
+            }
+        CUDA_CHECK(cudaMemcpyAsync(d_batch_A_, h_A.data(), D*d*sizeof(Scalar*), cudaMemcpyHostToDevice, stream_));
+        CUDA_CHECK(cudaMemcpyAsync(d_batch_B_, h_B.data(), D*d*sizeof(Scalar*), cudaMemcpyHostToDevice, stream_));
+        CUDA_CHECK(cudaMemcpyAsync(d_batch_C_, h_C.data(), D*d*sizeof(Scalar*), cudaMemcpyHostToDevice, stream_));
+        CUBLAS_CHECK(Traits::gemm_batched(cublas_h_,
+            CUBLAS_OP_N, CUBLAS_OP_N,
+            chi_out, chi_in, chi_in,
+            &one,
+            (const Scalar**)d_batch_A_, chi_out * d,
+            (const Scalar**)d_batch_B_, chi_in * D,
+            &zero_val,
+            d_batch_C_, chi_out,
+            D * d));
+    }
+
+    // Step 2: U = V * W_matrix
+    CUBLAS_CHECK(Traits::gemm(cublas_h_,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        chi_out * chi_in, d * D, D * d,
+        &one,
+        V, chi_out * chi_in,
+        W_mat, D * d,
+        &zero_val,
+        U, chi_out * chi_in));
+
+    // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']
+    // Batched over w only when D<=2 and chi large (D>=3 causes cache contention)
+    if (chi_in >= 16 && chi_out >= 16 && D <= 2) {
+        for (int sp = 0; sp < d; sp++) {
+            Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+            CUBLAS_CHECK(Traits::gemm_strided_batched(cublas_h_,
+                CUBLAS_OP_N, Traits::op_h,
+                chi_out, chi_out, chi_in,
+                &one,
+                U + (size_t)sp * chi_out * chi_in, chi_out,
+                (long long int)((size_t)d * chi_out * chi_in),
+                A + sp * chi_out, chi_out * d, (long long int)0,
+                &beta,
+                R_new, chi_out * D, (long long int)chi_out,
+                D));
+        }
+    } else {
+        for (int w = 0; w < D; w++) {
+            for (int sp = 0; sp < d; sp++) {
+                Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
+                int ws_out = w * d + sp;
+                CUBLAS_CHECK(Traits::gemm(cublas_h_,
+                    CUBLAS_OP_N, Traits::op_h,
+                    chi_out, chi_out, chi_in,
+                    &one,
+                    U + ws_out * chi_out * chi_in, chi_out,
+                    A + sp * chi_out, chi_out * d,
+                    &beta,
+                    R_new + w * chi_out, chi_out * D));
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Environment building
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::build_initial_environments() {
+    // L[0] = trivial left boundary: (1, D_mpo, 1), L[0][0,0,0] = 1
+    {
+        std::vector<Scalar> h_L(D_mpo_, Traits::zero());
+        h_L[0] = Traits::one();
+        CUDA_CHECK(cudaMemcpy(d_L_envs_[0], h_L.data(),
+                            D_mpo_ * sizeof(Scalar), cudaMemcpyHostToDevice));
+    }
+
+    // R[L] = trivial right boundary: (1, D_mpo, 1), R[L][0,D-1,0] = 1
+    {
+        std::vector<Scalar> h_R(D_mpo_, Traits::zero());
+        h_R[D_mpo_ - 1] = Traits::one();
+        CUDA_CHECK(cudaMemcpy(d_R_envs_[L_], h_R.data(),
+                            D_mpo_ * sizeof(Scalar), cudaMemcpyHostToDevice));
+    }
+
+    // Build all R environments from right to left
+    for (int i = L_ - 1; i >= 0; i--) {
+        update_right_env(i);
+    }
+}
+
+// ============================================================================
+// Theta formation and Lanczos (fallback)
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::form_theta(int site, Scalar* d_theta) {
+    int size = chi_L(site) * d_ * chi_R(site);
+    CUDA_CHECK(cudaMemcpy(d_theta, d_mps_tensors_[site],
+                        size * sizeof(Scalar), cudaMemcpyDeviceToDevice));
+}
+
+template<typename Scalar>
+double DMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
+    int n = chi_L(site) * d_ * chi_R(site);
+    int max_iter = std::min(max_lanczos_iter_, n);
+    double tol_lanczos = 1e-12;
+    double tol_eig_conv = 1e-12;
+
+    Scalar* d_lanczos_v = d_lanczos_v_;
+
+    std::vector<double> h_alpha(max_iter);
+    std::vector<double> h_beta(max_iter);
+
+    // v[0] = theta / ||theta||
+    double norm;
+    CUBLAS_CHECK(Traits::nrm2(cublas_h_, n, d_theta, 1, &norm));
+
+    if (norm < 1e-14) {
+        std::vector<Scalar> h_init(n);
+        srand(42 + site);
+        for (int i = 0; i < n; i++) h_init[i] = Traits::random_val();
+        CUDA_CHECK(cudaMemcpy(d_theta, h_init.data(), n * sizeof(Scalar), cudaMemcpyHostToDevice));
+        CUBLAS_CHECK(Traits::nrm2(cublas_h_, n, d_theta, 1, &norm));
+    }
+
+    double inv_norm = 1.0 / norm;
+    CUBLAS_CHECK(Traits::scal_real(cublas_h_, n, &inv_norm, d_theta, 1));
+    CUDA_CHECK(cudaMemcpy(d_lanczos_v, d_theta, n * sizeof(Scalar), cudaMemcpyDeviceToDevice));
+
+    double prev_energy = 1e30;
+    int iter;
+    for (iter = 0; iter < max_iter; iter++) {
+        Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
+
+        // w = H|v_i>
+        apply_heff(site, d_vi, d_heff_result_);
+
+        // alpha_i = <v_i|w>
+        Scalar alpha_result;
+        CUBLAS_CHECK(Traits::dot(cublas_h_, n, d_vi, 1, d_heff_result_, 1, &alpha_result));
+        double alpha_i = Traits::real_part(alpha_result);
+        h_alpha[iter] = alpha_i;
+
+        // w = w - alpha_i * v_i
+        Scalar neg_alpha = Traits::make_scalar(-alpha_i);
+        CUBLAS_CHECK(Traits::axpy(cublas_h_, n, &neg_alpha, d_vi, 1, d_heff_result_, 1));
+
+        // w = w - beta_{i-1} * v_{i-1}
+        if (iter > 0) {
+            Scalar neg_beta = Traits::make_scalar(-h_beta[iter - 1]);
+            Scalar* d_vim1 = d_lanczos_v + (size_t)(iter - 1) * n;
+            CUBLAS_CHECK(Traits::axpy(cublas_h_, n, &neg_beta, d_vim1, 1, d_heff_result_, 1));
+        }
+
+        // Full reorthogonalization via gemv
+        if (iter > 0) {
+            Scalar one_val = Traits::one(), zero_sc = Traits::zero(), neg_one = Traits::neg(Traits::one());
+            CUBLAS_CHECK(Traits::gemv(cublas_h_, Traits::op_h,
+                n, iter + 1, &one_val,
+                d_lanczos_v, n,
+                d_heff_result_, 1,
+                &zero_sc, d_ritz_coeffs_, 1));
+            CUBLAS_CHECK(Traits::gemv(cublas_h_, CUBLAS_OP_N,
+                n, iter + 1, &neg_one,
+                d_lanczos_v, n,
+                d_ritz_coeffs_, 1,
+                &one_val, d_heff_result_, 1));
+        } else {
+            Scalar overlap;
+            CUBLAS_CHECK(Traits::dot(cublas_h_, n, d_lanczos_v, 1, d_heff_result_, 1, &overlap));
+            Scalar neg_overlap = Traits::neg(overlap);
+            CUBLAS_CHECK(Traits::axpy(cublas_h_, n, &neg_overlap, d_lanczos_v, 1, d_heff_result_, 1));
+        }
+
+        // beta_i = ||w||
+        double beta_i;
+        CUBLAS_CHECK(Traits::nrm2(cublas_h_, n, d_heff_result_, 1, &beta_i));
+        h_beta[iter] = beta_i;
+
+        if (beta_i < tol_lanczos) {
+            iter++;
+            break;
+        }
+
+        // Eigenvalue convergence check (every 3 iterations after iter >= 4)
+        if (iter >= 4 && iter % 3 == 0) {
+            int ncheck = iter + 1;
+            std::vector<double> h_D_chk(ncheck), h_E_chk(ncheck);
+            std::copy(h_alpha.begin(), h_alpha.begin() + ncheck, h_D_chk.begin());
+            for (int i = 0; i < ncheck - 1; i++) h_E_chk[i] = h_beta[i];
+            h_E_chk[ncheck - 1] = 0.0;
+            const char jobz_n = 'N';
+            const int n_chk = ncheck;
+            std::vector<double> h_work_chk(1);
+            int info_chk = 0;
+            dstev_(&jobz_n, &n_chk, h_D_chk.data(), h_E_chk.data(), nullptr, &n_chk, h_work_chk.data(), &info_chk);
+            if (info_chk == 0) {
+                double cur_energy = h_D_chk[0];
+                if (std::abs(cur_energy - prev_energy) < tol_eig_conv) {
+                    iter++;
+                    break;
+                }
+                prev_energy = cur_energy;
+            }
+        }
+
+        // v_{i+1} = w / beta_i
+        if (iter + 1 < max_iter) {
+            Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
+            double scale = 1.0 / beta_i;
+            CUDA_CHECK(cudaMemcpy(d_vip1, d_heff_result_, n * sizeof(Scalar), cudaMemcpyDeviceToDevice));
+            CUBLAS_CHECK(Traits::scal_real(cublas_h_, n, &scale, d_vip1, 1));
+        }
+    }
+
+    int niter = iter;
+    prof_davidson_iters += niter;
+    prof_heff_calls += niter;
+
+    // Solve tridiagonal eigenvalue problem on CPU
+    std::vector<double> h_D(niter), h_E(niter), h_Z(niter * niter);
+    std::vector<double> h_work(std::max(1, 2*niter - 2));
+    int lapack_info = 0;
+
+    std::copy(h_alpha.begin(), h_alpha.begin() + niter, h_D.begin());
+    for (int i = 0; i < niter - 1; i++) h_E[i] = h_beta[i];
+    if (niter > 0) h_E[niter - 1] = 0.0;
+
+    const char jobz = 'V';
+    const int n_lapack = niter;
+    const int ldz = niter;
+
+    dstev_(&jobz, &n_lapack, h_D.data(), h_E.data(), h_Z.data(), &ldz, h_work.data(), &lapack_info);
+
+    if (lapack_info != 0) {
+        throw std::runtime_error("LAPACK dstev failed with info = " + std::to_string(lapack_info));
+    }
+
+    double energy = h_D[0];
+
+    // Reconstruct ground state: |theta> = sum_i c[i] |v_i>
+    std::vector<Scalar> h_ritz_scalar(niter);
+    for (int i = 0; i < niter; i++) {
+        h_ritz_scalar[i] = Traits::make_scalar(h_Z[i]);
+    }
+    CUDA_CHECK(cudaMemcpy(d_ritz_coeffs_, h_ritz_scalar.data(), niter * sizeof(Scalar), cudaMemcpyHostToDevice));
+
+    Scalar one_sc = Traits::one(), zero_sc = Traits::zero();
+    CUBLAS_CHECK(Traits::gemv(
+        cublas_h_, CUBLAS_OP_N,
+        n, niter, &one_sc,
+        d_lanczos_v, n,
+        d_ritz_coeffs_, 1,
+        &zero_sc, d_theta, 1
+    ));
+
+    // Normalize
+    CUBLAS_CHECK(Traits::nrm2(cublas_h_, n, d_theta, 1, &norm));
+    inv_norm = 1.0 / norm;
+    CUBLAS_CHECK(Traits::scal_real(cublas_h_, n, &inv_norm, d_theta, 1));
+
+    return energy;
+}
+
+// ============================================================================
+// Newton-Schulz Left Polar Decomposition (tall/square, m >= n)
+// A = U @ P, where U^H U = I_n, P = U^H A is PSD
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::newton_schulz_left(
+    Scalar* d_A, int m, int n,
+    Scalar* d_U, Scalar* d_P,
+    double tol, int* out_iters) {
+
+    Scalar one = Traits::one(), zero_val = Traits::zero();
+    Scalar half = Traits::make_scalar(0.5);
+
+    // Compute ||A||_F
+    RealType fro;
+    CUDA_CHECK(cudaStreamSynchronize(stream_));
+    CUBLAS_CHECK(Traits::nrm2(cublas_h_, m * n, d_A, 1, &fro));
+
+    if (fro < 1e-300) {
+        CUDA_CHECK(cudaMemsetAsync(d_U, 0, m * n * sizeof(Scalar), stream_));
+        CUDA_CHECK(cudaMemsetAsync(d_P, 0, n * n * sizeof(Scalar), stream_));
+        if (out_iters) *out_iters = 0;
+        return;
+    }
+
+    // U = A / ||A||_F
+    CUDA_CHECK(cudaMemcpyAsync(d_U, d_A, m * n * sizeof(Scalar), cudaMemcpyDeviceToDevice, stream_));
+    RealType inv_fro = 1.0 / fro;
+    CUBLAS_CHECK(Traits::scal_real(cublas_h_, m * n, &inv_fro, d_U, 1));
+
+    Scalar* d_gram = d_ns_gram_;    // (n, n)
+    Scalar* d_U_new = d_ns_U_new_;  // (m, n)
+
+    int total_iters = 0;
+    for (int iter = 0; iter < 30; iter++) {
+        // 1. gram = U^H @ U  -> (n, n)
+        CUBLAS_CHECK(Traits::gemm(cublas_h_,
+            Traits::op_h, CUBLAS_OP_N,
+            n, n, m, &one, d_U, m, d_U, m, &zero_val, d_gram, n));
+
+        // 2. gram = 3I - gram  (in-place)
+        launch_scaled_identity_minus(d_gram, n, 3.0, stream_);
+
+        // 3. U_new = 0.5 * U @ gram  -> (m, n)
+        CUBLAS_CHECK(Traits::gemm(cublas_h_,
+            CUBLAS_OP_N, CUBLAS_OP_N,
+            m, n, n, &half, d_U, m, d_gram, n, &zero_val, d_U_new, m));
+
+        total_iters = iter + 1;
+
+        // Convergence check every 3 iterations
+        if (iter >= 2 && iter % 3 == 0) {
+            // diff = U_new - U -> compute in d_heff_result_ (scratch)
+            CUDA_CHECK(cudaMemcpyAsync(d_heff_result_, d_U_new, m * n * sizeof(Scalar),
+                                      cudaMemcpyDeviceToDevice, stream_));
+            Scalar neg_one = Traits::neg(Traits::one());
+            CUBLAS_CHECK(Traits::axpy(cublas_h_, m * n, &neg_one, d_U, 1, d_heff_result_, 1));
+
+            RealType diff_norm;
+            CUDA_CHECK(cudaStreamSynchronize(stream_));
+            CUBLAS_CHECK(Traits::nrm2(cublas_h_, m * n, d_heff_result_, 1, &diff_norm));
+
+            // Swap U <-> U_new
+            std::swap(d_U, d_U_new);
+
+            if (diff_norm < tol) break;
+        } else {
+            // Swap without convergence check
+            std::swap(d_U, d_U_new);
+        }
+    }
+
+    if (out_iters) *out_iters = total_iters;
+
+    // Ensure d_U is in d_ns_U_ (the expected output location)
+    if (d_U != d_ns_U_) {
+        CUDA_CHECK(cudaMemcpyAsync(d_ns_U_, d_U, m * n * sizeof(Scalar),
+                                  cudaMemcpyDeviceToDevice, stream_));
+    }
+
+    // P = U^H @ A  -> (n, m) x (m, n) -> (n, n)
+    CUBLAS_CHECK(Traits::gemm(cublas_h_,
+        Traits::op_h, CUBLAS_OP_N,
+        n, n, m, &one, d_ns_U_, m, d_A, m, &zero_val, d_P, n));
+}
+
+// ============================================================================
+// NS-based SVD and MPS update (single-site)
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::ns_svd_and_update_mps(int site, Scalar* d_theta, char direction) {
+    int cL = chi_L(site);
+    int cR = chi_R(site);
+
+    int m, n_svd;
+    if (direction == 'R') { m = cL * d_; n_svd = cR; }
+    else                  { m = cL;      n_svd = d_ * cR; }
+
+    // For direction 'L', theta is (cL, d*cR) which is typically wide -> fall back to SVD
+    // For direction 'R', theta is (cL*d, cR) which is tall when cL*d > cR
+    // For very small systems or wide case, fall back to SVD
+    if (m < n_svd || n_svd <= 4 || m < 2) {
+        svd_fallback(site, d_theta, direction);
+        return;
+    }
+
+    // Tall/square case: Newton-Schulz left polar decomposition
+    int ns_iters = 0;
+    newton_schulz_left(d_theta, m, n_svd, d_ns_U_, d_ns_P_, 1e-10, &ns_iters);
+    prof_ns_iters += ns_iters;
+
+    // If NS didn't converge well, fall back to SVD
+    if (ns_iters >= 29) {
+        svd_fallback(site, d_theta, direction);
+        return;
+    }
+
+    CUDA_CHECK(cudaStreamSynchronize(stream_));
+
+    // Verify ||U^H U - I||_F < tol to catch silent NS failures
+    {
+        Scalar one_v = Traits::one(), zero_v = Traits::zero();
+        CUBLAS_CHECK(Traits::gemm(cublas_h_,
+            Traits::op_h, CUBLAS_OP_N,
+            n_svd, n_svd, m, &one_v, d_ns_U_, m, d_ns_U_, m,
+            &zero_v, d_ns_gram_, n_svd));
+
+        std::vector<Scalar> h_UtU(n_svd * n_svd);
+        CUDA_CHECK(cudaMemcpy(h_UtU.data(), d_ns_gram_,
+                            n_svd * n_svd * sizeof(Scalar), cudaMemcpyDeviceToHost));
+        RealType frob2 = 0.0;
+        for (int j = 0; j < n_svd; j++) {
+            for (int i = 0; i < n_svd; i++) {
+                RealType re = Traits::real_part(h_UtU[i + j * n_svd]);
+                if (i == j) re -= 1.0;
+                frob2 += re * re;
+                if constexpr (Traits::is_complex) {
+                    RealType im = cuCimag(h_UtU[i + j * n_svd]);
+                    frob2 += im * im;
+                }
+            }
+        }
+        if (std::sqrt(frob2) > 1e-10) {
+            svd_fallback(site, d_theta, direction);
+            return;
+        }
+    }
+
+    // Eigendecompose P^H P -> eigenvalues sigma^2, eigenvectors V
+    Scalar one = Traits::one(), zero_val = Traits::zero();
+    Scalar* d_PtP = d_ns_gram_;  // reuse gram buffer for (n_svd, n_svd)
+    CUBLAS_CHECK(Traits::gemm(cublas_h_,
+        Traits::op_h, CUBLAS_OP_N,
+        n_svd, n_svd, n_svd, &one, d_ns_P_, n_svd, d_ns_P_, n_svd,
+        &zero_val, d_PtP, n_svd));
+
+    // Copy P^H P to host
+    CUDA_CHECK(cudaMemcpy(h_ns_PtP_.data(), d_PtP, n_svd * n_svd * sizeof(Scalar),
+                        cudaMemcpyDeviceToHost));
+
+    // Eigendecompose on CPU
+    int info;
+    const char jobz_ev = 'V', uplo_ev = 'U';
+    int lwork = (int)h_ns_syev_work_.size();
+    Traits::lapack_syev(&jobz_ev, &uplo_ev, &n_svd,
+            h_ns_PtP_.data(), &n_svd,
+            h_ns_eigvals_.data(),
+            h_ns_syev_work_.data(), &lwork,
+            h_ns_syev_rwork_.empty() ? nullptr : h_ns_syev_rwork_.data(),
+            &info);
+
+    if (info != 0) {
+        svd_fallback(site, d_theta, direction);
+        return;
+    }
+
+    // Eigenvalues are in ascending order. Singular values = sqrt(eigenvalues).
+    // Reverse to get descending order.
+    std::vector<RealType> sing_vals(n_svd);
+    for (int i = 0; i < n_svd; i++) {
+        RealType ev = h_ns_eigvals_[n_svd - 1 - i];
+        sing_vals[i] = (ev > 0) ? std::sqrt(ev) : 0.0;
+    }
+
+    // Truncation: single-site doesn't change bond dims, but we still truncate near-zero
+    int full_k = n_svd;
+    int max_k = std::min(full_k, chi_max_user_);
+    int new_k = max_k;
+    for (int i = 0; i < new_k; i++) {
+        if (sing_vals[i] < 1e-14) { new_k = i; break; }
+    }
+    if (new_k == 0) new_k = 1;
+
+    // Build Vh_trunc (new_k x n_svd) on host: rows are reversed eigenvectors (conjugated)
+    std::vector<Scalar> h_Vh_trunc(new_k * n_svd);
+    for (int i = 0; i < new_k; i++) {
+        int src_col = n_svd - 1 - i;
+        for (int j = 0; j < n_svd; j++) {
+            Scalar v_val = h_ns_PtP_[j + src_col * n_svd];
+            if constexpr (Traits::is_complex) {
+                h_Vh_trunc[i + j * new_k] = make_cuDoubleComplex(cuCreal(v_val), -cuCimag(v_val));
+            } else {
+                h_Vh_trunc[i + j * new_k] = v_val;
+            }
+        }
+    }
+
+    // Upload Vh_trunc to GPU (into d_svd_Vh_)
+    CUDA_CHECK(cudaMemcpy(d_svd_Vh_, h_Vh_trunc.data(),
+                        new_k * n_svd * sizeof(Scalar), cudaMemcpyHostToDevice));
+
+    // Compute U_p_trunc = P @ V_trunc @ diag(1/S) on GPU
+    // First: upload V_trunc (n_svd x new_k) to GPU
+    std::vector<Scalar> h_V_trunc(n_svd * new_k);
+    for (int i = 0; i < new_k; i++) {
+        int src_col = n_svd - 1 - i;
+        for (int j = 0; j < n_svd; j++) {
+            h_V_trunc[j + i * n_svd] = h_ns_PtP_[j + src_col * n_svd];
+        }
+    }
+    CUDA_CHECK(cudaMemcpy(d_svd_U_, h_V_trunc.data(),
+                        n_svd * new_k * sizeof(Scalar), cudaMemcpyHostToDevice));
+
+    // U_p = P @ V_trunc -> (n_svd, n_svd) x (n_svd, new_k) -> (n_svd, new_k)
+    // Store in d_svd_A_ (scratch)
+    CUBLAS_CHECK(Traits::gemm(cublas_h_,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        n_svd, new_k, n_svd, &one, d_ns_P_, n_svd,
+        d_svd_U_, n_svd, &zero_val, d_svd_A_, n_svd));
+
+    // Scale columns by 1/S: U_p[:, i] /= S[i]
+    for (int i = 0; i < new_k; i++) {
+        if (sing_vals[i] > 1e-14) {
+            RealType inv_s = 1.0 / sing_vals[i];
+            CUBLAS_CHECK(Traits::scal_real(cublas_h_, n_svd, &inv_s,
+                d_svd_A_ + i * n_svd, 1));
+        }
+    }
+
+    // U_full = U_ns @ U_p -> (m, n_svd) x (n_svd, new_k) -> (m, new_k)
+    // Store in d_svd_U_ (reuse, large enough)
+    CUBLAS_CHECK(Traits::gemm(cublas_h_,
+        CUBLAS_OP_N, CUBLAS_OP_N,
+        m, new_k, n_svd, &one, d_ns_U_, m,
+        d_svd_A_, n_svd, &zero_val, d_svd_U_, m));
+
+    CUDA_CHECK(cudaStreamSynchronize(stream_));
+
+    // Upload singular values to device for GPU-side scaling
+    CUDA_CHECK(cudaMemcpyAsync(d_svd_S_, sing_vals.data(), new_k * sizeof(RealType),
+                              cudaMemcpyHostToDevice, stream_));
+
+    // Store MPS tensors -- single-site pattern: absorb remainder into neighbor
+    if (direction == 'R') {
+        int new_chi_R = new_k;
+
+        // MPS[site] = U_full[:, :new_k] -> (cL*d, new_k) = (m, new_k)
+        allocate_mps_tensor(site, cL, new_chi_R);
+        CUDA_CHECK(cudaMemcpyAsync(d_mps_tensors_[site], d_svd_U_,
+                    m * new_chi_R * sizeof(Scalar), cudaMemcpyDeviceToDevice, stream_));
+
+        // S*Vh -> (new_k, n_svd) = (new_k, cR), absorb into MPS[site+1]
+        // First compute S*Vh on GPU using row-scaling
+        // d_svd_Vh_ has Vh (new_k x n_svd), scale rows by S
+        // Result stored in d_svd_A_ (scratch, large enough)
+        scale_rows_by_real(d_svd_Vh_, new_k, d_svd_S_,
+                           d_svd_A_, new_k, new_k, n_svd, stream_);
+
+        if (site + 1 < L_) {
+            int next_cR = chi_R(site + 1);
+            Scalar one_v = Traits::one(), zero_v = Traits::zero();
+            CUBLAS_CHECK(Traits::gemm(cublas_h_,
+                CUBLAS_OP_N, CUBLAS_OP_N,
+                new_k, d_ * next_cR, cR, &one_v,
+                d_svd_A_, new_k,
+                d_mps_tensors_[site + 1], cR, &zero_v,
+                d_T1_, new_k));
+            allocate_mps_tensor(site + 1, new_chi_R, next_cR);
+            CUDA_CHECK(cudaMemcpy(d_mps_tensors_[site + 1], d_T1_,
+                                new_k * d_ * next_cR * sizeof(Scalar), cudaMemcpyDeviceToDevice));
+        }
+        bond_dims_[site + 1] = new_chi_R;
+
+    } else {  // direction == 'L'
+        // This shouldn't be reached (we fall back for wide case above)
+        // But handle it for safety: U*S -> absorb into MPS[site-1]
+        int new_chi_L = new_k;
+
+        // MPS[site] = Vh[:new_k, :] -> (new_k, n_svd)
+        allocate_mps_tensor(site, new_chi_L, cR);
+        CUDA_CHECK(cudaMemcpy(d_mps_tensors_[site], h_Vh_trunc.data(),
+                            new_chi_L * n_svd * sizeof(Scalar), cudaMemcpyHostToDevice));
+
+        // U_full @ diag(S) -> scale columns on GPU
+        scale_columns_by_real(d_svd_U_, m, d_svd_S_,
+                              d_svd_A_, m, m, new_k, stream_);
+
+        if (site > 0) {
+            int prev_cL = chi_L(site - 1);
+            Scalar one_v = Traits::one(), zero_v = Traits::zero();
+            CUBLAS_CHECK(Traits::gemm(cublas_h_,
+                CUBLAS_OP_N, CUBLAS_OP_N,
+                prev_cL * d_, new_k, m, &one_v,
+                d_mps_tensors_[site - 1], prev_cL * d_,
+                d_svd_A_, m, &zero_v,
+                d_T1_, prev_cL * d_));
+            allocate_mps_tensor(site - 1, prev_cL, new_chi_L);
+            CUDA_CHECK(cudaMemcpy(d_mps_tensors_[site - 1], d_T1_,
+                                prev_cL * d_ * new_k * sizeof(Scalar), cudaMemcpyDeviceToDevice));
+        }
+        bond_dims_[site] = new_chi_L;
+    }
+}
+
+// ============================================================================
+// SVD fallback (CPU LAPACK only)
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::svd_fallback(int site, Scalar* d_theta, char direction) {
+    int cL = chi_L(site);
+    int cR = chi_R(site);
+
+    int m, n_svd;
+    if (direction == 'R') { m = cL * d_; n_svd = cR; }
+    else                  { m = cL;      n_svd = d_ * cR; }
+    int full_k = std::min(m, n_svd);
+    int k = std::min(full_k, chi_max_user_);
+
+    // CPU SVD path
+    CUDA_CHECK(cudaMemcpy(h_svd_A_.data(), d_theta, m * n_svd * sizeof(Scalar), cudaMemcpyDeviceToHost));
+
+    int lwork = (int)h_svd_work_.size();
+    int info;
+    const char jobu = 'S', jobvt = 'S';
+    Traits::lapack_gesvd(&jobu, &jobvt, &m, &n_svd, h_svd_A_.data(), &m, h_svd_S_.data(),
+            h_svd_U_.data(), &m, h_svd_Vh_.data(), &full_k,
+            h_svd_work_.data(), &lwork,
+            h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
+
+    if (info != 0) {
+        throw std::runtime_error("svd_fallback: LAPACK gesvd failed, info=" + std::to_string(info));
+    }
+
+    Scalar* h_U_data = h_svd_U_.data();
+    RealType* h_S_data = h_svd_S_.data();
+    Scalar* h_Vh_data = h_svd_Vh_.data();
+
+    // Truncation
+    int new_k = k;
+    for (int i = 0; i < new_k; i++) {
+        if (h_S_data[i] < 1e-14) { new_k = i; break; }
+    }
+    if (new_k == 0) new_k = 1;
+
+    if (direction == 'R') {
+        int new_chi_R = new_k;
+
+        // Compute S*Vh on CPU
+        for (int j = 0; j < n_svd; j++)
+            for (int i = 0; i < new_k; i++)
+                h_svd_tmp_[i + j * new_k] = Traits::scale_by_real(h_S_data[i], h_Vh_data[i + j * full_k]);
+
+        // Upload U[:, :new_k]
+        allocate_mps_tensor(site, cL, new_chi_R);
+        CUDA_CHECK(cudaMemcpy(d_mps_tensors_[site], h_U_data,
+                            m * new_chi_R * sizeof(Scalar), cudaMemcpyHostToDevice));
+
+        // Absorb S*Vh into A[site+1]
+        if (site + 1 < L_) {
+            CUDA_CHECK(cudaMemcpy(d_svd_A_, h_svd_tmp_.data(),
+                                new_k * n_svd * sizeof(Scalar), cudaMemcpyHostToDevice));
+            int next_cR = chi_R(site + 1);
+            Scalar one_v = Traits::one(), zero_v = Traits::zero();
+            CUBLAS_CHECK(Traits::gemm(cublas_h_,
+                CUBLAS_OP_N, CUBLAS_OP_N,
+                new_k, d_ * next_cR, cR, &one_v,
+                d_svd_A_, new_k,
+                d_mps_tensors_[site + 1], cR, &zero_v,
+                d_T1_, new_k));
+            allocate_mps_tensor(site + 1, new_chi_R, next_cR);
+            CUDA_CHECK(cudaMemcpy(d_mps_tensors_[site + 1], d_T1_,
+                                new_k * d_ * next_cR * sizeof(Scalar), cudaMemcpyDeviceToDevice));
+        }
+        bond_dims_[site + 1] = new_chi_R;
+
+    } else {  // direction == 'L'
+        int new_chi_L = new_k;
+
+        // Upload Vh[:new_k, :]
+        allocate_mps_tensor(site, new_chi_L, cR);
+        if (new_chi_L == full_k) {
+            CUDA_CHECK(cudaMemcpy(d_mps_tensors_[site], h_Vh_data,
+                                full_k * n_svd * sizeof(Scalar), cudaMemcpyHostToDevice));
+        } else {
+            for (int j = 0; j < n_svd; j++)
+                for (int i = 0; i < new_chi_L; i++)
+                    h_svd_tmp_[i + j * new_chi_L] = h_Vh_data[i + j * full_k];
+            CUDA_CHECK(cudaMemcpy(d_mps_tensors_[site], h_svd_tmp_.data(),
+                                new_chi_L * n_svd * sizeof(Scalar), cudaMemcpyHostToDevice));
+        }
+
+        // Compute U*S on CPU
+        for (int j = 0; j < new_k; j++)
+            for (int i = 0; i < m; i++)
+                h_svd_tmp_[i + j * m] = Traits::scale_by_real(h_S_data[j], h_U_data[i + j * m]);
+
+        // Absorb U*S into A[site-1]
+        if (site > 0) {
+            CUDA_CHECK(cudaMemcpy(d_svd_A_, h_svd_tmp_.data(),
+                                m * new_k * sizeof(Scalar), cudaMemcpyHostToDevice));
+            int prev_cL = chi_L(site - 1);
+            Scalar one_v = Traits::one(), zero_v = Traits::zero();
+            CUBLAS_CHECK(Traits::gemm(cublas_h_,
+                CUBLAS_OP_N, CUBLAS_OP_N,
+                prev_cL * d_, new_k, m, &one_v,
+                d_mps_tensors_[site - 1], prev_cL * d_,
+                d_svd_A_, m, &zero_v,
+                d_T1_, prev_cL * d_));
+            allocate_mps_tensor(site - 1, prev_cL, new_chi_L);
+            CUDA_CHECK(cudaMemcpy(d_mps_tensors_[site - 1], d_T1_,
+                                prev_cL * d_ * new_k * sizeof(Scalar), cudaMemcpyDeviceToDevice));
+        }
+        bond_dims_[site] = new_chi_L;
+    }
+}
+
+// ============================================================================
+// Block-Davidson Eigensolver
+// ============================================================================
+
+template<typename Scalar>
+double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta) {
+    int dim = chi_L(site) * d_ * chi_R(site);
+    int b = std::min(davidson_b_, dim);
+    int max_sub = std::min(davidson_max_sub_, dim);
+    int max_iter = 30;
+    double tol_dav = 1e-10;
+
+    Scalar one = Traits::one(), zero_val = Traits::zero();
+    Scalar neg_one = Traits::neg(Traits::one());
+
+    // For tiny systems, use Lanczos fallback
+    if (dim <= 2 * b) {
+        return lanczos_eigensolver(site, d_theta);
+    }
+
+    // Initialize V: first column = theta/||theta||
+    RealType norm;
+    CUBLAS_CHECK(Traits::nrm2(cublas_h_, dim, d_theta, 1, &norm));
+    if (norm < 1e-14) {
+        srand(42 + site);
+        std::vector<Scalar> h_init(dim);
+        for (int i = 0; i < dim; i++) h_init[i] = Traits::random_val();
+        CUDA_CHECK(cudaMemcpy(d_theta, h_init.data(), dim * sizeof(Scalar), cudaMemcpyHostToDevice));
+        CUBLAS_CHECK(Traits::nrm2(cublas_h_, dim, d_theta, 1, &norm));
+    }
+
+    Scalar* V = d_dav_V_;   // (dim, max_sub)
+    Scalar* AV = d_dav_AV_; // (dim, max_sub)
+
+    // V[:, 0] = theta / norm
+    CUDA_CHECK(cudaMemcpyAsync(V, d_theta, dim * sizeof(Scalar), cudaMemcpyDeviceToDevice, stream_));
+    RealType inv_norm = 1.0 / norm;
+    CUBLAS_CHECK(Traits::scal_real(cublas_h_, dim, &inv_norm, V, 1));
+
+    // Fill remaining b-1 columns with random orthogonalized vectors
+    srand(42 + site);
+    for (int i = 1; i < b; i++) {
+        std::vector<Scalar> h_v(dim);
+        for (int j = 0; j < dim; j++) h_v[j] = Traits::random_val();
+        CUDA_CHECK(cudaMemcpyAsync(V + (size_t)i * dim, h_v.data(), dim * sizeof(Scalar),
+                                  cudaMemcpyHostToDevice, stream_));
+
+        // Orthogonalize against previous columns using CGS
+        CUBLAS_CHECK(Traits::gemv(cublas_h_, Traits::op_h,
+            dim, i, &one, V, dim, V + (size_t)i * dim, 1,
+            &zero_val, d_dav_work_, 1));
+        CUBLAS_CHECK(Traits::gemv(cublas_h_, CUBLAS_OP_N,
+            dim, i, &neg_one, V, dim, d_dav_work_, 1,
+            &one, V + (size_t)i * dim, 1));
+
+        // Normalize
+        RealType nrm_v;
+        CUDA_CHECK(cudaStreamSynchronize(stream_));
+        CUBLAS_CHECK(Traits::nrm2(cublas_h_, dim, V + (size_t)i * dim, 1, &nrm_v));
+        if (nrm_v < 1e-14) {
+            for (int j = 0; j < dim; j++) h_v[j] = Traits::random_val();
+            CUDA_CHECK(cudaMemcpy(V + (size_t)i * dim, h_v.data(), dim * sizeof(Scalar), cudaMemcpyHostToDevice));
+            CUBLAS_CHECK(Traits::nrm2(cublas_h_, dim, V + (size_t)i * dim, 1, &nrm_v));
+        }
+        RealType inv_nrm_v = 1.0 / nrm_v;
+        CUBLAS_CHECK(Traits::scal_real(cublas_h_, dim, &inv_nrm_v, V + (size_t)i * dim, 1));
+    }
+
+    // Compute AV[:, j] = H @ V[:, j] for j = 0..b-1
+    for (int j = 0; j < b; j++) {
+        apply_heff(site, V + (size_t)j * dim, AV + (size_t)j * dim);
+    }
+
+    double best_energy = 1e30;
+    double energy_prev = 1e30;
+    int k = b;  // current subspace size
+
+    for (int iteration = 0; iteration < max_iter; iteration++) {
+        CUDA_CHECK(cudaStreamSynchronize(stream_));
+
+        // Rayleigh-Ritz: H_proj = V^H @ AV  -> (k, k)
+        CUBLAS_CHECK(Traits::gemm(cublas_h_,
+            Traits::op_h, CUBLAS_OP_N,
+            k, k, dim, &one, V, dim, AV, dim, &zero_val, d_dav_work_, k));
+
+        // Copy H_proj to host
+        CUDA_CHECK(cudaMemcpy(h_dav_H_proj_.data(), d_dav_work_,
+                            k * k * sizeof(Scalar), cudaMemcpyDeviceToHost));
+
+        // Symmetrize on host: H_proj = 0.5 * (H_proj + H_proj^H)
+        for (int i = 0; i < k; i++) {
+            for (int j = i; j < k; j++) {
+                Scalar hij = h_dav_H_proj_[i + j * k];
+                Scalar hji = h_dav_H_proj_[j + i * k];
+                Scalar sym;
+                if constexpr (Traits::is_complex) {
+                    sym = make_cuDoubleComplex(
+                        0.5 * (cuCreal(hij) + cuCreal(hji)),
+                        0.5 * (cuCimag(hij) - cuCimag(hji)));
+                    h_dav_H_proj_[i + j * k] = sym;
+                    h_dav_H_proj_[j + i * k] = make_cuDoubleComplex(cuCreal(sym), -cuCimag(sym));
+                } else {
+                    sym = 0.5 * (hij + hji);
+                    h_dav_H_proj_[i + j * k] = sym;
+                    h_dav_H_proj_[j + i * k] = sym;
+                }
+            }
+        }
+
+        // Eigendecompose H_proj on CPU
+        std::copy(h_dav_H_proj_.begin(), h_dav_H_proj_.begin() + k * k,
+                  h_dav_eigvecs_.begin());
+        int info;
+        const char jobz = 'V', uplo = 'U';
+        int lwork_q = -1;
+        Scalar work_opt;
+        // Query workspace (need valid rwork for zheev_)
+        std::vector<RealType> syev_rwork_q(std::max(1, Traits::syev_rwork_size(k)));
+        Traits::lapack_syev(&jobz, &uplo, &k,
+                h_dav_eigvecs_.data(), &k, h_dav_eigvals_.data(),
+                &work_opt, &lwork_q,
+                syev_rwork_q.empty() ? nullptr : syev_rwork_q.data(), &info);
+        int lwork_val;
+        if constexpr (Traits::is_complex) {
+            lwork_val = (int)Traits::real_part(work_opt) + 1;
+        } else {
+            lwork_val = (int)work_opt + 1;
+        }
+        std::vector<Scalar> syev_work(lwork_val);
+        std::vector<RealType> syev_rwork(Traits::syev_rwork_size(k));
+        Traits::lapack_syev(&jobz, &uplo, &k,
+                h_dav_eigvecs_.data(), &k, h_dav_eigvals_.data(),
+                syev_work.data(), &lwork_val,
+                syev_rwork.empty() ? nullptr : syev_rwork.data(), &info);
+
+        if (info != 0) {
+            // Eigendecomp failed -- fall back to Lanczos
+            return lanczos_eigensolver(site, d_theta);
+        }
+
+        double energy = h_dav_eigvals_[0];  // lowest eigenvalue
+
+        if (energy < best_energy) {
+            best_energy = energy;
+        }
+
+        // Upload eigenvectors to GPU for Ritz vector computation
+        CUDA_CHECK(cudaMemcpy(d_dav_work2_, h_dav_eigvecs_.data(),
+                            k * k * sizeof(Scalar), cudaMemcpyHostToDevice));
+
+        // x0 = V @ eigvecs[:, 0] -> (dim, 1)
+        CUBLAS_CHECK(Traits::gemv(cublas_h_, CUBLAS_OP_N,
+            dim, k, &one, V, dim, d_dav_work2_, 1, &zero_val, d_theta, 1));
+
+        // ax0 = AV @ eigvecs[:, 0] -> (dim, 1)
+        CUBLAS_CHECK(Traits::gemv(cublas_h_, CUBLAS_OP_N,
+            dim, k, &one, AV, dim, d_dav_work2_, 1, &zero_val, d_heff_result_, 1));
+
+        // Residual: r = ax0 - energy * x0
+        Scalar neg_energy = Traits::make_scalar(-energy);
+        CUBLAS_CHECK(Traits::axpy(cublas_h_, dim, &neg_energy, d_theta, 1, d_heff_result_, 1));
+
+        RealType res_norm;
+        CUDA_CHECK(cudaStreamSynchronize(stream_));
+        CUBLAS_CHECK(Traits::nrm2(cublas_h_, dim, d_heff_result_, 1, &res_norm));
+
+        if (res_norm < tol_dav && std::abs(energy - energy_prev) < tol_dav) {
+            // Converged: d_theta already has the ground state vector
+            CUBLAS_CHECK(Traits::nrm2(cublas_h_, dim, d_theta, 1, &norm));
+            inv_norm = 1.0 / norm;
+            CUBLAS_CHECK(Traits::scal_real(cublas_h_, dim, &inv_norm, d_theta, 1));
+            return energy;
+        }
+        energy_prev = energy;
+
+        // Expand subspace with residual corrections
+        int n_new = 0;
+        for (int i = 0; i < std::min(b, k); i++) {
+            Scalar* r_i = d_dav_work_ + (size_t)n_new * dim;
+
+            // r_i = AV @ eigvecs[:, i] - eigvals[i] * V @ eigvecs[:, i]
+            CUBLAS_CHECK(Traits::gemv(cublas_h_, CUBLAS_OP_N,
+                dim, k, &one, V, dim, d_dav_work2_ + i * k, 1, &zero_val, r_i, 1));
+            CUBLAS_CHECK(Traits::gemv(cublas_h_, CUBLAS_OP_N,
+                dim, k, &one, AV, dim, d_dav_work2_ + i * k, 1, &zero_val, d_heff_result_, 1));
+            Scalar neg_ei = Traits::make_scalar(-h_dav_eigvals_[i]);
+            CUBLAS_CHECK(Traits::scal(cublas_h_, dim, &neg_ei, r_i, 1));
+            CUBLAS_CHECK(Traits::axpy(cublas_h_, dim, &one, d_heff_result_, 1, r_i, 1));
+
+            RealType ri_norm;
+            CUDA_CHECK(cudaStreamSynchronize(stream_));
+            CUBLAS_CHECK(Traits::nrm2(cublas_h_, dim, r_i, 1, &ri_norm));
+
+            if (ri_norm > tol_dav * 0.01) {
+                RealType inv_ri = 1.0 / ri_norm;
+                CUBLAS_CHECK(Traits::scal_real(cublas_h_, dim, &inv_ri, r_i, 1));
+                n_new++;
+            }
+        }
+
+        if (n_new == 0) {
+            CUBLAS_CHECK(Traits::nrm2(cublas_h_, dim, d_theta, 1, &norm));
+            inv_norm = 1.0 / norm;
+            CUBLAS_CHECK(Traits::scal_real(cublas_h_, dim, &inv_norm, d_theta, 1));
+            return energy;
+        }
+
+        // Orthogonalize new vectors against V
+        Scalar* W = d_dav_work_;
+
+        // overlap = V^H @ W -> (k, n_new)
+        CUBLAS_CHECK(Traits::gemm(cublas_h_,
+            Traits::op_h, CUBLAS_OP_N,
+            k, n_new, dim, &one, V, dim, W, dim, &zero_val, d_dav_work2_, k));
+
+        // W -= V @ overlap
+        CUBLAS_CHECK(Traits::gemm(cublas_h_,
+            CUBLAS_OP_N, CUBLAS_OP_N,
+            dim, n_new, k, &neg_one, V, dim, d_dav_work2_, k, &one, W, dim));
+
+        // Orthogonalize new vectors among themselves (CGS within the block)
+        int n_good = 0;
+        for (int i = 0; i < n_new; i++) {
+            Scalar* wi = W + (size_t)i * dim;
+
+            for (int j = 0; j < n_good; j++) {
+                Scalar* wj = W + (size_t)j * dim;
+                Scalar overlap_val;
+                CUBLAS_CHECK(Traits::dot(cublas_h_, dim, wj, 1, wi, 1, &overlap_val));
+                Scalar neg_ov = Traits::neg(overlap_val);
+                CUBLAS_CHECK(Traits::axpy(cublas_h_, dim, &neg_ov, wj, 1, wi, 1));
+            }
+
+            RealType wi_norm;
+            CUDA_CHECK(cudaStreamSynchronize(stream_));
+            CUBLAS_CHECK(Traits::nrm2(cublas_h_, dim, wi, 1, &wi_norm));
+
+            if (wi_norm > 1e-14) {
+                RealType inv_wi = 1.0 / wi_norm;
+                CUBLAS_CHECK(Traits::scal_real(cublas_h_, dim, &inv_wi, wi, 1));
+                if (n_good != i) {
+                    CUDA_CHECK(cudaMemcpyAsync(W + (size_t)n_good * dim, wi, dim * sizeof(Scalar),
+                                              cudaMemcpyDeviceToDevice, stream_));
+                }
+                n_good++;
+            }
+        }
+
+        if (n_good == 0) {
+            CUBLAS_CHECK(Traits::nrm2(cublas_h_, dim, d_theta, 1, &norm));
+            inv_norm = 1.0 / norm;
+            CUBLAS_CHECK(Traits::scal_real(cublas_h_, dim, &inv_norm, d_theta, 1));
+            return energy;
+        }
+
+        // Check if subspace would be too large -> restart
+        if (k + n_good > max_sub) {
+            int keep = std::min(b, k);
+
+            // X_keep = V @ eigvecs[:, :keep] -> (dim, keep)
+            CUDA_CHECK(cudaMemcpy(d_dav_work2_, h_dav_eigvecs_.data(),
+                                k * k * sizeof(Scalar), cudaMemcpyHostToDevice));
+            CUBLAS_CHECK(Traits::gemm(cublas_h_,
+                CUBLAS_OP_N, CUBLAS_OP_N,
+                dim, keep, k, &one, V, dim, d_dav_work2_, k,
+                &zero_val, d_dav_work_, dim));
+
+            // Copy X_keep to V[:, :keep]
+            CUDA_CHECK(cudaMemcpyAsync(V, d_dav_work_, (size_t)dim * keep * sizeof(Scalar),
+                                      cudaMemcpyDeviceToDevice, stream_));
+
+            // Re-orthogonalize V columns (MGS on GPU)
+            for (int i = 0; i < keep; i++) {
+                for (int j = 0; j < i; j++) {
+                    Scalar ov;
+                    CUBLAS_CHECK(Traits::dot(cublas_h_, dim,
+                        V + (size_t)j * dim, 1, V + (size_t)i * dim, 1, &ov));
+                    Scalar neg_ov = Traits::neg(ov);
+                    CUBLAS_CHECK(Traits::axpy(cublas_h_, dim, &neg_ov,
+                        V + (size_t)j * dim, 1, V + (size_t)i * dim, 1));
+                }
+                RealType vi_norm;
+                CUDA_CHECK(cudaStreamSynchronize(stream_));
+                CUBLAS_CHECK(Traits::nrm2(cublas_h_, dim, V + (size_t)i * dim, 1, &vi_norm));
+                RealType inv_vi = 1.0 / vi_norm;
+                CUBLAS_CHECK(Traits::scal_real(cublas_h_, dim, &inv_vi, V + (size_t)i * dim, 1));
+            }
+
+            // Recompute AV for kept vectors
+            for (int j = 0; j < keep; j++) {
+                apply_heff(site, V + (size_t)j * dim, AV + (size_t)j * dim);
+            }
+
+            k = keep;
+            continue;
+        }
+
+        // Expand: append new vectors and compute their H-images
+        for (int j = 0; j < n_good; j++) {
+            CUDA_CHECK(cudaMemcpyAsync(V + (size_t)(k + j) * dim, W + (size_t)j * dim,
+                                      dim * sizeof(Scalar), cudaMemcpyDeviceToDevice, stream_));
+            apply_heff(site, V + (size_t)(k + j) * dim, AV + (size_t)(k + j) * dim);
+        }
+        k += n_good;
+    }
+
+    // Didn't converge -- use best result
+    CUBLAS_CHECK(Traits::nrm2(cublas_h_, dim, d_theta, 1, &norm));
+    inv_norm = 1.0 / norm;
+    CUBLAS_CHECK(Traits::scal_real(cublas_h_, dim, &inv_norm, d_theta, 1));
+    return best_energy;
+}
+
+// ============================================================================
+// Site optimization
+// ============================================================================
+
+template<typename Scalar>
+double DMRGGPUOpt<Scalar>::optimize_site(int site, char direction) {
+    form_theta(site, d_theta_);
+
+    auto t0 = std::chrono::high_resolution_clock::now();
+    double energy = block_davidson_eigensolver(site, d_theta_);
+    auto t1 = std::chrono::high_resolution_clock::now();
+    prof_davidson_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+    t0 = std::chrono::high_resolution_clock::now();
+    CUDA_CHECK(cudaStreamSynchronize(stream_));
+    ns_svd_and_update_mps(site, d_theta_, direction);
+    t1 = std::chrono::high_resolution_clock::now();
+    prof_ns_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+
+    prof_site_count++;
+    return energy;
+}
+
+// ============================================================================
+// Sweep methods
+// ============================================================================
+
+template<typename Scalar>
+double DMRGGPUOpt<Scalar>::sweep_left_to_right() {
+    double energy = 0.0;
+
+    for (int site = 0; site < L_ - 1; site++) {
+        energy = optimize_site(site, 'R');
+        CUDA_CHECK(cudaStreamSynchronize(stream_));
+        auto te0 = std::chrono::high_resolution_clock::now();
+        update_left_env(site);
+        CUDA_CHECK(cudaStreamSynchronize(stream_));
+        auto te1 = std::chrono::high_resolution_clock::now();
+        prof_env_ms += std::chrono::duration<double, std::milli>(te1 - te0).count();
+    }
+    // Optimize last site without SVD
+    {
+        int site = L_ - 1;
+        form_theta(site, d_theta_);
+        auto t0 = std::chrono::high_resolution_clock::now();
+        energy = block_davidson_eigensolver(site, d_theta_);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        prof_davidson_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        int sz = chi_L(site) * d_ * chi_R(site);
+        CUDA_CHECK(cudaMemcpy(d_mps_tensors_[site], d_theta_, sz * sizeof(Scalar),
+                            cudaMemcpyDeviceToDevice));
+    }
+
+    return energy;
+}
+
+template<typename Scalar>
+double DMRGGPUOpt<Scalar>::sweep_right_to_left() {
+    double energy = 0.0;
+
+    for (int site = L_ - 1; site >= 1; site--) {
+        energy = optimize_site(site, 'L');
+        CUDA_CHECK(cudaStreamSynchronize(stream_));
+        auto te0 = std::chrono::high_resolution_clock::now();
+        update_right_env(site);
+        CUDA_CHECK(cudaStreamSynchronize(stream_));
+        auto te1 = std::chrono::high_resolution_clock::now();
+        prof_env_ms += std::chrono::duration<double, std::milli>(te1 - te0).count();
+    }
+    // Optimize first site without SVD
+    {
+        int site = 0;
+        form_theta(site, d_theta_);
+        auto t0 = std::chrono::high_resolution_clock::now();
+        energy = block_davidson_eigensolver(site, d_theta_);
+        auto t1 = std::chrono::high_resolution_clock::now();
+        prof_davidson_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        int sz = chi_L(site) * d_ * chi_R(site);
+        CUDA_CHECK(cudaMemcpy(d_mps_tensors_[site], d_theta_, sz * sizeof(Scalar),
+                            cudaMemcpyDeviceToDevice));
+    }
+
+    return energy;
+}
+
+// ============================================================================
+// Main algorithm
+// ============================================================================
+
+template<typename Scalar>
+double DMRGGPUOpt<Scalar>::run(int n_sweeps) {
+    const char* type_name = Traits::is_complex ? "complex128" : "float64";
+    printf("=== GPU-Native Single-Site DMRG-OPT (NS + Davidson + MFMA-16 pad + batched, %s) ===\n", type_name);
+    if (chi_max_ != chi_max_user_)
+        printf("L = %d, d = %d, chi_max = %d (padded from %d), D_mpo = %d\n",
+               L_, d_, chi_max_, chi_max_user_, D_mpo_);
+    else
+        printf("L = %d, d = %d, chi_max = %d, D_mpo = %d\n", L_, d_, chi_max_, D_mpo_);
+    printf("Running %d sweeps...\n\n", n_sweeps);
+
+    auto t_start = std::chrono::high_resolution_clock::now();
+
+    printf("Building initial environments...\n");
+    build_initial_environments();
+
+    auto t_envs = std::chrono::high_resolution_clock::now();
+    double env_time = std::chrono::duration<double>(t_envs - t_start).count();
+    printf("  Environment build: %.3f s\n\n", env_time);
+
+    double energy_prev = 0.0;
+
+    for (int sweep = 0; sweep < n_sweeps; sweep++) {
+        prof_davidson_ms = prof_ns_ms = prof_env_ms = 0;
+        prof_davidson_iters = prof_ns_iters = prof_site_count = prof_heff_calls = 0;
+
+        auto t_sweep = std::chrono::high_resolution_clock::now();
+
+        double energy_LR = sweep_left_to_right();
+        double energy_RL = sweep_right_to_left();
+
+        auto t_sweep_end = std::chrono::high_resolution_clock::now();
+        double sweep_time = std::chrono::duration<double>(t_sweep_end - t_sweep).count();
+
+        energy_ = energy_RL;
+        double dE = std::abs(energy_ - energy_prev);
+
+        double other_ms = sweep_time*1000.0 - prof_davidson_ms - prof_ns_ms - prof_env_ms;
+        printf("Sweep %3d: E = %.12f, dE = %.2e, time = %.3f s\n",
+               sweep, energy_, dE, sweep_time);
+        printf("  Profile: davidson=%.0fms (%d iters, %d heff) ns=%.0fms (%d iters) env=%.0fms other=%.0fms\n",
+               prof_davidson_ms, prof_davidson_iters, prof_heff_calls,
+               prof_ns_ms, prof_ns_iters, prof_env_ms, other_ms);
+
+        if (dE < tol_ && sweep > 0) {
+            printf("Converged after %d sweeps!\n", sweep + 1);
+            break;
+        }
+
+        energy_prev = energy_;
+    }
+
+    auto t_end = std::chrono::high_resolution_clock::now();
+    double total_time = std::chrono::duration<double>(t_end - t_start).count();
+    printf("\nTotal wall time: %.3f s\n", total_time);
+
+    return energy_;
+}
+
+// ============================================================================
+// Utility methods
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPUOpt<Scalar>::get_mps(std::vector<std::vector<Scalar>>& h_mps) const {
+    h_mps.resize(L_);
+    for (int i = 0; i < L_; i++) {
+        int size = chi_L(i) * d_ * chi_R(i);
+        h_mps[i].resize(size);
+        CUDA_CHECK(cudaMemcpy(h_mps[i].data(), d_mps_tensors_[i],
+                            size * sizeof(Scalar), cudaMemcpyDeviceToHost));
+    }
+}
+
+#endif // DMRG_GPU_OPT_IMPL_H
