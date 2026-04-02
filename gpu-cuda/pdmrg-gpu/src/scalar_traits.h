@@ -352,7 +352,7 @@ __global__ void negate_scalar_kernel(const Scalar* in, Scalar* out) {
 }
 
 // Compute 1/x for a single real value (initial normalization)
-__global__ inline void inv_real_kernel(const double* in, double* out) {
+static __global__ void inv_real_kernel(const double* in, double* out) {
     out[0] = 1.0 / in[0];
 }
 
@@ -422,18 +422,18 @@ __global__ void setup_renv_ptrs(Scalar** d_A, Scalar** d_B, Scalar** d_C,
 // In-place conjugation of GPU arrays (no-op for real)
 // ============================================================================
 
-__global__ inline void conjugate_complex_kernel(cuDoubleComplex* data, int n) {
+static __global__ void conjugate_complex_kernel(cuDoubleComplex* data, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         data[i] = cuConj(data[i]);
     }
 }
 
-inline void conjugate_inplace(double* /*data*/, int /*n*/, cudaStream_t /*stream*/) {
+static inline void conjugate_inplace(double* /*data*/, int /*n*/, cudaStream_t /*stream*/) {
     // no-op for real
 }
 
-inline void conjugate_inplace(cuDoubleComplex* data, int n, cudaStream_t stream) {
+static inline void conjugate_inplace(cuDoubleComplex* data, int n, cudaStream_t stream) {
     int block = 256;
     int grid = (n + block - 1) / block;
     conjugate_complex_kernel<<<grid, block, 0, stream>>>(data, n);

@@ -376,18 +376,18 @@ __global__ void extract_cols_kernel(const Scalar* in, int lda_in,
 
 // ============================================================================
 
-__global__ void conjugate_complex_kernel(cuDoubleComplex* data, int n) {
+static __global__ void conjugate_complex_kernel(cuDoubleComplex* data, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         data[i] = cuConj(data[i]);
     }
 }
 
-inline void conjugate_inplace(double* /*data*/, int /*n*/, cudaStream_t /*stream*/) {
+static inline void conjugate_inplace(double* /*data*/, int /*n*/, cudaStream_t /*stream*/) {
     // no-op for real
 }
 
-inline void conjugate_inplace(cuDoubleComplex* data, int n, cudaStream_t stream) {
+static inline void conjugate_inplace(cuDoubleComplex* data, int n, cudaStream_t stream) {
     int block = 256;
     int grid = (n + block - 1) / block;
     conjugate_complex_kernel<<<grid, block, 0, stream>>>(data, n);

@@ -392,7 +392,7 @@ __global__ void negate_scalar_kernel(const Scalar* in, Scalar* out) {
     out[0] = dev_negate(in[0]);
 }
 
-__global__ inline void inv_real_kernel(const double* in, double* out) {
+static __global__ void inv_real_kernel(const double* in, double* out) {
     out[0] = 1.0 / in[0];
 }
 
@@ -507,18 +507,18 @@ __global__ void setup_renv_step3_ptrs(Scalar** d_A, Scalar** d_B, Scalar** d_C,
 // In-place conjugation of GPU arrays (no-op for real)
 // ============================================================================
 
-__global__ inline void conjugate_complex_kernel(cuDoubleComplex* data, int n) {
+static __global__ void conjugate_complex_kernel(cuDoubleComplex* data, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
         data[i] = cuConj(data[i]);
     }
 }
 
-inline void conjugate_inplace(double* /*data*/, int /*n*/, cudaStream_t /*stream*/) {
+static inline void conjugate_inplace(double* /*data*/, int /*n*/, cudaStream_t /*stream*/) {
     // no-op for real
 }
 
-inline void conjugate_inplace(cuDoubleComplex* data, int n, cudaStream_t stream) {
+static inline void conjugate_inplace(cuDoubleComplex* data, int n, cudaStream_t stream) {
     int block = 256;
     int grid = (n + block - 1) / block;
     conjugate_complex_kernel<<<grid, block, 0, stream>>>(data, n);
@@ -563,7 +563,7 @@ __global__ void compute_3I_minus_A(Scalar* A, int n) {
 }
 
 // Most general version: computes out[idx] = alpha*I[idx] - in[idx]
-__global__ inline void scaled_identity_minus_double(double* data, int n, double alpha) {
+static __global__ void scaled_identity_minus_double(double* data, int n, double alpha) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n * n) {
         int row = idx % n;
@@ -573,7 +573,7 @@ __global__ inline void scaled_identity_minus_double(double* data, int n, double 
     }
 }
 
-__global__ inline void scaled_identity_minus_complex(cuDoubleComplex* data, int n, double alpha) {
+static __global__ void scaled_identity_minus_complex(cuDoubleComplex* data, int n, double alpha) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
     if (idx < n * n) {
         int row = idx % n;
@@ -583,13 +583,13 @@ __global__ inline void scaled_identity_minus_complex(cuDoubleComplex* data, int 
     }
 }
 
-inline void launch_scaled_identity_minus(double* data, int n, double alpha, cudaStream_t stream) {
+static inline void launch_scaled_identity_minus(double* data, int n, double alpha, cudaStream_t stream) {
     int block = 256;
     int grid = (n * n + block - 1) / block;
     scaled_identity_minus_double<<<grid, block, 0, stream>>>(data, n, alpha);
 }
 
-inline void launch_scaled_identity_minus(cuDoubleComplex* data, int n, double alpha, cudaStream_t stream) {
+static inline void launch_scaled_identity_minus(cuDoubleComplex* data, int n, double alpha, cudaStream_t stream) {
     int block = 256;
     int grid = (n * n + block - 1) / block;
     scaled_identity_minus_complex<<<grid, block, 0, stream>>>(data, n, alpha);
