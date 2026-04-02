@@ -150,7 +150,12 @@ DMRG2GPU<Scalar>::DMRG2GPU(int L, int d, int chi_max, int D_mpo, double tol)
     CUDA_CHECK(cudaMalloc(&d_svd_info_, sizeof(int)));
 
     // cuSOLVER SVD workspace query (for max dimensions)
-    CUSOLVER_CHECK(Traits::cusolver_gesvd_bufferSize(cusolver_h_, svd_max_m, svd_max_n, &svd_lwork_));
+    // cuSOLVER 13.0 requires m >= n, so we transpose when m < n.
+    // Query workspace for both orientations and take the max.
+    int lwork1 = 0, lwork2 = 0;
+    CUSOLVER_CHECK(Traits::cusolver_gesvd_bufferSize(cusolver_h_, svd_max_m, svd_max_n, &lwork1));
+    CUSOLVER_CHECK(Traits::cusolver_gesvd_bufferSize(cusolver_h_, svd_max_n, svd_max_m, &lwork2));
+    svd_lwork_ = std::max(lwork1, lwork2);
     CUDA_CHECK(cudaMalloc(&d_svd_work_, svd_lwork_ * sizeof(Scalar)));
 
     // rwork for complex SVD
@@ -929,39 +934,16 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
         CUDA_CHECK(cudaMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar), cudaMemcpyDeviceToDevice));
     }
 
-    // Re-query workspace for actual SVD dimensions (may differ from max)
-    int svd_lwork_actual = 0;
-    CUSOLVER_CHECK(Traits::cusolver_gesvd_bufferSize(cusolver_h_, svd_m, svd_n, &svd_lwork_actual));
-    int lwork_use = std::max(svd_lwork_, svd_lwork_actual);
-    // If re-queried workspace exceeds pre-allocated, reallocate
-    if (svd_lwork_actual > svd_lwork_) {
-        cudaFree(d_svd_work_);
-        svd_lwork_ = svd_lwork_actual;
-        CUDA_CHECK(cudaMalloc(&d_svd_work_, svd_lwork_ * sizeof(Scalar)));
-    }
-
-    fprintf(stderr, "SVD: svd_m=%d svd_n=%d full_k=%d transposed=%d lwork=%d\n",
-            svd_m, svd_n, full_k, transposed, lwork_use);
-
-    cusolverStatus_t svd_status = Traits::cusolver_gesvd(cusolver_h_,
+    CUSOLVER_CHECK(Traits::cusolver_gesvd(cusolver_h_,
         'S', 'S',
         svd_m, svd_n,
         d_svd_A_, svd_m,
         d_svd_S_,
         d_svd_U_, svd_m,
         d_svd_Vh_, full_k,
-        d_svd_work_, lwork_use,
+        d_svd_work_, svd_lwork_,
         d_svd_rwork_,
-        d_svd_info_);
-
-    if (svd_status != CUSOLVER_STATUS_SUCCESS) {
-        CUDA_CHECK(cudaDeviceSynchronize());
-        int h_info = -999;
-        cudaMemcpy(&h_info, d_svd_info_, sizeof(int), cudaMemcpyDeviceToHost);
-        fprintf(stderr, "SVD FAILED: cusolver status=%d, devInfo=%d\n", svd_status, h_info);
-        fprintf(stderr, "  original m=%d n=%d, svd_m=%d svd_n=%d full_k=%d\n", m, n_svd, svd_m, svd_n, full_k);
-        exit(1);
-    }
+        d_svd_info_));
 
     if (transposed) {
         // d_svd_U_ = U_t (n_svd x full_k), d_svd_Vh_ = Vh_t (full_k x m)
