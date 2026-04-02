@@ -914,30 +914,53 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_);
 
-    // GPU SVD via cuSOLVER gesvd
-    CUDA_CHECK(cudaMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar), cudaMemcpyDeviceToDevice));
+    // cuSOLVER in CUDA 13.0 requires m >= n for gesvd.
+    // When m < n: SVD(A^T) = U_t S Vh_t, then A's U = Vh_t^T, A's Vh = U_t^T.
+    bool transposed = (m < n_svd);
+    int svd_m = transposed ? n_svd : m;
+    int svd_n = transposed ? m : n_svd;
+    int thr = 256;
 
-    // Sync + check for prior errors before SVD
-    CUDA_CHECK(cudaDeviceSynchronize());
-
-    // Query optimal workspace for these exact dimensions
-    int svd_lwork_actual = 0;
-    CUSOLVER_CHECK(Traits::cusolver_gesvd_bufferSize(cusolver_h_, m, n_svd, &svd_lwork_actual));
-    int lwork_use = std::max(svd_lwork_, svd_lwork_actual);
-
-    fprintf(stderr, "SVD: m=%d n=%d lda=%d ldu=%d ldvt=%d full_k=%d lwork=%d (actual=%d)\n",
-            m, n_svd, m, m, full_k, full_k, svd_lwork_, svd_lwork_actual);
+    if (transposed) {
+        int total_t = m * n_svd;
+        transpose_kernel<Scalar><<<(total_t+thr-1)/thr, thr, 0, stream_>>>(
+            d_theta, m, d_svd_A_, n_svd, m, n_svd);
+    } else {
+        CUDA_CHECK(cudaMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar), cudaMemcpyDeviceToDevice));
+    }
 
     CUSOLVER_CHECK(Traits::cusolver_gesvd(cusolver_h_,
         'S', 'S',
-        m, n_svd,
-        d_svd_A_, m,
+        svd_m, svd_n,
+        d_svd_A_, svd_m,
         d_svd_S_,
-        d_svd_U_, m,
+        d_svd_U_, svd_m,
         d_svd_Vh_, full_k,
-        d_svd_work_, lwork_use,
+        d_svd_work_, svd_lwork_,
         d_svd_rwork_,
         d_svd_info_));
+
+    if (transposed) {
+        // d_svd_U_ = U_t (n_svd x full_k), d_svd_Vh_ = Vh_t (full_k x m)
+        // actual_U (m x full_k) = Vh_t^T, actual_Vh (full_k x n_svd) = U_t^T
+        int total_u = m * full_k;
+        int total_vh = full_k * n_svd;
+
+        // Transpose Vh_t (full_k x m) -> actual_U (m x full_k) into d_T1_
+        transpose_kernel<Scalar><<<(total_u+thr-1)/thr, thr, 0, stream_>>>(
+            d_svd_Vh_, full_k, d_T1_, m, full_k, m);
+
+        // Transpose U_t (n_svd x full_k) -> actual_Vh (full_k x n_svd) into d_T2_
+        transpose_kernel<Scalar><<<(total_vh+thr-1)/thr, thr, 0, stream_>>>(
+            d_svd_U_, n_svd, d_T2_, full_k, n_svd, full_k);
+
+        // Copy back to canonical locations
+        CUDA_CHECK(cudaMemcpyAsync(d_svd_U_, d_T1_, total_u * sizeof(Scalar),
+                                   cudaMemcpyDeviceToDevice, stream_));
+        CUDA_CHECK(cudaMemcpyAsync(d_svd_Vh_, d_T2_, total_vh * sizeof(Scalar),
+                                   cudaMemcpyDeviceToDevice, stream_));
+        CUDA_CHECK(cudaStreamSynchronize(stream_));
+    }
 
     // Truncation: find new_k on GPU, copy just 1 int back
     svd_truncate_kernel<RealType><<<1, 1, 0, stream_>>>(
