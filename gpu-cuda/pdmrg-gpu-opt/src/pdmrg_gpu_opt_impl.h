@@ -1501,20 +1501,60 @@ void PDMRGGPUOpt<Scalar>::svd_split(int site, Scalar* d_theta, char direction, i
         h_S_data = ws.h_svd_S.data();
     } else {
         gpu_svd_path = true;
-        CUDA_CHECK(cudaMemcpyAsync(ws.d_svd_A, d_theta, m * n_svd * sizeof(Scalar),
-                                  cudaMemcpyDeviceToDevice, streams_[si]));
+
+        // cuSOLVER in CUDA 13.0 requires m >= n for gesvd.
+        bool transposed = (m < n_svd);
+        int svd_m = transposed ? n_svd : m;
+        int svd_n = transposed ? m : n_svd;
+        int thr = 256;
+
+        if (transposed) {
+            int total_t = m * n_svd;
+            transpose_kernel<Scalar><<<(total_t+thr-1)/thr, thr, 0, streams_[si]>>>(
+                d_theta, m, ws.d_svd_A, n_svd, m, n_svd);
+        } else {
+            CUDA_CHECK(cudaMemcpyAsync(ws.d_svd_A, d_theta, m * n_svd * sizeof(Scalar),
+                                      cudaMemcpyDeviceToDevice, streams_[si]));
+        }
+
+        // cuSOLVER workspace depends on actual dimensions; requery and grow if needed
+        {
+            int lwork_needed = 0;
+            CUSOLVER_CHECK(Traits::cusolver_gesvd_bufferSize(cusolver_handles_[si], svd_m, svd_n, &lwork_needed));
+            if (lwork_needed > ws.svd_lwork) {
+                cudaFree(ws.d_svd_work);
+                ws.svd_lwork = lwork_needed;
+                CUDA_CHECK(cudaMalloc(&ws.d_svd_work, ws.svd_lwork * sizeof(Scalar)));
+            }
+        }
 
         CUSOLVER_CHECK(Traits::cusolver_gesvd(cusolver_handles_[si],
             'S', 'S',
-            m, n_svd,
-            ws.d_svd_A, m,
+            svd_m, svd_n,
+            ws.d_svd_A, svd_m,
             ws.d_svd_S,
-            ws.d_svd_U, m,
+            ws.d_svd_U, svd_m,
             ws.d_svd_Vh, full_k,
             ws.d_svd_work, ws.svd_lwork,
             ws.h_svd_rwork.empty() ? nullptr : ws.d_svd_E,
             ws.d_svd_info));
 
+        if (transposed) {
+            int total_u = m * full_k;
+            int total_vh = full_k * n_svd;
+
+            transpose_kernel<Scalar><<<(total_u+thr-1)/thr, thr, 0, streams_[si]>>>(
+                ws.d_svd_Vh, full_k, ws.d_T1, m, full_k, m);
+
+            transpose_kernel<Scalar><<<(total_vh+thr-1)/thr, thr, 0, streams_[si]>>>(
+                ws.d_svd_U, n_svd, ws.d_T2, full_k, n_svd, full_k);
+
+            CUDA_CHECK(cudaMemcpyAsync(ws.d_svd_U, ws.d_T1, total_u * sizeof(Scalar),
+                                       cudaMemcpyDeviceToDevice, streams_[si]));
+            CUDA_CHECK(cudaMemcpyAsync(ws.d_svd_Vh, ws.d_T2, total_vh * sizeof(Scalar),
+                                       cudaMemcpyDeviceToDevice, streams_[si]));
+            CUDA_CHECK(cudaStreamSynchronize(streams_[si]));
+        }
     }
 
     // Truncation
@@ -2555,18 +2595,59 @@ void PDMRGGPUOpt<Scalar>::svd_split_single_site(int site, Scalar* d_theta, char 
         h_S_data = ws.h_svd_S.data();
         h_Vh_data = ws.h_svd_Vh.data();
     } else {
-        CUDA_CHECK(cudaMemcpyAsync(ws.d_svd_A, d_theta, m * n_svd * sizeof(Scalar),
-                                  cudaMemcpyDeviceToDevice, streams_[si]));
+        // cuSOLVER in CUDA 13.0 requires m >= n for gesvd.
+        bool transposed = (m < n_svd);
+        int svd_m = transposed ? n_svd : m;
+        int svd_n = transposed ? m : n_svd;
+        int thr = 256;
+
+        if (transposed) {
+            int total_t = m * n_svd;
+            transpose_kernel<Scalar><<<(total_t+thr-1)/thr, thr, 0, streams_[si]>>>(
+                d_theta, m, ws.d_svd_A, n_svd, m, n_svd);
+        } else {
+            CUDA_CHECK(cudaMemcpyAsync(ws.d_svd_A, d_theta, m * n_svd * sizeof(Scalar),
+                                      cudaMemcpyDeviceToDevice, streams_[si]));
+        }
+
+        // cuSOLVER workspace depends on actual dimensions; requery and grow if needed
+        {
+            int lwork_needed = 0;
+            CUSOLVER_CHECK(Traits::cusolver_gesvd_bufferSize(cusolver_handles_[si], svd_m, svd_n, &lwork_needed));
+            if (lwork_needed > ws.svd_lwork) {
+                cudaFree(ws.d_svd_work);
+                ws.svd_lwork = lwork_needed;
+                CUDA_CHECK(cudaMalloc(&ws.d_svd_work, ws.svd_lwork * sizeof(Scalar)));
+            }
+        }
+
         CUSOLVER_CHECK(Traits::cusolver_gesvd(cusolver_handles_[si],
             'S', 'S',
-            m, n_svd,
-            ws.d_svd_A, m,
+            svd_m, svd_n,
+            ws.d_svd_A, svd_m,
             ws.d_svd_S,
-            ws.d_svd_U, m,
+            ws.d_svd_U, svd_m,
             ws.d_svd_Vh, full_k,
             ws.d_svd_work, ws.svd_lwork,
             ws.h_svd_rwork.empty() ? nullptr : ws.d_svd_E,
             ws.d_svd_info));
+
+        if (transposed) {
+            int total_u = m * full_k;
+            int total_vh = full_k * n_svd;
+
+            transpose_kernel<Scalar><<<(total_u+thr-1)/thr, thr, 0, streams_[si]>>>(
+                ws.d_svd_Vh, full_k, ws.d_T1, m, full_k, m);
+
+            transpose_kernel<Scalar><<<(total_vh+thr-1)/thr, thr, 0, streams_[si]>>>(
+                ws.d_svd_U, n_svd, ws.d_T2, full_k, n_svd, full_k);
+
+            CUDA_CHECK(cudaMemcpyAsync(ws.d_svd_U, ws.d_T1, total_u * sizeof(Scalar),
+                                       cudaMemcpyDeviceToDevice, streams_[si]));
+            CUDA_CHECK(cudaMemcpyAsync(ws.d_svd_Vh, ws.d_T2, total_vh * sizeof(Scalar),
+                                       cudaMemcpyDeviceToDevice, streams_[si]));
+            CUDA_CHECK(cudaStreamSynchronize(streams_[si]));
+        }
     }
 
     // Truncation
