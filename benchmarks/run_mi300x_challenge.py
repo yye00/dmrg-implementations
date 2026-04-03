@@ -81,10 +81,10 @@ CHALLENGE_SIZES = {
 # ─── GPU executables ─────────────────────────────────────────────────────────
 
 GPU_IMPLS = {
-    "dmrg-gpu":      "gpu-rocm/dmrg-gpu/build/test_dmrg_gpu",
-    "dmrg-gpu-opt":  "gpu-rocm/dmrg-gpu-opt/build/test_dmrg_gpu_opt",
-    "dmrg2-gpu":     "gpu-rocm/dmrg2-gpu/build/test_dmrg2_gpu",
-    "dmrg2-gpu-opt": "gpu-rocm/dmrg2-gpu-opt/build/test_dmrg2_gpu_opt",
+    "dmrg-gpu":      "gpu-rocm/dmrg-gpu/build/dmrg_gpu",
+    "dmrg-gpu-opt":  "gpu-rocm/dmrg-gpu-opt/build/dmrg_gpu_opt",
+    "dmrg2-gpu":     "gpu-rocm/dmrg2-gpu/build/dmrg2_gpu",
+    "dmrg2-gpu-opt": "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
     "pdmrg-gpu":     "gpu-rocm/pdmrg-gpu/build/pdmrg_gpu",
     "pdmrg-gpu-opt": "gpu-rocm/pdmrg-gpu-opt/build/pdmrg_gpu_opt",
 }
