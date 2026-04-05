@@ -31,6 +31,73 @@
 
 // Profiling counters (reset per sweep pair)
 
+// GPU kernels for batched GEMM pointer setup (eliminates CPU→GPU pointer copies)
+
+// Step 1 / env update step 1: A[w*d+s] = base_A + w*strideA, B[w*d+s] = base_B + s*strideB, C[w*d+s] = base_C + (w*d+s)*strideC
+template<typename Scalar>
+__global__ void setup_batch_ptrs_wd(Scalar** A, Scalar** B, Scalar** C,
+                                     Scalar* base_A, Scalar* base_B, Scalar* base_C,
+                                     int d, int strideA, int strideB, int strideC) {
+    int idx = threadIdx.x;
+    int w = idx / d, s = idx % d;
+    A[idx] = base_A + w * strideA;
+    B[idx] = base_B + s * strideB;
+    C[idx] = base_C + idx * strideC;
+}
+
+// Two-site step 1: idx = w*dd + s1*d + s2, B uses transposed physical index (s1 + s2*d)
+// A[idx] = base_A + (idx/dd)*strideA, B[idx] = base_B + (s1 + s2*d)*strideB, C[idx] = base_C + idx*strideC
+template<typename Scalar>
+__global__ void setup_batch_ptrs_wd_twosite(Scalar** A, Scalar** B, Scalar** C,
+                                             Scalar* base_A, Scalar* base_B, Scalar* base_C,
+                                             int d, int dd, int strideA, int strideB, int strideC) {
+    int idx = threadIdx.x;
+    int w = idx / dd;
+    int ss = idx % dd;   // s1*d + s2
+    int s1 = ss / d, s2 = ss % d;
+    A[idx] = base_A + w * strideA;
+    B[idx] = base_B + (s1 + s2 * d) * strideB;  // transposed physical index
+    C[idx] = base_C + idx * strideC;
+}
+
+// Two-site step 3: per n iteration, dd batches. idx = s1p*d + s2p.
+// A[idx] = base_A + (n*dd + idx)*strideA, B[idx] = base_B + n*strideB, C[idx] = base_C + (s1p + s2p*d)*strideC
+template<typename Scalar>
+__global__ void setup_batch_ptrs_step3_twosite(Scalar** A, Scalar** B, Scalar** C,
+                                                Scalar* base_A, Scalar* base_B, Scalar* base_C,
+                                                int n, int d, int dd, int strideA, int strideB, int strideC) {
+    int idx = threadIdx.x;  // s1p*d + s2p
+    int s1p = idx / d, s2p = idx % d;
+    A[idx] = base_A + (n * dd + idx) * strideA;
+    B[idx] = base_B + n * strideB;
+    C[idx] = base_C + (s1p + s2p * d) * strideC;  // transposed physical index
+}
+
+// Env update step 3 (left): A[w] = base_A + (w*d+sp)*strideA, B[w] = base_B + sp*strideB, C[w] = base_C + w*strideC
+template<typename Scalar>
+__global__ void setup_batch_ptrs_env3(Scalar** A, Scalar** B, Scalar** C,
+                                       Scalar* base_A, Scalar* base_B, Scalar* base_C,
+                                       int sp, int d, int strideA, int strideB, int strideC) {
+    int w = threadIdx.x;
+    A[w] = base_A + (w * d + sp) * strideA;
+    B[w] = base_B + sp * strideB;
+    C[w] = base_C + w * strideC;
+}
+
+// Lanczos: find first beta < tol, write index+1 to result (0 = none found)
+__global__ void lanczos_check_beta(const double* beta, int n, double tol, rocblas_int* result) {
+    *result = 0;
+    for (int j = 0; j < n; j++) {
+        if (beta[j] < tol) { *result = j + 1; return; }
+    }
+}
+
+// Promote double eigenvector to hipDoubleComplex (for Josephson Ritz coefficients)
+__global__ void promote_double_to_complex(const double* src, hipDoubleComplex* dst, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) dst[i] = make_hipDoubleComplex(src[i], 0.0);
+}
+
 // ============================================================================
 // Constructor
 // ============================================================================
@@ -427,18 +494,10 @@ void DMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in, S
     // ---------------------------------------------------------------
     {
         int batch_count = D * dd;
-        std::vector<Scalar*> h_A(batch_count), h_B(batch_count), h_C(batch_count);
-        for (int w = 0; w < D; w++)
-            for (int s1 = 0; s1 < d; s1++)
-                for (int s2 = 0; s2 < d; s2++) {
-                    int ws = w * dd + s1 * d + s2;
-                    h_A[ws] = L_env + w * cL;
-                    h_B[ws] = const_cast<Scalar*>(d_theta_in) + s1 * cL + s2 * cL * d;
-                    h_C[ws] = T1 + ws * cL * cR;
-                }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        hipLaunchKernelGGL(setup_batch_ptrs_wd_twosite<Scalar>, dim3(1), dim3(batch_count), 0, stream_,
+                           d_batch_A_, d_batch_B_, d_batch_C_,
+                           L_env, const_cast<Scalar*>(d_theta_in), T1,
+                           d, dd, cL, cL, cL * cR);
         ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
             Traits::op_t, rocblas_operation_none,
             cL, cR, cL,
@@ -472,22 +531,12 @@ void DMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in, S
     // Batch dd GEMMs per n (safe: different s1p/s2p write to different C locations).
     // Cannot batch across n since same (s1p,s2p)/different n accumulate into same C.
     {
-        std::vector<Scalar*> h_A3(D * dd), h_B3(D * dd), h_C3(D * dd);
         for (int n = 0; n < D; n++) {
             Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
-            int idx = 0;
-            for (int s1p = 0; s1p < d; s1p++) {
-                for (int s2p = 0; s2p < d; s2p++) {
-                    int ws_out = n * dd + s1p * d + s2p;
-                    h_A3[idx] = T2 + ws_out * cL * cR;
-                    h_B3[idx] = R_env + n * cR;
-                    h_C3[idx] = d_result + s1p * cL + s2p * cL * d;
-                    idx++;
-                }
-            }
-            HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A3.data(), dd*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-            HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B3.data(), dd*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-            HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C3.data(), dd*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            hipLaunchKernelGGL(setup_batch_ptrs_step3_twosite<Scalar>, dim3(1), dim3(dd), 0, stream_,
+                               d_batch_A_, d_batch_B_, d_batch_C_,
+                               T2, R_env, d_result,
+                               n, d, dd, cL * cR, cR, cL);
             ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
                 rocblas_operation_none, rocblas_operation_none,
                 cL, cR, cR,
@@ -523,17 +572,10 @@ void DMRG2GPU<Scalar>::update_left_env(int site) {
 
     // Step 1: V_ws[a',b] = L_w^T[a',a] * A_s[a,b]  (batched GEMM)
     {
-        std::vector<Scalar*> h_A(D * d), h_B(D * d), h_C(D * d);
-        for (int w = 0; w < D; w++)
-            for (int s = 0; s < d; s++) {
-                int ws = w * d + s;
-                h_A[ws] = L_env + w * chi_in;
-                h_B[ws] = A + s * chi_in;
-                h_C[ws] = V + ws * chi_in * chi_out;
-            }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        hipLaunchKernelGGL(setup_batch_ptrs_wd<Scalar>, dim3(1), dim3(D*d), 0, stream_,
+                           d_batch_A_, d_batch_B_, d_batch_C_,
+                           L_env, A, V,
+                           d, chi_in, chi_in, chi_in * chi_out);
         ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
             Traits::op_t, rocblas_operation_none,
             chi_in, chi_out, chi_in,
@@ -558,17 +600,12 @@ void DMRG2GPU<Scalar>::update_left_env(int site) {
     // Step 3: L_new_w'[b,b'] = sum_{a',s'} U[a',ws',b] * conj(A[a',s',b'])  (batched)
     // Batch D GEMMs per sp (safe: different wp write to different C locations).
     {
-        std::vector<Scalar*> h_A3(D * d), h_B3(D * d), h_C3(D * d);
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            for (int wp = 0; wp < D; wp++) {
-                h_A3[wp] = U + (wp * d + sp) * chi_in * chi_out;
-                h_B3[wp] = A + sp * chi_in;
-                h_C3[wp] = L_new + wp * chi_out;
-            }
-            HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A3.data(), D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-            HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B3.data(), D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-            HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C3.data(), D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            hipLaunchKernelGGL(setup_batch_ptrs_env3<Scalar>, dim3(1), dim3(D), 0, stream_,
+                               d_batch_A_, d_batch_B_, d_batch_C_,
+                               U, A, L_new,
+                               sp, d, chi_in * chi_out, chi_in, chi_out);
             ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
                 Traits::op_h, rocblas_operation_none,
                 chi_out, chi_out, chi_in,
@@ -609,17 +646,10 @@ void DMRG2GPU<Scalar>::update_right_env(int site) {
 
     // Step 1: V_ws[a,b'] = A_s[a,b] * R_w'[b,b']  (batched GEMM)
     {
-        std::vector<Scalar*> h_A(D * d), h_B(D * d), h_C(D * d);
-        for (int wp = 0; wp < D; wp++)
-            for (int s = 0; s < d; s++) {
-                int ws = wp * d + s;
-                h_A[ws] = A + s * chi_out;
-                h_B[ws] = R_env + wp * chi_in;
-                h_C[ws] = V + ws * chi_out * chi_in;
-            }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+        hipLaunchKernelGGL(setup_batch_ptrs_wd<Scalar>, dim3(1), dim3(D*d), 0, stream_,
+                           d_batch_A_, d_batch_B_, d_batch_C_,
+                           A, R_env, V,
+                           d, chi_out, chi_in, chi_out * chi_in);
         ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
             rocblas_operation_none, rocblas_operation_none,
             chi_out, chi_in, chi_in,
@@ -644,17 +674,12 @@ void DMRG2GPU<Scalar>::update_right_env(int site) {
     // Step 3: R_new_w[a,a'] = sum_s' U_ws'[a,b'] * A_s'^H[b',a']  (batched)
     // Batch D GEMMs per sp (safe: different w write to different C locations).
     {
-        std::vector<Scalar*> h_A3(D * d), h_B3(D * d), h_C3(D * d);
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            for (int w = 0; w < D; w++) {
-                h_A3[w] = U + (w * d + sp) * chi_out * chi_in;
-                h_B3[w] = A + sp * chi_out;
-                h_C3[w] = R_new + w * chi_out;
-            }
-            HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A3.data(), D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-            HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B3.data(), D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-            HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C3.data(), D*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            hipLaunchKernelGGL(setup_batch_ptrs_env3<Scalar>, dim3(1), dim3(D), 0, stream_,
+                               d_batch_A_, d_batch_B_, d_batch_C_,
+                               U, A, R_new,
+                               sp, d, chi_out * chi_in, chi_out, chi_out);
             ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
                 rocblas_operation_none, Traits::op_h,
                 chi_out, chi_out, chi_in,
@@ -708,9 +733,6 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
     double tol_eig_conv = 1e-12;
 
     Scalar* d_lanczos_v = d_lanczos_v_;
-    std::vector<double> h_alpha(max_iter);
-    std::vector<double> h_beta(max_iter);
-
     // v[0] = theta / ||theta|| (host pointer mode for initial setup)
     double norm;
     ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, &norm));
@@ -795,21 +817,15 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         if (iter >= 4 && iter % 3 == 0) {
             HIP_CHECK(hipStreamSynchronize(stream_));
 
-            int n_copy = iter + 1;
-            HIP_CHECK(hipMemcpy(h_alpha.data(), d_alpha_dev_, n_copy * sizeof(double), hipMemcpyDeviceToHost));
-            HIP_CHECK(hipMemcpy(h_beta.data(), d_beta_dev_, n_copy * sizeof(double), hipMemcpyDeviceToHost));
-
-            bool early_break = false;
-            for (int j = 0; j <= iter; j++) {
-                if (h_beta[j] < tol_lanczos) {
-                    iter = j + 1;
-                    early_break = true;
-                    break;
-                }
-            }
-            if (early_break) break;
-
             int ncheck = iter + 1;
+
+            // Check for invariant subspace (beta < tol) on GPU
+            hipLaunchKernelGGL(lanczos_check_beta, dim3(1), dim3(1), 0, stream_,
+                               d_beta_dev_, ncheck, tol_lanczos, d_steqr_info_);
+            rocblas_int h_beta_idx;
+            HIP_CHECK(hipMemcpy(&h_beta_idx, d_steqr_info_, sizeof(rocblas_int), hipMemcpyDeviceToHost));
+            if (h_beta_idx > 0) { iter = h_beta_idx; break; }
+
             HIP_CHECK(hipMemcpyAsync(d_steqr_D_, d_alpha_dev_, ncheck * sizeof(double), hipMemcpyDeviceToDevice, stream_));
             HIP_CHECK(hipMemcpyAsync(d_steqr_E_, d_beta_dev_, ncheck * sizeof(double), hipMemcpyDeviceToDevice, stream_));
             rocsolver_dsteqr(rocblas_h_, rocblas_evect_none, ncheck,
@@ -850,13 +866,10 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
     if constexpr (std::is_same_v<Scalar, double>) {
         HIP_CHECK(hipMemcpyAsync(d_ritz_coeffs_, d_steqr_C_, niter * sizeof(double), hipMemcpyDeviceToDevice, stream_));
     } else {
-        std::vector<double> h_Z(niter);
-        HIP_CHECK(hipMemcpy(h_Z.data(), d_steqr_C_, niter * sizeof(double), hipMemcpyDeviceToHost));
-        std::vector<Scalar> h_ritz_scalar(niter);
-        for (int i = 0; i < niter; i++) {
-            h_ritz_scalar[i] = Traits::make_scalar(h_Z[i]);
-        }
-        HIP_CHECK(hipMemcpy(d_ritz_coeffs_, h_ritz_scalar.data(), niter * sizeof(Scalar), hipMemcpyHostToDevice));
+        // Complex case: promote double eigenvectors to complex on GPU
+        int blk = (niter + 63) / 64;
+        hipLaunchKernelGGL(promote_double_to_complex, dim3(blk), dim3(64), 0, stream_,
+                           d_steqr_C_, (hipDoubleComplex*)d_ritz_coeffs_, niter);
     }
 
     // Use device pointer mode for finalization to avoid implicit GPU syncs
