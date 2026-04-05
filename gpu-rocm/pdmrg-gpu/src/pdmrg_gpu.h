@@ -108,6 +108,11 @@ private:
         RealType* d_alpha_dev;       // [max_iter]: alpha values
         RealType* d_beta_dev;        // [max_iter]: beta values
         Scalar* d_neg_beta_scalars;  // [max_iter]: -beta as Scalar for axpy
+        // rocsolver tridiagonal eigensolver workspace (replaces CPU LAPACK dstev)
+        double* d_steqr_D;
+        double* d_steqr_E;
+        double* d_steqr_C;
+        rocblas_int* d_steqr_info;
         Scalar* d_const_one;         // constant 1.0
         Scalar* d_const_zero;        // constant 0.0
         Scalar* d_const_neg_one;     // constant -1.0

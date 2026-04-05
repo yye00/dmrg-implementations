@@ -12,10 +12,7 @@
 // ScalarTraits: type-dependent dispatch for rocBLAS/LAPACK routines
 // ============================================================================
 
-// LAPACK extern declarations
-extern "C" void dstev_(const char* jobz, const int* n, double* d, double* e,
-                       double* z, const int* ldz, double* work, int* info);
-
+// LAPACK extern declarations (SVD only — tridiagonal solve uses rocsolver_dsteqr)
 extern "C" void dgesvd_(const char* jobu, const char* jobvt,
                         const int* m, const int* n, double* a, const int* lda,
                         double* s, double* u, const int* ldu,

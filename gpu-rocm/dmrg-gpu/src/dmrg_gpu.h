@@ -87,6 +87,12 @@ private:
     RealType* d_alpha_dev_;     // alpha[iter] on device
     RealType* d_beta_dev_;      // beta[iter] on device
     Scalar* d_neg_beta_scalars_; // -beta[iter] as Scalar for axpy
+
+    // rocsolver tridiagonal eigensolver workspace (replaces CPU LAPACK dstev)
+    double* d_steqr_D_;         // diagonal (overwritten with eigenvalues)
+    double* d_steqr_E_;         // subdiagonal (overwritten)
+    double* d_steqr_C_;         // eigenvector matrix (max_iter × max_iter)
+    rocblas_int* d_steqr_info_; // rocsolver info output
     Scalar* d_const_one_;
     Scalar* d_const_zero_;
     Scalar* d_const_neg_one_;

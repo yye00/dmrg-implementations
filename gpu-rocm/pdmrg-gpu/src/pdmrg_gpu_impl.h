@@ -165,6 +165,13 @@ void PDMRGGPU<Scalar>::allocate_stream_workspaces() {
         HIP_CHECK(hipMalloc(&ws.d_alpha_dev, max_lanczos_iter_ * sizeof(RealType)));
         HIP_CHECK(hipMalloc(&ws.d_beta_dev, max_lanczos_iter_ * sizeof(RealType)));
         HIP_CHECK(hipMalloc(&ws.d_neg_beta_scalars, max_lanczos_iter_ * sizeof(Scalar)));
+
+        // rocsolver tridiagonal eigensolver workspace
+        HIP_CHECK(hipMalloc(&ws.d_steqr_D, max_lanczos_iter_ * sizeof(double)));
+        HIP_CHECK(hipMalloc(&ws.d_steqr_E, max_lanczos_iter_ * sizeof(double)));
+        HIP_CHECK(hipMalloc(&ws.d_steqr_C, max_lanczos_iter_ * max_lanczos_iter_ * sizeof(double)));
+        HIP_CHECK(hipMalloc(&ws.d_steqr_info, sizeof(rocblas_int)));
+
         HIP_CHECK(hipMalloc(&ws.d_const_one, sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_const_zero, sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_const_neg_one, sizeof(Scalar)));
@@ -297,6 +304,10 @@ void PDMRGGPU<Scalar>::free_gpu_resources() {
         if (ws.d_alpha_dev) hipFree(ws.d_alpha_dev);
         if (ws.d_beta_dev) hipFree(ws.d_beta_dev);
         if (ws.d_neg_beta_scalars) hipFree(ws.d_neg_beta_scalars);
+        if (ws.d_steqr_D) hipFree(ws.d_steqr_D);
+        if (ws.d_steqr_E) hipFree(ws.d_steqr_E);
+        if (ws.d_steqr_C) hipFree(ws.d_steqr_C);
+        if (ws.d_steqr_info) hipFree(ws.d_steqr_info);
         if (ws.d_const_one) hipFree(ws.d_const_one);
         if (ws.d_const_zero) hipFree(ws.d_const_zero);
         if (ws.d_const_neg_one) hipFree(ws.d_const_neg_one);
@@ -816,7 +827,6 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
 
     double prev_energy = 1e30;
     int iter;
-    int last_synced_iter = -1;
 
     for (iter = 0; iter < max_iter; iter++) {
         Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
@@ -893,7 +903,6 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
             int n_copy = iter + 1;
             HIP_CHECK(hipMemcpy(h_alpha.data(), ws.d_alpha_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost));
             HIP_CHECK(hipMemcpy(h_beta.data(), ws.d_beta_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost));
-            last_synced_iter = iter;
 
             // Check if any beta was near zero (invariant subspace found)
             bool early_break = false;
@@ -906,19 +915,17 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
             }
             if (early_break) break;
 
-            // Eigenvalue convergence check
+            // Eigenvalue convergence check via rocsolver on GPU
             int ncheck = iter + 1;
-            std::vector<double> h_D_chk(ncheck), h_E_chk(ncheck);
-            std::copy(h_alpha.begin(), h_alpha.begin() + ncheck, h_D_chk.begin());
-            for (int i = 0; i < ncheck - 1; i++) h_E_chk[i] = h_beta[i];
-            h_E_chk[ncheck - 1] = 0.0;
-            const char jobz_n = 'N';
-            const int n_chk = ncheck;
-            std::vector<double> h_work_chk(1);
-            int info_chk = 0;
-            dstev_(&jobz_n, &n_chk, h_D_chk.data(), h_E_chk.data(), nullptr, &n_chk, h_work_chk.data(), &info_chk);
-            if (info_chk == 0) {
-                double cur_energy = h_D_chk[0];
+            HIP_CHECK(hipMemcpyAsync(ws.d_steqr_D, ws.d_alpha_dev, ncheck * sizeof(double), hipMemcpyDeviceToDevice, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(ws.d_steqr_E, ws.d_beta_dev, ncheck * sizeof(double), hipMemcpyDeviceToDevice, streams_[si]));
+            rocsolver_dsteqr(handles_[si], rocblas_evect_none, ncheck,
+                             ws.d_steqr_D, ws.d_steqr_E, nullptr, ncheck, ws.d_steqr_info);
+            rocblas_int h_info_chk;
+            double cur_energy;
+            HIP_CHECK(hipMemcpy(&h_info_chk, ws.d_steqr_info, sizeof(rocblas_int), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpy(&cur_energy, ws.d_steqr_D, sizeof(double), hipMemcpyDeviceToHost));
+            if (h_info_chk == 0) {
                 if (std::abs(cur_energy - prev_energy) < tol_eig_conv) {
                     iter++;
                     break;
@@ -933,40 +940,34 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
     // Ensure stream is synchronized before reading results
     HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
-    // Copy any remaining alpha/beta values we haven't synced yet
-    if (last_synced_iter < niter - 1) {
-        HIP_CHECK(hipMemcpy(h_alpha.data(), ws.d_alpha_dev, niter * sizeof(double), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(h_beta.data(), ws.d_beta_dev, niter * sizeof(double), hipMemcpyDeviceToHost));
+    // Solve tridiagonal eigenvalue problem on GPU via rocsolver
+    HIP_CHECK(hipMemcpyAsync(ws.d_steqr_D, ws.d_alpha_dev, niter * sizeof(double), hipMemcpyDeviceToDevice, streams_[si]));
+    HIP_CHECK(hipMemcpyAsync(ws.d_steqr_E, ws.d_beta_dev, niter * sizeof(double), hipMemcpyDeviceToDevice, streams_[si]));
+    rocsolver_dsteqr(handles_[si], rocblas_evect_tridiagonal, niter,
+                     ws.d_steqr_D, ws.d_steqr_E, ws.d_steqr_C, niter, ws.d_steqr_info);
+
+    rocblas_int h_steqr_info;
+    HIP_CHECK(hipMemcpy(&h_steqr_info, ws.d_steqr_info, sizeof(rocblas_int), hipMemcpyDeviceToHost));
+    if (h_steqr_info != 0) {
+        throw std::runtime_error("rocsolver_dsteqr failed with info = " + std::to_string(h_steqr_info));
     }
 
-    // Solve tridiagonal eigenvalue problem on CPU
-    std::vector<double> h_D(niter), h_E(niter), h_Z(niter * niter);
-    std::vector<double> h_work(std::max(1, 2*niter - 2));
-    int lapack_info = 0;
+    double energy;
+    HIP_CHECK(hipMemcpy(&energy, ws.d_steqr_D, sizeof(double), hipMemcpyDeviceToHost));
 
-    std::copy(h_alpha.begin(), h_alpha.begin() + niter, h_D.begin());
-    for (int i = 0; i < niter - 1; i++) h_E[i] = h_beta[i];
-    if (niter > 0) h_E[niter - 1] = 0.0;
-
-    const char jobz = 'V';
-    const int n_lapack = niter;
-    const int ldz = niter;
-
-    dstev_(&jobz, &n_lapack, h_D.data(), h_E.data(), h_Z.data(), &ldz, h_work.data(), &lapack_info);
-
-    if (lapack_info != 0) {
-        throw std::runtime_error("LAPACK dstev failed with info = " + std::to_string(lapack_info));
+    // Ritz coefficients = first column of eigenvector matrix (on device)
+    if constexpr (std::is_same_v<Scalar, double>) {
+        HIP_CHECK(hipMemcpyAsync(ws.d_ritz_coeffs, ws.d_steqr_C, niter * sizeof(double), hipMemcpyDeviceToDevice, streams_[si]));
+    } else {
+        std::vector<double> h_Z(niter);
+        HIP_CHECK(hipMemcpy(h_Z.data(), ws.d_steqr_C, niter * sizeof(double), hipMemcpyDeviceToHost));
+        std::vector<Scalar> h_ritz_scalar(niter);
+        for (int i = 0; i < niter; i++) {
+            h_ritz_scalar[i] = Traits::make_scalar(h_Z[i]);
+        }
+        HIP_CHECK(hipMemcpyAsync(ws.d_ritz_coeffs, h_ritz_scalar.data(),
+                  niter * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
     }
-
-    double energy = h_D[0];
-
-    // Reconstruct ground state: |theta> = sum_i c[i] |v_i> (device pointer mode)
-    std::vector<Scalar> h_ritz_scalar(niter);
-    for (int i = 0; i < niter; i++) {
-        h_ritz_scalar[i] = Traits::make_scalar(h_Z[i]);
-    }
-    HIP_CHECK(hipMemcpyAsync(ws.d_ritz_coeffs, h_ritz_scalar.data(),
-              niter * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
 
     ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
     ROCBLAS_CHECK(Traits::gemv(

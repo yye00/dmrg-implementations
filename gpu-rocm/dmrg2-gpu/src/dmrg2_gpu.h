@@ -92,6 +92,12 @@ private:
     RealType* d_alpha_dev_;
     RealType* d_beta_dev_;
     Scalar* d_neg_beta_scalars_;
+
+    // rocsolver tridiagonal eigensolver workspace (replaces CPU LAPACK dstev)
+    double* d_steqr_D_;
+    double* d_steqr_E_;
+    double* d_steqr_C_;
+    rocblas_int* d_steqr_info_;
     Scalar* d_const_one_;
     Scalar* d_const_zero_;
     Scalar* d_const_neg_one_;
