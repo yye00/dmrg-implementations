@@ -645,11 +645,13 @@ void DMRG2GPU<Scalar>::update_right_env(int site) {
     Scalar* U = d_T2_;
 
     // Step 1: V_ws[a,b'] = A_s[a,b] * R_w'[b,b']  (batched GEMM)
+    // Note: A varies by s (inner dim) and B varies by w (outer dim) — opposite of
+    // setup_batch_ptrs_wd convention, so swap output arrays and base/stride args.
     {
         hipLaunchKernelGGL(setup_batch_ptrs_wd<Scalar>, dim3(1), dim3(D*d), 0, stream_,
-                           d_batch_A_, d_batch_B_, d_batch_C_,
-                           A, R_env, V,
-                           d, chi_out, chi_in, chi_out * chi_in);
+                           d_batch_B_, d_batch_A_, d_batch_C_,
+                           R_env, A, V,
+                           d, chi_in, chi_out, chi_out * chi_in);
         ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
             rocblas_operation_none, rocblas_operation_none,
             chi_out, chi_in, chi_in,
