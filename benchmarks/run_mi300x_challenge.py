@@ -124,7 +124,7 @@ def _build_gpu_cmd(impl, model, L, chi, sweeps):
     return cmd, None
 
 
-def run_gpu(impl, model, L, chi, sweeps, warmup=True, timeout=600):
+def run_gpu(impl, model, L, chi, sweeps, warmup=True, timeout=None):
     """Run GPU benchmark with optional warmup."""
     # Warmup: same exe, tiny problem
     if warmup:
