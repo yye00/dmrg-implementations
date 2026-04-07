@@ -222,6 +222,8 @@ private:
     // Full-chain sweeps on device 0 (warmup/polish)
     double sweep_LR_full_1site();
     double sweep_RL_full_1site();
+    double sweep_LR_full();   // two-site (for polish)
+    double sweep_RL_full();   // two-site (for polish)
     // Segment sweeps (each on its own device)
     void segment_sweep_LR(int seg_idx);
     void segment_sweep_RL(int seg_idx);

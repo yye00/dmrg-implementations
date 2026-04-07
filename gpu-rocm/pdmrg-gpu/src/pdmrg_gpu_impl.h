@@ -1958,15 +1958,16 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
         energy_prev = energy_;
     }
 
-    // === Polish phase: full-chain sweeps to converge to tight tolerance ===
-    // Always run polish when using multiple segments — parallel DMRG leaves
-    // stale boundary environments that only full-chain sweeps can fix.
+    // === Polish phase: two-site full-chain sweeps to escape local minima ===
+    // Single-site polish gets trapped when PDMRG boundary bond structure is
+    // suboptimal. Two-site sweeps can re-optimize bond dimensions across
+    // segment boundaries, achieving the same accuracy as single-segment DMRG.
     if (n_segments_ > 1) {
         int n_polish = 10;
         build_initial_environments();
         for (int sw = 0; sw < n_polish; sw++) {
-            sweep_LR_full_1site();
-            double eRL = sweep_RL_full_1site();
+            sweep_LR_full();
+            double eRL = sweep_RL_full();
             double dE = std::abs(eRL - energy_);
             energy_ = eRL;
             if (dE < tol_) {

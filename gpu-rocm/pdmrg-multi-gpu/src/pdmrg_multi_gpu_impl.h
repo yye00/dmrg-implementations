@@ -2010,6 +2010,106 @@ double PDMRGMultiGPU<Scalar>::sweep_RL_full_1site() {
 }
 
 // ============================================================================
+// Full-chain two-site sweep methods (for polish on device 0)
+// ============================================================================
+
+template<typename Scalar>
+double PDMRGMultiGPU<Scalar>::sweep_LR_full() {
+    int di = 0;
+    auto& dev = devices_[di];
+    HIP_CHECK(hipSetDevice(dev.device_id));
+
+    auto saved_mps = dev.d_mps;
+    auto saved_L_envs = dev.d_L_envs;
+    auto saved_R_envs = dev.d_R_envs;
+    auto saved_L_alloc = dev.L_env_alloc_chi;
+    auto saved_R_alloc = dev.R_env_alloc_chi;
+    int saved_seg_first = dev.seg_first;
+    int saved_seg_last = dev.seg_last;
+    int saved_seg_len = dev.seg_len;
+
+    dev.d_mps = d0_mps_tensors_;
+    dev.d_L_envs = d0_L_envs_;
+    dev.d_R_envs = d0_R_envs_;
+    dev.L_env_alloc_chi = d0_L_env_alloc_chi_;
+    dev.R_env_alloc_chi = d0_R_env_alloc_chi_;
+    dev.seg_first = 0;
+    dev.seg_last = L_ - 1;
+    dev.seg_len = L_;
+
+    double energy = 0.0;
+    for (int site = 0; site < L_ - 1; site++) {
+        energy = optimize_bond(site, 'R', di);
+        update_left_env(site, di);
+    }
+
+    d0_mps_tensors_ = dev.d_mps;
+    d0_L_envs_ = dev.d_L_envs;
+    d0_R_envs_ = dev.d_R_envs;
+    d0_L_env_alloc_chi_ = dev.L_env_alloc_chi;
+    d0_R_env_alloc_chi_ = dev.R_env_alloc_chi;
+
+    dev.d_mps = saved_mps;
+    dev.d_L_envs = saved_L_envs;
+    dev.d_R_envs = saved_R_envs;
+    dev.L_env_alloc_chi = saved_L_alloc;
+    dev.R_env_alloc_chi = saved_R_alloc;
+    dev.seg_first = saved_seg_first;
+    dev.seg_last = saved_seg_last;
+    dev.seg_len = saved_seg_len;
+
+    return energy;
+}
+
+template<typename Scalar>
+double PDMRGMultiGPU<Scalar>::sweep_RL_full() {
+    int di = 0;
+    auto& dev = devices_[di];
+    HIP_CHECK(hipSetDevice(dev.device_id));
+
+    auto saved_mps = dev.d_mps;
+    auto saved_L_envs = dev.d_L_envs;
+    auto saved_R_envs = dev.d_R_envs;
+    auto saved_L_alloc = dev.L_env_alloc_chi;
+    auto saved_R_alloc = dev.R_env_alloc_chi;
+    int saved_seg_first = dev.seg_first;
+    int saved_seg_last = dev.seg_last;
+    int saved_seg_len = dev.seg_len;
+
+    dev.d_mps = d0_mps_tensors_;
+    dev.d_L_envs = d0_L_envs_;
+    dev.d_R_envs = d0_R_envs_;
+    dev.L_env_alloc_chi = d0_L_env_alloc_chi_;
+    dev.R_env_alloc_chi = d0_R_env_alloc_chi_;
+    dev.seg_first = 0;
+    dev.seg_last = L_ - 1;
+    dev.seg_len = L_;
+
+    double energy = 0.0;
+    for (int site = L_ - 2; site >= 0; site--) {
+        energy = optimize_bond(site, 'L', di);
+        update_right_env(site + 1, di);
+    }
+
+    d0_mps_tensors_ = dev.d_mps;
+    d0_L_envs_ = dev.d_L_envs;
+    d0_R_envs_ = dev.d_R_envs;
+    d0_L_env_alloc_chi_ = dev.L_env_alloc_chi;
+    d0_R_env_alloc_chi_ = dev.R_env_alloc_chi;
+
+    dev.d_mps = saved_mps;
+    dev.d_L_envs = saved_L_envs;
+    dev.d_R_envs = saved_R_envs;
+    dev.L_env_alloc_chi = saved_L_alloc;
+    dev.R_env_alloc_chi = saved_R_alloc;
+    dev.seg_first = saved_seg_first;
+    dev.seg_last = saved_seg_last;
+    dev.seg_len = saved_seg_len;
+
+    return energy;
+}
+
+// ============================================================================
 // Segment sweep methods (each segment on its own device)
 // ============================================================================
 
@@ -2383,16 +2483,17 @@ double PDMRGMultiGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_
         energy_prev = energy_;
     }
 
-    // === Polish phase: full-chain sweeps on device 0 ===
+    // === Polish phase: two-site full-chain sweeps on device 0 ===
+    // Two-site sweeps can re-optimize bond dimensions across segment
+    // boundaries, escaping local minima that single-site polish cannot.
     if (n_segments_ > 1) {
-        // Gather MPS to device 0
         gather_mps_to_device0();
 
         int n_polish = 10;
         build_initial_environments();
         for (int sw = 0; sw < n_polish; sw++) {
-            sweep_LR_full_1site();
-            double eRL = sweep_RL_full_1site();
+            sweep_LR_full();
+            double eRL = sweep_RL_full();
             double dE = std::abs(eRL - energy_);
             energy_ = eRL;
             if (dE < tol_) {
@@ -2401,7 +2502,6 @@ double PDMRGMultiGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_
             }
         }
 
-        // Scatter back to owning devices
         scatter_mps_from_device0();
     }
 
