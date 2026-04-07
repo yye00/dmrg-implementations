@@ -81,12 +81,13 @@ CHALLENGE_SIZES = {
 # ─── GPU executables ─────────────────────────────────────────────────────────
 
 GPU_IMPLS = {
-    "dmrg-gpu":      "gpu-rocm/dmrg-gpu/build/dmrg_gpu",
-    "dmrg-gpu-opt":  "gpu-rocm/dmrg-gpu-opt/build/dmrg_gpu_opt",
-    "dmrg2-gpu":     "gpu-rocm/dmrg2-gpu/build/dmrg2_gpu",
-    "dmrg2-gpu-opt": "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
-    "pdmrg-gpu":     "gpu-rocm/pdmrg-gpu/build/pdmrg_gpu",
-    "pdmrg-gpu-opt": "gpu-rocm/pdmrg-gpu-opt/build/pdmrg_gpu_opt",
+    "dmrg-gpu":          "gpu-rocm/dmrg-gpu/build/dmrg_gpu",
+    "dmrg-gpu-opt":      "gpu-rocm/dmrg-gpu-opt/build/dmrg_gpu_opt",
+    "dmrg2-gpu":         "gpu-rocm/dmrg2-gpu/build/dmrg2_gpu",
+    "dmrg2-gpu-opt":     "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+    "pdmrg-gpu":         "gpu-rocm/pdmrg-gpu/build/pdmrg_gpu",
+    "pdmrg-gpu-opt":     "gpu-rocm/pdmrg-gpu-opt/build/pdmrg_gpu_opt",
+    "pdmrg-multi-gpu":   "gpu-rocm/pdmrg-multi-gpu/build/pdmrg_multi_gpu",
 }
 
 CPU_IMPLS = {"quimb-dmrg1", "quimb-dmrg2"}
@@ -120,7 +121,8 @@ def _build_gpu_cmd(impl, model, L, chi, sweeps):
         cmd += ["--josephson", "--nmax", str(JOSEPHSON_NMAX)]
     elif model == "tfim":
         cmd += ["--tfim"]
-    # pdmrg runs with np=1 (single-segment, serial baseline)
+    if impl == "pdmrg-multi-gpu":
+        cmd += ["--devices", "4"]
     return cmd, None
 
 
