@@ -73,6 +73,27 @@ __global__ void setup_batch_ptrs_step3_twosite(Scalar** A, Scalar** B, Scalar** 
     C[idx] = base_C + (s1p + s2p * d) * strideC;  // transposed physical index
 }
 
+// Two-site step 3 (full batched, R3-F1): one launch sets up D*dd batch pointers.
+// idx = n*dd + (s1p*d + s2p). Each n writes to its own scratch slice; slices are
+// later summed into the final result via a single rocblas_gemv reduction.
+//   A[idx] -> T2[n*dd + ss]      (cL x cR block, lda = cL*cR)
+//   B[idx] -> R_env[n]            (cR x cR block, ldb = cR*D)
+//   C[idx] -> scratch + n*slice_stride + (s1p + s2p*d)*strideC_tile
+//             (cL x cR tile inside the (cL, dd, cR) slice, ldc = cL*dd)
+template<typename Scalar>
+__global__ void setup_batch_ptrs_step3_twosite_full(Scalar** A, Scalar** B, Scalar** C,
+                                                     Scalar* base_A, Scalar* base_B, Scalar* base_C_scratch,
+                                                     int d, int dd, int strideA, int strideB,
+                                                     int strideC_tile, int slice_stride) {
+    int idx = threadIdx.x;  // n*dd + s1p*d + s2p
+    int n  = idx / dd;
+    int ss = idx % dd;      // s1p*d + s2p
+    int s1p = ss / d, s2p = ss % d;
+    A[idx] = base_A + (n * dd + ss) * strideA;
+    B[idx] = base_B + n * strideB;
+    C[idx] = base_C_scratch + n * slice_stride + (s1p + s2p * d) * strideC_tile;
+}
+
 // Env update step 3 (left): A[w] = base_A + (w*d+sp)*strideA, B[w] = base_B + sp*strideB, C[w] = base_C + w*strideC
 template<typename Scalar>
 __global__ void setup_batch_ptrs_env3(Scalar** A, Scalar** B, Scalar** C,
@@ -200,6 +221,14 @@ DMRG2GPU<Scalar>::DMRG2GPU(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_batch_B_, batch_max * sizeof(Scalar*)));
     HIP_CHECK(hipMalloc(&d_batch_C_, batch_max * sizeof(Scalar*)));
 
+    // Length-D ones vector for Step-3 GEMV reduction (R3-F1)
+    HIP_CHECK(hipMalloc(&d_ones_D_, D_mpo_ * sizeof(Scalar)));
+    {
+        std::vector<Scalar> h_ones(D_mpo_, Traits::one());
+        HIP_CHECK(hipMemcpy(d_ones_D_, h_ones.data(),
+                            D_mpo_ * sizeof(Scalar), hipMemcpyHostToDevice));
+    }
+
     // SVD workspace: theta reshaped as (chi_max*d, d*chi_max)
     int svd_max_m = chi_max_ * d_;
     int svd_max_n = d_ * chi_max_;
@@ -263,6 +292,7 @@ void DMRG2GPU<Scalar>::free_gpu_resources() {
     if (d_batch_A_) hipFree(d_batch_A_);
     if (d_batch_B_) hipFree(d_batch_B_);
     if (d_batch_C_) hipFree(d_batch_C_);
+    if (d_ones_D_) hipFree(d_ones_D_);
     if (d_svd_A_) hipFree(d_svd_A_);
     if (d_svd_U_) hipFree(d_svd_U_);
     if (d_svd_S_) hipFree(d_svd_S_);
@@ -524,29 +554,50 @@ void DMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in, S
         T2, cL * cR));
 
     // ---------------------------------------------------------------
-    // Step 3: Batched GEMMs — contract R_env
-    //   result[a', s1', s2', b'] = sum_{n} T2_col[a', b] * R[n][b, b']
-    //   Accumulate over n (beta=0 for n=0, beta=1 for n>0)
+    // Step 3 (R3-F1 full-batched collapse): one batched GEMM over all
+    //   D*dd tiles, writing to per-n scratch slices in T1, then one
+    //   GEMV reduction to sum the D slices into d_result.
+    //
+    // Old path: D sequential batches of dd GEMMs (2*D launches = 10 for
+    //   Heisenberg D=5) with C accumulation across n.
+    // New path: 1 setup kernel + 1 batched GEMM (batch = D*dd) + 1 GEMV.
+    //
+    // T1 is free here (consumed by Step 2) and its allocation
+    //   (D_mpo * dd * chi_max^2) is exactly the size needed for D slices
+    //   of (cL, dd, cR) each: D * cL * dd * cR <= D_mpo * dd * chi_max^2.
+    //   result[a', s1', s2', b'] = sum_{n} T2_col[n, a', b] * R[n][b, b']
     // ---------------------------------------------------------------
-    // Batch dd GEMMs per n (safe: different s1p/s2p write to different C locations).
-    // Cannot batch across n since same (s1p,s2p)/different n accumulate into same C.
     {
-        for (int n = 0; n < D; n++) {
-            Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
-            hipLaunchKernelGGL(setup_batch_ptrs_step3_twosite<Scalar>, dim3(1), dim3(dd), 0, stream_,
-                               d_batch_A_, d_batch_B_, d_batch_C_,
-                               T2, R_env, d_result,
-                               n, d, dd, cL * cR, cR, cL);
-            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-                rocblas_operation_none, rocblas_operation_none,
-                cL, cR, cR,
-                &one,
-                (const Scalar**)d_batch_A_, cL,
-                (const Scalar**)d_batch_B_, cR * D,
-                &beta,
-                d_batch_C_, cL * dd,
-                dd));
-        }
+        int batch_count = D * dd;
+        int slice_stride = cL * dd * cR;   // per-n slice size inside T1 scratch
+
+        hipLaunchKernelGGL(setup_batch_ptrs_step3_twosite_full<Scalar>,
+                           dim3(1), dim3(batch_count), 0, stream_,
+                           d_batch_A_, d_batch_B_, d_batch_C_,
+                           T2, R_env, T1,
+                           d, dd, cL * cR, cR, cL, slice_stride);
+
+        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+            rocblas_operation_none, rocblas_operation_none,
+            cL, cR, cR,
+            &one,
+            (const Scalar**)d_batch_A_, cL,
+            (const Scalar**)d_batch_B_, cR * D,
+            &zero_val,
+            d_batch_C_, cL * dd,
+            batch_count));
+
+        // Reduce: d_result[slice_stride] = T1[slice_stride x D] * ones_D
+        // T1 is treated as a column-major matrix of shape (slice_stride, D)
+        // with lda = slice_stride (slices are contiguous with no gaps).
+        ROCBLAS_CHECK(Traits::gemv(rocblas_h_,
+            rocblas_operation_none,
+            slice_stride, D,
+            &one,
+            T1, slice_stride,
+            d_ones_D_, 1,
+            &zero_val,
+            d_result, 1));
     }
 }
 

@@ -116,6 +116,8 @@ private:
         Scalar* d_const_one;         // constant 1.0
         Scalar* d_const_zero;        // constant 0.0
         Scalar* d_const_neg_one;     // constant -1.0
+        // Length-D_mpo ones vector for Step-3 GEMV reduction (R3-F1)
+        Scalar* d_ones_D;
         // GPU SVD
         Scalar* d_svd_A;
         Scalar* d_svd_U;

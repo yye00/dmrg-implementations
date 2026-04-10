@@ -56,6 +56,26 @@ __global__ void setup_batch_ptrs_step3(Scalar** A, Scalar** B, Scalar** C,
     C[s] = base_C + s * strideC;
 }
 
+// Step 3 (R3-F1 full batched): single launch writes all D*d pointers.
+// idx = wp*d + sp. Each wp writes to its own scratch slice inside T1; slices
+// are summed afterwards by a single rocblas_gemv reduction.
+//   A[idx] -> U[wp*d + sp]        (cL x cR block, lda = cL*cR)
+//   B[idx] -> R[wp]               (cR x cR block, ldb = cR*D)
+//   C[idx] -> scratch + wp*slice_stride + sp*strideC_tile
+//             (cL x cR tile inside the (cL, d, cR) slice, ldc = cL*d)
+template<typename Scalar>
+__global__ void setup_batch_ptrs_step3_full(Scalar** A, Scalar** B, Scalar** C,
+                                             Scalar* base_A, Scalar* base_B, Scalar* base_C_scratch,
+                                             int d, int strideA, int strideB,
+                                             int strideC_tile, int slice_stride) {
+    int idx = threadIdx.x;  // wp*d + sp
+    int wp = idx / d;
+    int sp = idx % d;
+    A[idx] = base_A + (wp * d + sp) * strideA;
+    B[idx] = base_B + wp * strideB;
+    C[idx] = base_C_scratch + wp * slice_stride + sp * strideC_tile;
+}
+
 // Step 3 (env update): A[w] = base_A + (w*d+sp)*strideA, B[w] = base_B + sp*strideB, C[w] = base_C + w*strideC
 template<typename Scalar>
 __global__ void setup_batch_ptrs_env3(Scalar** A, Scalar** B, Scalar** C,
@@ -178,6 +198,14 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_batch_B_, batch_max * sizeof(Scalar*)));
     HIP_CHECK(hipMalloc(&d_batch_C_, batch_max * sizeof(Scalar*)));
 
+    // Length-D ones vector for Step-3 GEMV reduction (R3-F1)
+    HIP_CHECK(hipMalloc(&d_ones_D_, D_mpo_ * sizeof(Scalar)));
+    {
+        std::vector<Scalar> h_ones(D_mpo_, Traits::one());
+        HIP_CHECK(hipMemcpy(d_ones_D_, h_ones.data(),
+                            D_mpo_ * sizeof(Scalar), hipMemcpyHostToDevice));
+    }
+
     // SVD workspace
     int svd_max_dim = chi_max_ * d_;
     HIP_CHECK(hipMalloc(&d_svd_A_,    theta_size_max_ * sizeof(Scalar)));
@@ -234,6 +262,7 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
     if (d_const_neg_one_) hipFree(d_const_neg_one_);
     if (d_T1_) hipFree(d_T1_);
     if (d_T2_) hipFree(d_T2_);
+    if (d_ones_D_) hipFree(d_ones_D_);
     if (d_batch_A_) hipFree(d_batch_A_);
     if (d_batch_B_) hipFree(d_batch_B_);
     if (d_batch_C_) hipFree(d_batch_C_);
@@ -406,24 +435,45 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
         &zero_val,
         U, cL * cR));
 
-    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']  (batched GEMM)
+    // Step 3 (R3-F1 full-batched collapse): one batched GEMM over all D*d
+    // tiles, writing to per-wp scratch slices in T1, then a GEMV reduction
+    // summing the D slices into d_result.
+    //
+    // Old path: D sequential batches of d GEMMs (2*D launches) with same-C
+    //   accumulation across wp.
+    // New path: 1 setup kernel + 1 batched GEMM (batch = D*d) + 1 GEMV.
+    //
+    // T1 (V) is free here (consumed by Step 2 into U=T2) and its allocation
+    //   (D_mpo * d * chi_max^2) exactly fits D slices of (cL, d, cR).
     {
-        for (int wp = 0; wp < D; wp++) {
-            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
-            hipLaunchKernelGGL(setup_batch_ptrs_step3<Scalar>, dim3(1), dim3(d), 0, stream_,
-                               d_batch_A_, d_batch_B_, d_batch_C_,
-                               U, R_env, d_result,
-                               wp, d, cL * cR, cR, cL);
-            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-                rocblas_operation_none, rocblas_operation_none,
-                cL, cR, cR,
-                &one,
-                (const Scalar**)d_batch_A_, cL,
-                (const Scalar**)d_batch_B_, cR * D,
-                &beta,
-                d_batch_C_, cL * d,
-                d));
-        }
+        int batch_count = D * d;
+        int slice_stride = cL * d * cR;   // per-wp slice size inside V scratch
+
+        hipLaunchKernelGGL(setup_batch_ptrs_step3_full<Scalar>,
+                           dim3(1), dim3(batch_count), 0, stream_,
+                           d_batch_A_, d_batch_B_, d_batch_C_,
+                           U, R_env, V,
+                           d, cL * cR, cR, cL, slice_stride);
+
+        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+            rocblas_operation_none, rocblas_operation_none,
+            cL, cR, cR,
+            &one,
+            (const Scalar**)d_batch_A_, cL,
+            (const Scalar**)d_batch_B_, cR * D,
+            &zero_val,
+            d_batch_C_, cL * d,
+            batch_count));
+
+        // Reduce: d_result[slice_stride] = V[slice_stride x D] * ones_D
+        ROCBLAS_CHECK(Traits::gemv(rocblas_h_,
+            rocblas_operation_none,
+            slice_stride, D,
+            &one,
+            V, slice_stride,
+            d_ones_D_, 1,
+            &zero_val,
+            d_result, 1));
     }
 }
 

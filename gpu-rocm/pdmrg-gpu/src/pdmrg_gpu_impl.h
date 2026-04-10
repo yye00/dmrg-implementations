@@ -52,6 +52,46 @@ __global__ void setup_heff_ss_step3_ptrs(Scalar** A, Scalar** B, Scalar** C,
     }
 }
 
+// apply_heff_single_site Step 3 (R3-F1 full-batched): single launch for all D*d tiles.
+// idx = wp*d + sp. Each wp writes to its own scratch slice in V (free after Step 2);
+// slices are reduced via a rocblas_gemv afterwards.
+//   A[idx] -> U[wp*d + sp]  (cL x cR tile, lda = cL*cR)
+//   B[idx] -> R[wp]          (cR x cR block, ldb = cR*D)
+//   C[idx] -> scratch + wp*slice_stride + sp*strideC_tile  (ldc = cL*d)
+template<typename Scalar>
+__global__ void setup_heff_ss_step3_full_ptrs(Scalar** A, Scalar** B, Scalar** C,
+                                               Scalar* base_U, Scalar* base_R, Scalar* base_C_scratch,
+                                               int d, int strideA, int strideB,
+                                               int strideC_tile, int slice_stride) {
+    int idx = threadIdx.x;  // wp*d + sp
+    int wp = idx / d;
+    int sp = idx % d;
+    A[idx] = base_U + (wp * d + sp) * strideA;
+    B[idx] = base_R + wp * strideB;
+    C[idx] = base_C_scratch + wp * slice_stride + sp * strideC_tile;
+}
+
+// apply_heff_two_site Step 3 (R3-F1 full-batched): single launch for all D*dd tiles.
+// idx = n*dd + (s1p*d + s2p). Replaces the unbatched triple loop in
+// apply_heff_two_site. Each n writes to its own scratch slice in T1; slices
+// are reduced via a rocblas_gemv afterwards.
+//   A[idx] -> T2[n*dd + ss]   (cL x cR tile, lda = cL*cR)
+//   B[idx] -> R[n]             (cR x cR block, ldb = cR*D)
+//   C[idx] -> scratch + n*slice_stride + (s1p + s2p*d)*strideC_tile (ldc = cL*dd)
+template<typename Scalar>
+__global__ void setup_heff_ts_step3_full_ptrs(Scalar** A, Scalar** B, Scalar** C,
+                                               Scalar* base_T2, Scalar* base_R, Scalar* base_C_scratch,
+                                               int d, int dd, int strideA, int strideB,
+                                               int strideC_tile, int slice_stride) {
+    int idx = threadIdx.x;  // n*dd + s1p*d + s2p
+    int n  = idx / dd;
+    int ss = idx % dd;
+    int s1p = ss / d, s2p = ss % d;
+    A[idx] = base_T2 + (n * dd + ss) * strideA;
+    B[idx] = base_R + n * strideB;
+    C[idx] = base_C_scratch + n * slice_stride + (s1p + s2p * d) * strideC_tile;
+}
+
 // update_left_env Step 3: per sp iteration, D pointers
 // A[wp] = U + (wp*d + sp) * stride_A,  B[wp] = A_mps + sp * stride_B,  C[wp] = L_new + wp * stride_C
 template<typename Scalar>
@@ -243,6 +283,14 @@ void PDMRGGPU<Scalar>::allocate_stream_workspaces() {
             HIP_CHECK(hipMemcpy(ws.d_const_neg_one, &h_neg_one, sizeof(Scalar), hipMemcpyHostToDevice));
         }
 
+        // Length-D ones vector for Step-3 GEMV reduction (R3-F1)
+        HIP_CHECK(hipMalloc(&ws.d_ones_D, D_mpo_ * sizeof(Scalar)));
+        {
+            std::vector<Scalar> h_ones(D_mpo_, Traits::one());
+            HIP_CHECK(hipMemcpy(ws.d_ones_D, h_ones.data(),
+                                D_mpo_ * sizeof(Scalar), hipMemcpyHostToDevice));
+        }
+
         // GPU SVD workspace
         HIP_CHECK(hipMalloc(&ws.d_svd_A, theta_size_max_ * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_svd_U, (size_t)svd_max_m * svd_max_k * sizeof(Scalar)));
@@ -371,6 +419,7 @@ void PDMRGGPU<Scalar>::free_gpu_resources() {
         if (ws.d_const_one) hipFree(ws.d_const_one);
         if (ws.d_const_zero) hipFree(ws.d_const_zero);
         if (ws.d_const_neg_one) hipFree(ws.d_const_neg_one);
+        if (ws.d_ones_D) hipFree(ws.d_ones_D);
         if (ws.d_svd_A) hipFree(ws.d_svd_A);
         if (ws.d_svd_U) hipFree(ws.d_svd_U);
         if (ws.d_svd_S) hipFree(ws.d_svd_S);
@@ -636,22 +685,45 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
         &zero_val,
         T2, cL * cR));
 
-    // Step 3: Loop of GEMMs — T2 × R_env
-    for (int s1p = 0; s1p < d; s1p++) {
-        for (int s2p = 0; s2p < d; s2p++) {
-            for (int n = 0; n < D; n++) {
-                Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
-                int ws_out = n * dd + s1p * d + s2p;
-                ROCBLAS_CHECK(Traits::gemm(handles_[si],
-                    rocblas_operation_none, rocblas_operation_none,
-                    cL, cR, cR,
-                    &one,
-                    T2 + ws_out * cL * cR, cL,
-                    R_env + n * cR, cR * D,
-                    &beta,
-                    d_result + s1p * cL + s2p * cL * d, cL * dd));
-            }
-        }
+    // Step 3 (R3-F1 full-batched collapse): replaces the unbatched triple loop
+    // (dd*D = up to 36 separate GEMM launches per apply_heff call) with:
+    //   1 setup kernel + 1 batched GEMM (batch = D*dd) + 1 GEMV reduction.
+    //
+    // Each n writes its cL x cR tile into its own per-n slice of T1 scratch
+    // (T1 is free here, consumed by Step 2). Slices are then summed along
+    // the D axis via rocblas_gemv with a length-D ones vector — one rocBLAS
+    // call replaces the beta-accumulation across n.
+    //
+    // T1 allocation (D_mpo * dd * chi_max^2) fits D slices of (cL, dd, cR).
+    {
+        int batch_count = D * dd;
+        int slice_stride = cL * dd * cR;   // per-n slice size inside T1 scratch
+
+        hipLaunchKernelGGL(setup_heff_ts_step3_full_ptrs<Scalar>,
+                           dim3(1), dim3(batch_count), 0, streams_[si],
+                           ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
+                           T2, R_env, T1,
+                           d, dd, cL * cR, cR, cL, slice_stride);
+
+        ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
+            rocblas_operation_none, rocblas_operation_none,
+            cL, cR, cR,
+            &one,
+            (const Scalar**)ws.d_batch_A, cL,
+            (const Scalar**)ws.d_batch_B, cR * D,
+            &zero_val,
+            ws.d_batch_C, cL * dd,
+            batch_count));
+
+        // Reduce D slices into d_result: d_result = T1[slice_stride x D] * ones_D
+        ROCBLAS_CHECK(Traits::gemv(handles_[si],
+            rocblas_operation_none,
+            slice_stride, D,
+            &one,
+            T1, slice_stride,
+            ws.d_ones_D, 1,
+            &zero_val,
+            d_result, 1));
     }
 }
 
@@ -1427,25 +1499,42 @@ void PDMRGGPU<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta_in
         &zero_val,
         U, cL * cR));
 
-    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']  (batched)
-    // Batch d GEMMs per wp (safe: different sp write to different C locations).
+    // Step 3 (R3-F1 full-batched collapse): one batched GEMM over all D*d
+    // tiles, writing to per-wp scratch slices in V (free after Step 2), then
+    // one rocblas_gemv reduction summing the D slices into d_result.
+    //
+    // Old path: D sequential batches of d GEMMs (2*D launches) with same-C
+    //   beta accumulation across wp.
+    // New path: 1 setup kernel + 1 batched GEMM (batch = D*d) + 1 GEMV.
     {
-        for (int wp = 0; wp < D; wp++) {
-            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
-            hipLaunchKernelGGL(setup_heff_ss_step3_ptrs<Scalar>, dim3(1), dim3(d), 0, streams_[si],
-                               ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
-                               U, R_env, d_result,
-                               wp, d, cL * cR, cR, cL);
-            ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
-                rocblas_operation_none, rocblas_operation_none,
-                cL, cR, cR,
-                &one,
-                (const Scalar**)ws.d_batch_A, cL,
-                (const Scalar**)ws.d_batch_B, cR * D,
-                &beta,
-                ws.d_batch_C, cL * d,
-                d));
-        }
+        int batch_count = D * d;
+        int slice_stride = cL * d * cR;   // per-wp slice size inside V scratch
+
+        hipLaunchKernelGGL(setup_heff_ss_step3_full_ptrs<Scalar>,
+                           dim3(1), dim3(batch_count), 0, streams_[si],
+                           ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
+                           U, R_env, V,
+                           d, cL * cR, cR, cL, slice_stride);
+
+        ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
+            rocblas_operation_none, rocblas_operation_none,
+            cL, cR, cR,
+            &one,
+            (const Scalar**)ws.d_batch_A, cL,
+            (const Scalar**)ws.d_batch_B, cR * D,
+            &zero_val,
+            ws.d_batch_C, cL * d,
+            batch_count));
+
+        // Reduce D slices into d_result: d_result = V[slice_stride x D] * ones_D
+        ROCBLAS_CHECK(Traits::gemv(handles_[si],
+            rocblas_operation_none,
+            slice_stride, D,
+            &one,
+            V, slice_stride,
+            ws.d_ones_D, 1,
+            &zero_val,
+            d_result, 1));
     }
 }
 

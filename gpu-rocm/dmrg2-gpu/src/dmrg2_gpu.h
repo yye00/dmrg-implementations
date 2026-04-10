@@ -107,6 +107,10 @@ private:
     Scalar** d_batch_B_;
     Scalar** d_batch_C_;
 
+    // Length-D_mpo vector of ones on device; used as the reduction vector for
+    // Step 3 of apply_heff_two_site (R3-F1 full-batched collapse).
+    Scalar* d_ones_D_;
+
     // SVD workspace (pre-allocated at max size)
     Scalar* d_svd_A_;
     Scalar* d_svd_U_;
