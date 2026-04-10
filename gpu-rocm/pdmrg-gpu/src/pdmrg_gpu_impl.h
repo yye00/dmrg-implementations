@@ -299,6 +299,9 @@ void PDMRGGPU<Scalar>::allocate_stream_workspaces() {
         HIP_CHECK(hipMalloc(&ws.d_svd_E, svd_max_k * sizeof(RealType)));
         HIP_CHECK(hipMalloc(&ws.d_svd_info, sizeof(int)));
         HIP_CHECK(hipMalloc(&ws.d_svd_work, theta_size_max_ * sizeof(Scalar)));
+        // R3-F2: device scalars for gesvdj.
+        HIP_CHECK(hipMalloc(&ws.d_svdj_residual, sizeof(double)));
+        HIP_CHECK(hipMalloc(&ws.d_svdj_n_sweeps, sizeof(rocblas_int)));
 
         // CPU SVD workspace
         ws.h_svd_A.resize(theta_size_max_);
@@ -427,6 +430,8 @@ void PDMRGGPU<Scalar>::free_gpu_resources() {
         if (ws.d_svd_E) hipFree(ws.d_svd_E);
         if (ws.d_svd_info) hipFree(ws.d_svd_info);
         if (ws.d_svd_work) hipFree(ws.d_svd_work);
+        if (ws.d_svdj_residual) hipFree(ws.d_svdj_residual);
+        if (ws.d_svdj_n_sweeps) hipFree(ws.d_svdj_n_sweeps);
         if (ws.d_rsvd_omega) hipFree(ws.d_rsvd_omega);
         if (ws.d_rsvd_Y) hipFree(ws.d_rsvd_Y);
         if (ws.d_rsvd_Q) hipFree(ws.d_rsvd_Q);
@@ -1135,15 +1140,15 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
         HIP_CHECK(hipMemcpyAsync(ws.d_svd_A, d_theta, m * n_svd * sizeof(Scalar),
                                   hipMemcpyDeviceToDevice, streams_[si]));
 
-        Traits::rocsolver_gesvd(handles_[si],
+        // R3-F2: rocsolver_gesvdj — Jacobi iterative SVD (drop-in for gesvd).
+        Traits::rocsolver_gesvdj(handles_[si],
             rocblas_svect_singular, rocblas_svect_singular,
             m, n_svd,
             ws.d_svd_A, m,
             ws.d_svd_S,
             ws.d_svd_U, m,
             ws.d_svd_Vh, full_k,
-            ws.d_svd_E,
-            rocblas_outofplace,
+            ws.d_svdj_residual, ws.d_svdj_n_sweeps,
             ws.d_svd_info);
 
         gpu_svd_path = true;
@@ -1580,15 +1585,15 @@ void PDMRGGPU<Scalar>::svd_split_single_site(int site, Scalar* d_theta, char dir
     } else {
         HIP_CHECK(hipMemcpyAsync(ws.d_svd_A, d_theta, m * n_svd * sizeof(Scalar),
                                   hipMemcpyDeviceToDevice, streams_[si]));
-        Traits::rocsolver_gesvd(handles_[si],
+        // R3-F2: rocsolver_gesvdj — Jacobi iterative SVD (drop-in for gesvd).
+        Traits::rocsolver_gesvdj(handles_[si],
             rocblas_svect_singular, rocblas_svect_singular,
             m, n_svd,
             ws.d_svd_A, m,
             ws.d_svd_S,
             ws.d_svd_U, m,
             ws.d_svd_Vh, full_k,
-            ws.d_svd_E,
-            rocblas_outofplace,
+            ws.d_svdj_residual, ws.d_svdj_n_sweeps,
             ws.d_svd_info);
     }
 

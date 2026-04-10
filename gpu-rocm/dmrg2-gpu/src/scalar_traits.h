@@ -118,6 +118,22 @@ struct ScalarTraits<double> {
         return rocsolver_dgesvd(h, lu, rv, m, n, A, lda, S, U, ldu, Vh, ldvh, E, wm, info);
     }
 
+    // --- rocSOLVER Jacobi SVD (R3-F2) ---
+    // Drop-in for rocsolver_gesvd: same V semantics ("stored as rows"), same
+    // descending order. NOTE: `d_residual` and `d_n_sweeps` MUST be device
+    // pointers per the rocSOLVER API — passing host scratch causes silent
+    // hangs / device faults.
+    static rocblas_status rocsolver_gesvdj(rocblas_handle h,
+            rocblas_svect lu, rocblas_svect rv,
+            int m, int n, Scalar* A, int lda, RealType* S,
+            Scalar* U, int ldu, Scalar* Vh, int ldvh,
+            double* d_residual, rocblas_int* d_n_sweeps,
+            int* info) {
+        return rocsolver_dgesvdj(h, lu, rv, m, n, A, lda,
+            0.0, d_residual, 100, d_n_sweeps,
+            S, U, ldu, Vh, ldvh, info);
+    }
+
     // --- rocSOLVER QR ---
     static rocblas_status rocsolver_geqrf(rocblas_handle h,
             int m, int n, Scalar* A, int lda, Scalar* ipiv) {
@@ -246,6 +262,23 @@ struct ScalarTraits<hipDoubleComplex> {
             reinterpret_cast<rocblas_double_complex*>(U), ldu,
             reinterpret_cast<rocblas_double_complex*>(Vh), ldvh,
             E, wm, info);
+    }
+
+    // --- rocSOLVER Jacobi SVD (R3-F2) ---
+    // `d_residual` and `d_n_sweeps` must be device pointers.
+    static rocblas_status rocsolver_gesvdj(rocblas_handle h,
+            rocblas_svect lu, rocblas_svect rv,
+            int m, int n, Scalar* A, int lda, RealType* S,
+            Scalar* U, int ldu, Scalar* Vh, int ldvh,
+            double* d_residual, rocblas_int* d_n_sweeps,
+            int* info) {
+        return rocsolver_zgesvdj(h, lu, rv, m, n,
+            reinterpret_cast<rocblas_double_complex*>(A), lda,
+            0.0, d_residual, 100, d_n_sweeps,
+            S,
+            reinterpret_cast<rocblas_double_complex*>(U), ldu,
+            reinterpret_cast<rocblas_double_complex*>(Vh), ldvh,
+            info);
     }
 
     // --- rocSOLVER QR ---

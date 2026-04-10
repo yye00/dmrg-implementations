@@ -215,6 +215,9 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_svd_E_,    chi_max_ * sizeof(RealType)));
     HIP_CHECK(hipMalloc(&d_svd_info_, sizeof(int)));
     HIP_CHECK(hipMalloc(&d_svd_work_, theta_size_max_ * sizeof(Scalar)));
+    // R3-F2: gesvdj requires device pointers for residual / n_sweeps.
+    HIP_CHECK(hipMalloc(&d_svdj_residual_, sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_svdj_n_sweeps_, sizeof(rocblas_int)));
 
     // Host workspace for SVD results (copied back from GPU)
     h_svd_U_.resize(svd_max_dim * chi_max_);
@@ -273,6 +276,8 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
     if (d_svd_E_) hipFree(d_svd_E_);
     if (d_svd_info_) hipFree(d_svd_info_);
     if (d_svd_work_) hipFree(d_svd_work_);
+    if (d_svdj_residual_) hipFree(d_svdj_residual_);
+    if (d_svdj_n_sweeps_) hipFree(d_svdj_n_sweeps_);
 
     rocblas_destroy_handle(rocblas_h_);
     hipStreamDestroy(stream_);
@@ -855,18 +860,18 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_);
 
-    // GPU SVD via rocsolver gesvd
+    // GPU SVD via rocsolver gesvdj (R3-F2: Jacobi iterative solver).
+    // Drop-in replacement for rocsolver_gesvd: same V layout, same order.
     HIP_CHECK(hipMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice));
 
-    Traits::rocsolver_gesvd(rocblas_h_,
+    Traits::rocsolver_gesvdj(rocblas_h_,
         rocblas_svect_singular, rocblas_svect_singular,
         m, n_svd,
         d_svd_A_, m,
         d_svd_S_,
         d_svd_U_, m,
         d_svd_Vh_, full_k,
-        d_svd_E_,
-        rocblas_outofplace,
+        d_svdj_residual_, d_svdj_n_sweeps_,
         d_svd_info_);
 
     // Truncation: find new_k on GPU, copy just 1 int back

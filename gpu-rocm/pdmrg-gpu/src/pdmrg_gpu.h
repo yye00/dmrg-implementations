@@ -126,6 +126,9 @@ private:
         RealType* d_svd_E;
         int* d_svd_info;
         Scalar* d_svd_work;
+        // R3-F2: device scalars for rocsolver_gesvdj.
+        double* d_svdj_residual;
+        rocblas_int* d_svdj_n_sweeps;
         // CPU SVD
         std::vector<Scalar> h_svd_A, h_svd_U, h_svd_Vh, h_svd_work, h_svd_tmp;
         std::vector<RealType> h_svd_S;

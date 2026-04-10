@@ -114,6 +114,9 @@ private:
     RealType* d_svd_E_;      // superdiagonal always real
     int* d_svd_info_;
     Scalar* d_svd_work_;
+    // R3-F2: device scalars required by rocsolver_gesvdj.
+    double* d_svdj_residual_;
+    rocblas_int* d_svdj_n_sweeps_;
 
     // Host workspace for SVD results (copied back from GPU)
     std::vector<Scalar> h_svd_U_, h_svd_Vh_, h_svd_tmp_;
