@@ -1140,14 +1140,17 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
         HIP_CHECK(hipMemcpyAsync(ws.d_svd_A, d_theta, m * n_svd * sizeof(Scalar),
                                   hipMemcpyDeviceToDevice, streams_[si]));
 
-        // R3-F2: rocsolver_gesvdj — Jacobi iterative SVD (drop-in for gesvd).
-        Traits::rocsolver_gesvdj(handles_[si],
+        // R3-F2 + regression fix: size-gated dispatcher — gesvdj (Jacobi) for
+        // large / real; bidiagonal gesvd fallback for small complex shapes
+        // where zgesvdj regresses. See docs/followups/r3_regression_analysis.md.
+        Traits::rocsolver_gesvd_auto(handles_[si],
             rocblas_svect_singular, rocblas_svect_singular,
             m, n_svd,
             ws.d_svd_A, m,
             ws.d_svd_S,
             ws.d_svd_U, m,
             ws.d_svd_Vh, full_k,
+            ws.d_svd_E,
             ws.d_svdj_residual, ws.d_svdj_n_sweeps,
             ws.d_svd_info);
 
@@ -1585,14 +1588,15 @@ void PDMRGGPU<Scalar>::svd_split_single_site(int site, Scalar* d_theta, char dir
     } else {
         HIP_CHECK(hipMemcpyAsync(ws.d_svd_A, d_theta, m * n_svd * sizeof(Scalar),
                                   hipMemcpyDeviceToDevice, streams_[si]));
-        // R3-F2: rocsolver_gesvdj — Jacobi iterative SVD (drop-in for gesvd).
-        Traits::rocsolver_gesvdj(handles_[si],
+        // R3-F2 + regression fix: size-gated dispatcher (see above call site).
+        Traits::rocsolver_gesvd_auto(handles_[si],
             rocblas_svect_singular, rocblas_svect_singular,
             m, n_svd,
             ws.d_svd_A, m,
             ws.d_svd_S,
             ws.d_svd_U, m,
             ws.d_svd_Vh, full_k,
+            ws.d_svd_E,
             ws.d_svdj_residual, ws.d_svdj_n_sweeps,
             ws.d_svd_info);
     }

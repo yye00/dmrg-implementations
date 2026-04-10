@@ -860,17 +860,19 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_);
 
-    // GPU SVD via rocsolver gesvdj (R3-F2: Jacobi iterative solver).
-    // Drop-in replacement for rocsolver_gesvd: same V layout, same order.
+    // GPU SVD via size-gated dispatcher (R3-F2 + regression fix): Jacobi
+    // for large / real; bidiagonal fallback for small complex shapes where
+    // zgesvdj regresses. See docs/followups/r3_regression_analysis.md.
     HIP_CHECK(hipMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice));
 
-    Traits::rocsolver_gesvdj(rocblas_h_,
+    Traits::rocsolver_gesvd_auto(rocblas_h_,
         rocblas_svect_singular, rocblas_svect_singular,
         m, n_svd,
         d_svd_A_, m,
         d_svd_S_,
         d_svd_U_, m,
         d_svd_Vh_, full_k,
+        d_svd_E_,
         d_svdj_residual_, d_svdj_n_sweeps_,
         d_svd_info_);
 

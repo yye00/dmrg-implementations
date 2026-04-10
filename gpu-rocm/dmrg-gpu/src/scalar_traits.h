@@ -7,6 +7,7 @@
 #include <rocsolver/rocsolver.h>
 #include <cmath>
 #include <cstdlib>
+#include <algorithm>
 
 // ============================================================================
 // ScalarTraits: type-dependent dispatch for rocBLAS/LAPACK routines
@@ -128,6 +129,21 @@ struct ScalarTraits<double> {
         return rocsolver_dgesvdj(h, lu, rv, m, n, A, lda,
             0.0, d_residual, 100, d_n_sweeps,
             S, U, ldu, Vh, ldvh, info);
+    }
+
+    // --- Size-gated auto-selector (R3-F2 fix) ---
+    // For real double, Jacobi (gesvdj) wins at every tested size, so this
+    // always dispatches to gesvdj. See docs/followups/r3_regression_analysis.md.
+    static rocblas_status rocsolver_gesvd_auto(rocblas_handle h,
+            rocblas_svect lu, rocblas_svect rv,
+            int m, int n, Scalar* A, int lda, RealType* S,
+            Scalar* U, int ldu, Scalar* Vh, int ldvh,
+            RealType* /*d_E_scratch*/,
+            double* d_residual, rocblas_int* d_n_sweeps,
+            int* info) {
+        return rocsolver_gesvdj(h, lu, rv, m, n, A, lda, S,
+                                U, ldu, Vh, ldvh,
+                                d_residual, d_n_sweeps, info);
     }
 
     // --- rocSOLVER QR ---
@@ -274,6 +290,29 @@ struct ScalarTraits<hipDoubleComplex> {
             reinterpret_cast<rocblas_double_complex*>(U), ldu,
             reinterpret_cast<rocblas_double_complex*>(Vh), ldvh,
             info);
+    }
+
+    // --- Size-gated auto-selector (R3-F2 fix) ---
+    // rocsolver_zgesvdj regresses vs zgesvd on small complex-square matrices
+    // (DMRG-converged 96x96 needs 13-21 Jacobi sweeps). Use gesvdj above the
+    // threshold; fall back to the bidiagonal path below it. See
+    // docs/followups/r3_regression_analysis.md.
+    static constexpr int kGesvdjMinDim = 128;
+    static rocblas_status rocsolver_gesvd_auto(rocblas_handle h,
+            rocblas_svect lu, rocblas_svect rv,
+            int m, int n, Scalar* A, int lda, RealType* S,
+            Scalar* U, int ldu, Scalar* Vh, int ldvh,
+            RealType* d_E_scratch,
+            double* d_residual, rocblas_int* d_n_sweeps,
+            int* info) {
+        if (std::min(m, n) < kGesvdjMinDim) {
+            return rocsolver_gesvd(h, lu, rv, m, n, A, lda, S,
+                                   U, ldu, Vh, ldvh,
+                                   d_E_scratch, rocblas_outofplace, info);
+        }
+        return rocsolver_gesvdj(h, lu, rv, m, n, A, lda, S,
+                                U, ldu, Vh, ldvh,
+                                d_residual, d_n_sweeps, info);
     }
 
     // --- rocSOLVER QR ---
