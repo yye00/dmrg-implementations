@@ -32,6 +32,35 @@
       "repeats": 3,
       "successful_reps": 3,
       "nmax": 2
+    },
+    {
+      "impl": "pdmrg-gpu",
+      "model": "josephson",
+      "L": 16,
+      "chi": 128,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 132.006,
+      "time_median": 132.006,
+      "time_min": 131.959,
+      "times": [
+        132.179,
+        131.959,
+        132.006
+      ],
+      "energy": -6.172597174066,
+      "energies": [
+        -6.172597174066,
+        -6.172597174066,
+        -6.172597174066
+      ],
+      "repeats": 3,
+      "successful_reps": 3,
+      "nmax": 2
     }
   ]
 }
