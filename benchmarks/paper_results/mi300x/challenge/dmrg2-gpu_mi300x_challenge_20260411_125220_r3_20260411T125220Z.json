@@ -59,6 +59,62 @@
       ],
       "repeats": 3,
       "successful_reps": 3
+    },
+    {
+      "impl": "dmrg2-gpu",
+      "model": "tfim",
+      "L": 50,
+      "chi": 256,
+      "sweeps": 15,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 32.474,
+      "time_median": 32.474,
+      "time_min": 32.2,
+      "times": [
+        32.2,
+        32.474,
+        33.556
+      ],
+      "energy": -63.301189155424,
+      "energies": [
+        -63.301189155424,
+        -63.301189155424,
+        -63.301189155424
+      ],
+      "repeats": 3,
+      "successful_reps": 3
+    },
+    {
+      "impl": "dmrg2-gpu",
+      "model": "tfim",
+      "L": 100,
+      "chi": 64,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 67.513,
+      "time_median": 67.513,
+      "time_min": 60.875,
+      "times": [
+        67.513,
+        60.875,
+        84.488
+      ],
+      "energy": -126.961876739754,
+      "energies": [
+        -126.961876739736,
+        -126.961876739735,
+        -126.961876739754
+      ],
+      "repeats": 3,
+      "successful_reps": 3
     }
   ]
 }
