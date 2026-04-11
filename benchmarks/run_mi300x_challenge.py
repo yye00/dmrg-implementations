@@ -78,14 +78,46 @@ CHALLENGE_SIZES = {
     ],
 }
 
+# ─── Ultra-trim grid: 18 configs total for R3 regression + F1/F2/size-gate validation
+# Covers the meaningful GPU-wins regime. Chi in {64,128,256}, strategic L.
+ULTRA_TRIM_SIZES = {
+    "heisenberg": [
+        ( 50,  64, 20),
+        ( 50, 128, 20),
+        ( 50, 256, 15),
+        (100,  64, 20),
+        (100, 128, 20),
+        (100, 256, 15),
+    ],
+    "josephson": [
+        (16,  64, 20),
+        (16, 128, 20),
+        (16, 256, 15),
+        (32,  64, 20),
+        (32, 128, 20),
+        (32, 256, 15),
+    ],
+    "tfim": [
+        ( 50,  64, 20),
+        ( 50, 128, 20),
+        ( 50, 256, 15),
+        (100,  64, 20),
+        (100, 128, 20),
+        (100, 256, 15),
+    ],
+}
+
 # ─── GPU executables ─────────────────────────────────────────────────────────
 
 GPU_IMPLS = {
     "dmrg-gpu":          "gpu-rocm/dmrg-gpu/build/dmrg_gpu",
+    "dmrg-gpu-base":     "gpu-rocm/dmrg-gpu-base/build/dmrg_gpu_base",
     "dmrg-gpu-opt":      "gpu-rocm/dmrg-gpu-opt/build/dmrg_gpu_opt",
     "dmrg2-gpu":         "gpu-rocm/dmrg2-gpu/build/dmrg2_gpu",
+    "dmrg2-gpu-base":    "gpu-rocm/dmrg2-gpu-base/build/dmrg2_gpu_base",
     "dmrg2-gpu-opt":     "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
     "pdmrg-gpu":         "gpu-rocm/pdmrg-gpu/build/pdmrg_gpu",
+    "pdmrg-gpu-base":    "gpu-rocm/pdmrg-gpu-base/build/pdmrg_gpu_base",
     "pdmrg-gpu-opt":     "gpu-rocm/pdmrg-gpu-opt/build/pdmrg_gpu_opt",
     "pdmrg-multi-gpu":   "gpu-rocm/pdmrg-multi-gpu/build/pdmrg_multi_gpu",
 }
@@ -221,20 +253,42 @@ def _build_tfim_mpo(L, qtn):
 
 # ─── Main benchmark loop ────────────────────────────────────────────────────
 
-def run_all(impl_names, models, do_warmup=True):
-    results = []
+def _flush_impl_results(output_path, impl, arch, benchmark, ts, impl_results):
+    """Atomic-ish incremental write: per-impl JSON file, overwrite-in-place."""
+    tmp = output_path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({
+            "implementation": impl,
+            "architecture": arch,
+            "benchmark": benchmark,
+            "timestamp": ts,
+            "results": impl_results,
+        }, f, indent=2)
+    os.replace(tmp, output_path)
+
+
+def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
+            output_dir=None, timestamp=None):
+    """Run (impl × model × config) × repeats, flushing per-impl JSON after each config.
+
+    Each result row stores a list `times` with all successful repeat timings plus
+    `time_median` so downstream analysis can use robust statistics.
+    """
+    os.makedirs(output_dir, exist_ok=True)
 
     # Build flat config list
     configs = []
     for impl in impl_names:
         for model in models:
-            if model not in CHALLENGE_SIZES:
+            if model not in sizes_dict:
                 continue
-            for L, chi, sweeps in CHALLENGE_SIZES[model]:
+            for L, chi, sweeps in sizes_dict[model]:
                 configs.append((impl, model, L, chi, sweeps))
 
     total = len(configs)
     current_group = None
+    by_impl = {}  # impl -> list of result dicts
+    per_impl_path = {}  # impl -> output JSON path
 
     for i, (impl, model, L, chi, sweeps) in enumerate(configs):
         group = (impl, model)
@@ -244,55 +298,74 @@ def run_all(impl_names, models, do_warmup=True):
             print(f"  {impl} — {model}")
             print(f"{'='*65}")
 
+        if impl not in per_impl_path:
+            per_impl_path[impl] = os.path.join(
+                output_dir, f"{impl}_mi300x_challenge_{timestamp}.json")
+            by_impl[impl] = []
+
         label = f"L={L:3d} chi={chi:3d} sw={sweeps:2d}"
-        print(f"  [{i+1:3d}/{total}] {label:25s}", end="", flush=True)
+        print(f"  [{i+1:3d}/{total}] {label:25s}", flush=True)
 
         is_gpu = impl in GPU_IMPLS
-        if is_gpu:
-            r = run_gpu(impl, model, L, chi, sweeps, warmup=do_warmup)
-        else:
-            r = run_quimb(impl, model, L, chi, sweeps, threads=1)
+        times = []
+        energies = []
+        last_err = None
+        for rep in range(repeats):
+            if is_gpu:
+                # Warmup on the first rep of each config only (saves time)
+                r = run_gpu(impl, model, L, chi, sweeps,
+                            warmup=(do_warmup and rep == 0))
+            else:
+                r = run_quimb(impl, model, L, chi, sweeps, threads=1)
+            if r.get("success"):
+                times.append(r["time"])
+                energies.append(r["energy"])
+                print(f"        rep {rep+1}/{repeats}: t={r['time']:.3f}s  E={r['energy']:.10f}",
+                      flush=True)
+            else:
+                last_err = r.get("error", "?")
+                print(f"        rep {rep+1}/{repeats}: FAIL {last_err[:60]}",
+                      flush=True)
 
-        r.update({
-            "impl": impl, "model": model, "L": L, "chi": chi,
-            "sweeps": sweeps, "arch": "mi300x", "benchmark": "challenge",
-            "threads": 1, "np": 1,
-        })
+        if times:
+            stimes = sorted(times)
+            t_med = stimes[len(stimes) // 2]
+            t_min = stimes[0]
+            row = {
+                "impl": impl, "model": model, "L": L, "chi": chi,
+                "sweeps": sweeps, "arch": "mi300x", "benchmark": "challenge",
+                "threads": 1, "np": 1,
+                "success": True,
+                "time": t_med,          # retain legacy field (median)
+                "time_median": t_med,
+                "time_min": t_min,
+                "times": times,
+                "energy": energies[-1],
+                "energies": energies,
+                "repeats": repeats,
+                "successful_reps": len(times),
+            }
+        else:
+            row = {
+                "impl": impl, "model": model, "L": L, "chi": chi,
+                "sweeps": sweeps, "arch": "mi300x", "benchmark": "challenge",
+                "threads": 1, "np": 1,
+                "success": False,
+                "time": None, "time_median": None, "time_min": None,
+                "times": [], "energy": None, "energies": [],
+                "repeats": repeats, "successful_reps": 0,
+                "error": last_err,
+            }
         if model == "josephson":
-            r["nmax"] = JOSEPHSON_NMAX
+            row["nmax"] = JOSEPHSON_NMAX
 
-        if r["success"]:
-            t_str = f"{r['time']:.3f}s" if r.get("time") else "?"
-            print(f"  E={r['energy']:.10f}  t={t_str}")
-        else:
-            print(f"  FAIL: {r.get('error', '?')[:50]}")
+        by_impl[impl].append(row)
 
-        results.append(r)
+        # Flush immediately so a crash loses at most the current config
+        _flush_impl_results(per_impl_path[impl], impl, "mi300x", "challenge",
+                            timestamp, by_impl[impl])
 
-    return results
-
-
-def save_results(results, output_dir):
-    os.makedirs(output_dir, exist_ok=True)
-    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-
-    by_impl = {}
-    for r in results:
-        by_impl.setdefault(r["impl"], []).append(r)
-
-    for impl, impl_results in by_impl.items():
-        path = os.path.join(output_dir, f"{impl}_mi300x_challenge_{ts}.json")
-        with open(path, "w") as f:
-            json.dump({"implementation": impl, "architecture": "mi300x",
-                        "benchmark": "challenge", "timestamp": ts,
-                        "results": impl_results}, f, indent=2)
-        print(f"  Saved: {path}")
-
-    path = os.path.join(output_dir, f"challenge_mi300x_{ts}.json")
-    with open(path, "w") as f:
-        json.dump({"architecture": "mi300x", "benchmark": "challenge",
-                    "timestamp": ts, "results": results}, f, indent=2)
-    print(f"  Saved: {path}")
+    return by_impl, per_impl_path
 
 
 def main():
@@ -302,42 +375,61 @@ def main():
     parser.add_argument("--model", type=str, default=None,
                         help="heisenberg, josephson, tfim (default: all)")
     parser.add_argument("--skip-warmup", action="store_true")
+    parser.add_argument("--repeats", type=int, default=1,
+                        help="Number of repeat timings per config (default: 1)")
+    parser.add_argument("--trim", action="store_true",
+                        help="Use ULTRA_TRIM_SIZES (18 configs) instead of full 44")
+    parser.add_argument("--tag", type=str, default=None,
+                        help="Optional suffix for output filenames")
     parser.add_argument("--output-dir", type=str,
                         default=os.path.join(REPO_ROOT, "benchmarks", "paper_results", "mi300x", "challenge"))
     args = parser.parse_args()
 
+    sizes_dict = ULTRA_TRIM_SIZES if args.trim else CHALLENGE_SIZES
+    grid_label = "ULTRA_TRIM (18 configs)" if args.trim else "CHALLENGE (44 configs)"
+
     if args.impl:
         impl_names = [x.strip() for x in args.impl.split(",")]
     else:
-        # All 6 GPU impls + quimb-dmrg1 (single-thread CPU reference)
         impl_names = sorted(GPU_IMPLS.keys()) + ["quimb-dmrg1"]
 
-    models = list(CHALLENGE_SIZES.keys())
+    models = list(sizes_dict.keys())
     if args.model:
         models = [x.strip() for x in args.model.split(",")]
 
-    # Count configs
-    n_configs = sum(len(CHALLENGE_SIZES[m]) for m in models) * len(impl_names)
+    # Timestamp: fixed for this invocation so one --repeats run produces one JSON
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    if args.tag:
+        ts = f"{ts}_{args.tag}"
+
+    n_configs = sum(len(sizes_dict[m]) for m in models) * len(impl_names)
 
     print(f"\n{'#'*65}")
-    print(f"  MI300X Challenge Benchmarks — Quantum Computing Scale")
-    print(f"  Implementations: {', '.join(impl_names)}")
-    print(f"  Models: {', '.join(models)}")
-    print(f"  Total configs: {n_configs}")
-    print(f"  GPU warmup: {'OFF' if args.skip_warmup else 'ON'}")
-    print(f"  Output: {args.output_dir}")
+    print(f"  MI300X Challenge Benchmarks")
+    print(f"  Grid:             {grid_label}")
+    print(f"  Implementations:  {', '.join(impl_names)}")
+    print(f"  Models:           {', '.join(models)}")
+    print(f"  Configs:          {n_configs}  (× {args.repeats} repeats)")
+    print(f"  GPU warmup:       {'OFF' if args.skip_warmup else 'ON'}")
+    print(f"  Timestamp:        {ts}")
+    print(f"  Output:           {args.output_dir}")
     print(f"{'#'*65}")
 
-    results = run_all(impl_names, models, do_warmup=not args.skip_warmup)
+    by_impl, per_impl_path = run_all(
+        impl_names, models, sizes_dict,
+        do_warmup=not args.skip_warmup, repeats=args.repeats,
+        output_dir=args.output_dir, timestamp=ts)
 
     print(f"\n{'='*65}")
-    print(f"  Saving results...")
+    print(f"  Final per-impl files:")
+    for impl, path in per_impl_path.items():
+        print(f"    {impl}: {path}")
     print(f"{'='*65}")
-    save_results(results, args.output_dir)
 
-    ok = sum(1 for r in results if r["success"])
-    fail = len(results) - ok
-    print(f"\n  Done: {len(results)} runs, {ok} passed, {fail} failed")
+    total_rows = sum(len(v) for v in by_impl.values())
+    ok = sum(1 for v in by_impl.values() for r in v if r["success"])
+    fail = total_rows - ok
+    print(f"\n  Done: {total_rows} configs, {ok} passed, {fail} failed")
 
 
 if __name__ == "__main__":
