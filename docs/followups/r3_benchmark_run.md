@@ -88,3 +88,4 @@ will report actuals block-by-block.
 | dmrg-gpu-base | josephson | 20260411T183503Z | 19:08:28Z | 33m25s | OK |
 | dmrg-gpu-base | tfim | 20260411T190828Z | 19:38:05Z | 29m37s | OK |
 | dmrg2-gpu-base | heisenberg | 20260411T193805Z | 20:43:22Z | 65m17s | OK |
+| dmrg2-gpu-base | josephson | 20260411T204322Z | 21:34:39Z | 51m17s | OK |
