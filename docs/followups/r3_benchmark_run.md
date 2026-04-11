@@ -86,3 +86,4 @@ will report actuals block-by-block.
 | pdmrg-gpu | tfim | 20260411T155405Z | 16:37:10Z | 43m05s | OK |
 | dmrg-gpu-base | heisenberg | 20260411T163710Z | 18:35:03Z | 117m53s | OK |
 | dmrg-gpu-base | josephson | 20260411T183503Z | 19:08:28Z | 33m25s | OK |
+| dmrg-gpu-base | tfim | 20260411T190828Z | 19:38:05Z | 29m37s | OK |
