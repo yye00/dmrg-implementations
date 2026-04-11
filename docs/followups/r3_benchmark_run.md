@@ -79,3 +79,4 @@ will report actuals block-by-block.
 | dmrg-gpu | josephson | 20260411T120108Z | 12:05:17Z | 4m09s | OK |
 | dmrg-gpu | tfim | 20260411T120517Z | 12:10:35Z | 5m18s | OK |
 | dmrg2-gpu | heisenberg | 20260411T121035Z | 12:26:26Z | 15m51s | OK |
+| dmrg2-gpu | josephson | 20260411T122626Z | 12:52:20Z | 25m54s | OK |
