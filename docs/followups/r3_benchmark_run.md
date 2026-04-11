@@ -76,3 +76,4 @@ will report actuals block-by-block.
 | impl | model | start | end | walltime | status |
 |------|-------|-------|-----|----------|--------|
 | dmrg-gpu | heisenberg | 20260411T115427Z | 12:01:08Z | 6m41s | OK |
+| dmrg-gpu | josephson | 20260411T120108Z | 12:05:17Z | 4m09s | OK |
