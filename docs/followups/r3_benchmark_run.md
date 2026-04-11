@@ -65,3 +65,13 @@ Note: these are rough — F1+F2+size-gate is expected to cut optimized times by
 will report actuals block-by-block.
 
 ## Log
+
+## Run started 20260411T115427Z
+
+- Grid: ULTRA_TRIM (18 configs/model)
+- Repeats: 3
+- Impls: dmrg-gpu dmrg2-gpu pdmrg-gpu dmrg-gpu-base dmrg2-gpu-base
+- Models: heisenberg josephson tfim
+
+| impl | model | start | end | walltime | status |
+|------|-------|-------|-----|----------|--------|
