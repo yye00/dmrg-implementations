@@ -89,3 +89,6 @@ will report actuals block-by-block.
 | dmrg-gpu-base | tfim | 20260411T190828Z | 19:38:05Z | 29m37s | OK |
 | dmrg2-gpu-base | heisenberg | 20260411T193805Z | 20:43:22Z | 65m17s | OK |
 | dmrg2-gpu-base | josephson | 20260411T204322Z | 21:34:39Z | 51m17s | OK |
+| dmrg2-gpu-base | tfim | 20260411T213439Z | 22:00:42Z | 26m03s | OK |
+
+**Ladder total: 10h06m**
