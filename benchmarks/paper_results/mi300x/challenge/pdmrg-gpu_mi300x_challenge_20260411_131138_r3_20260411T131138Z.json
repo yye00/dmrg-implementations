@@ -1,0 +1,36 @@
+{
+  "implementation": "pdmrg-gpu",
+  "architecture": "mi300x",
+  "benchmark": "challenge",
+  "timestamp": "20260411_131138_r3_20260411T131138Z",
+  "results": [
+    {
+      "impl": "pdmrg-gpu",
+      "model": "heisenberg",
+      "L": 50,
+      "chi": 64,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 45.737,
+      "time_median": 45.737,
+      "time_min": 45.668,
+      "times": [
+        45.842,
+        45.668,
+        45.737
+      ],
+      "energy": -21.972110271647,
+      "energies": [
+        -21.972110271643,
+        -21.972110271649,
+        -21.972110271647
+      ],
+      "repeats": 3,
+      "successful_reps": 3
+    }
+  ]
+}
