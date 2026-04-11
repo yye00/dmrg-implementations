@@ -31,6 +31,34 @@
       ],
       "repeats": 3,
       "successful_reps": 3
+    },
+    {
+      "impl": "dmrg-gpu-base",
+      "model": "heisenberg",
+      "L": 50,
+      "chi": 128,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 331.842,
+      "time_median": 331.842,
+      "time_min": 99.802,
+      "times": [
+        331.842,
+        334.745,
+        99.802
+      ],
+      "energy": -21.97211028051,
+      "energies": [
+        -21.972109207874,
+        -21.972108142364,
+        -21.97211028051
+      ],
+      "repeats": 3,
+      "successful_reps": 3
     }
   ]
 }
