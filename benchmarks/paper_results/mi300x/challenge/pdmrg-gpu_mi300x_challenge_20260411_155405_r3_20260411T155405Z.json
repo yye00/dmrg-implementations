@@ -143,6 +143,34 @@
       ],
       "repeats": 3,
       "successful_reps": 3
+    },
+    {
+      "impl": "pdmrg-gpu",
+      "model": "tfim",
+      "L": 100,
+      "chi": 256,
+      "sweeps": 15,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 270.866,
+      "time_median": 270.866,
+      "time_min": 268.631,
+      "times": [
+        270.866,
+        276.23,
+        268.631
+      ],
+      "energy": -126.961876739804,
+      "energies": [
+        -126.961876739732,
+        -126.961876739802,
+        -126.961876739804
+      ],
+      "repeats": 3,
+      "successful_reps": 3
     }
   ]
 }
