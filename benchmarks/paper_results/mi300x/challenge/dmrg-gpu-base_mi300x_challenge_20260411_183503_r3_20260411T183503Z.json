@@ -148,6 +148,35 @@
       "repeats": 3,
       "successful_reps": 3,
       "nmax": 2
+    },
+    {
+      "impl": "dmrg-gpu-base",
+      "model": "josephson",
+      "L": 32,
+      "chi": 256,
+      "sweeps": 15,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 92.568,
+      "time_median": 92.568,
+      "time_min": 92.138,
+      "times": [
+        92.761,
+        92.568,
+        92.138
+      ],
+      "energy": -12.840606887633,
+      "energies": [
+        -12.840606887633,
+        -12.840606887633,
+        -12.840606887633
+      ],
+      "repeats": 3,
+      "successful_reps": 3,
+      "nmax": 2
     }
   ]
 }
