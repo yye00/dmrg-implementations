@@ -47,15 +47,19 @@ append_doc() {
 }
 
 commit_push() {
-    # $1 = commit message
+    # $1 = commit message. No-op when not in a git repo (e.g. on the remote VM),
+    # because a separate local-side cron rsyncs results back and handles git.
     local msg="$1"
+    if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "[ladder] not a git repo — skipping commit/push (local sync will handle): $msg"
+        return 0
+    fi
     git add "$OUT_DIR" "$DOC" 2>/dev/null || true
     if git diff --cached --quiet; then
         echo "[ladder] nothing to commit"
         return 0
     fi
     git commit -m "$msg" >/dev/null 2>&1 || { echo "[ladder] commit failed"; return 1; }
-    # Retry push twice in case of transient network
     for attempt in 1 2 3; do
         if git push origin HEAD >/dev/null 2>&1; then
             echo "[ladder] pushed: $msg"
