@@ -31,7 +31,8 @@ public:
     void initialize_mps_random(double scale = 0.1);
 
     // Run
-    double run(int n_outer_sweeps, int n_local_sweeps = 2, int n_warmup = 1, int n_polish = 0);
+    // n_recal: if >0, insert a serial full-chain 1-site recalibration sweep every n_recal outer iters
+    double run(int n_outer_sweeps, int n_local_sweeps = 2, int n_warmup = 1, int n_polish = 0, int n_recal = 0);
 
     // Results
     double get_energy() const { return energy_; }

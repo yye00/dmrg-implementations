@@ -1997,7 +1997,7 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
 // ============================================================================
 
 template<typename Scalar>
-double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup, int n_polish) {
+double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup, int n_polish, int n_recal) {
     build_initial_environments();
 
     // Timer starts AFTER env build — measures sweep-to-convergence only
@@ -2088,6 +2088,18 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
             printf("Converged after %d outer iterations!\n", outer + 1);
             outer_converged = true;
             break;
+        }
+
+        // Recalibration: periodic serial full-chain two-site sweep to prevent
+        // parallel segments from diverging into local minima.
+        // Two-site sweep can adjust bond dims and converges faster than single-site.
+        if (n_recal > 0 && ((outer + 1) % n_recal == 0) && outer + 1 < n_outer_sweeps) {
+            build_initial_environments();
+            sweep_LR_full();
+            energy_ = sweep_RL_full();
+            energy_prev = energy_;
+            // Re-init boundary V from fresh canonical MPS
+            initialize_boundary_states();
         }
     }
     auto t_parallel = std::chrono::high_resolution_clock::now();
