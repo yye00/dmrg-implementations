@@ -1917,12 +1917,26 @@ void PDMRGGPU<Scalar>::form_theta_with_V(int site, int boundary_idx, int si) {
 
 template<typename Scalar>
 double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
-    double energy = 0.0;
-    int si = 0;  // boundary optimization uses stream 0
-
+    // Collect boundaries matching this parity
+    std::vector<int> active_boundaries;
     for (int b = 0; b < (int)boundary_bonds_.size(); b++) {
         if (parity >= 0 && (b % 2) != parity) continue;
+        active_boundaries.push_back(b);
+    }
+    if (active_boundaries.empty()) return energy_;
 
+    // Same-parity boundaries are independent (staggered design) — run in parallel
+    // Each boundary uses a different stream/workspace when possible
+    int n_active = (int)active_boundaries.size();
+    int n_avail_streams = (int)streams_.size();
+
+    // For single boundary (n_segments=2), this is just serial on stream 0.
+    // For multiple boundaries, parallelize across available streams.
+    std::vector<double> energies(n_active, 0.0);
+
+    auto optimize_boundary = [&](int idx) {
+        int b = active_boundaries[idx];
+        int si = idx % n_avail_streams;  // round-robin across streams
         int bsite = boundary_bonds_[b];
         int cL = chi_L(bsite);
         int cR = chi_R(bsite + 1);
@@ -1933,7 +1947,7 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
         form_theta_with_V(bsite, b, si);
 
         // Step 2: Optimize θ with eigensolver
-        energy = lanczos_eigensolver(bsite, ws.d_theta, theta_size, si);
+        energies[idx] = lanczos_eigensolver(bsite, ws.d_theta, theta_size, si);
 
         // Step 3: SVD split → direction 'R': MPS[bsite]=U, MPS[bsite+1]=S·Vh
         if (use_rsvd_)
@@ -1946,7 +1960,6 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
         boundary_states_[b].chi = new_chi;
         boundary_states_[b].V.resize(new_chi);
 
-        // S values are already in ws.h_svd_S after svd_split
         const RealType reg = RealType(1e-12);
         for (int i = 0; i < new_chi; i++) {
             RealType s_val = ws.h_svd_S[i];
@@ -1955,17 +1968,28 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
         }
 
         // Step 5: Update environments from canonical tensors
-        // L_env from U (left-canonical) — correct
         update_left_env(bsite, si);
-
-        // R_env needs right-canonical tensor (Vh, not S·Vh)
-        // Temporarily store Vh in MPS[bsite+1], build R_env, then restore S·Vh
-        // We need Vh which is in ws.d_svd_Vh (GPU) or ws.h_svd_Vh (CPU)
-        // For simplicity: the R_env will be rebuilt during the next segment sweep
-        // that sweeps RL through bsite+1, which is the standard pattern.
         update_right_env(bsite + 1, si);
+    };
+
+    if (n_active == 1) {
+        // Single boundary — no threading overhead
+        optimize_boundary(0);
+    } else {
+        // Multiple boundaries — parallelize
+        std::vector<std::thread> threads(n_active);
+        for (int i = 0; i < n_active; i++) {
+            threads[i] = std::thread(optimize_boundary, i);
+        }
+        for (auto& t : threads) t.join();
+        // Sync all used streams
+        for (int i = 0; i < std::min(n_active, n_avail_streams); i++) {
+            HIP_CHECK(hipStreamSynchronize(streams_[i]));
+        }
     }
-    return energy;
+
+    // Return the last boundary energy (same semantics as before)
+    return energies.back();
 }
 
 // ============================================================================
@@ -1989,6 +2013,10 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
         prev_warmup_energy = warmup_energy;
         if (dE < tol_ && sw > 0) break;
     }
+    auto t_warmup = std::chrono::high_resolution_clock::now();
+    double warmup_sec = std::chrono::duration<double>(t_warmup - t_start).count();
+    if (n_warmup > 0)
+        printf("[phase] warmup: %.3f s (%d sweep%s)\n", warmup_sec, n_warmup, n_warmup > 1 ? "s" : "");
 
     // === Main PDMRG loop (Stoudenmire staggered sweeps) ===
     // Replaces O(L) full-chain coupling with O(P) boundary-only merge+optimize.
@@ -2015,8 +2043,11 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     };
 
     bool has_odd_boundaries = ((int)boundary_bonds_.size() > 1);
+    int actual_outer = 0;
 
     for (int outer = 0; outer < n_outer_sweeps; outer++) {
+        actual_outer = outer + 1;
+        double energy_before_local = energy_;
         for (int local_sw = 0; local_sw < n_local_sweeps; local_sw++) {
             // Half-sweep 1: even segments LR, odd segments RL
             // After this, even-numbered boundaries have fresh L_env + R_env:
@@ -2043,24 +2074,46 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
             if (has_odd_boundaries) {
                 energy_ = merge_and_optimize_boundaries(1);
             }
+
+            // Early exit within local sweeps: if energy converged mid-local, skip remaining
+            double dE_local = std::abs(energy_ - energy_before_local);
+            if (dE_local < tol_ && local_sw > 0) break;
+            energy_before_local = energy_;
         }
 
         double dE = std::abs(energy_ - energy_prev);
+        energy_prev = energy_;
 
-        if (dE < tol_ && outer > 0) {
+        if (dE < tol_) {
             printf("Converged after %d outer iterations!\n", outer + 1);
             outer_converged = true;
             break;
         }
-
-        energy_prev = energy_;
     }
+    auto t_parallel = std::chrono::high_resolution_clock::now();
+    double parallel_sec = std::chrono::duration<double>(t_parallel - t_warmup).count();
+    printf("[phase] parallel: %.3f s (%d outer × %d local sweeps)\n",
+           parallel_sec, actual_outer, n_local_sweeps);
 
     // === Polish phase: single-site full-chain sweeps ===
     // Refines energy after segment sweeps. Single-site only (never two-site).
     // Skipped when outer loop already converged or n_polish == 0.
     if (n_segments_ > 1 && n_polish > 0 && !outer_converged) {
-        build_initial_environments();
+        // Incremental env rebuild: only rebuild environments near boundaries.
+        // After segment sweeps, interior envs are correct. Only boundary-adjacent
+        // envs may be stale (boundary merge modifies MPS at boundary bonds).
+        // Rebuild L_envs forward from each boundary site, R_envs backward.
+        for (int b = 0; b < (int)boundary_bonds_.size(); b++) {
+            int bsite = boundary_bonds_[b];
+            // Rebuild L_envs forward from boundary
+            for (int i = bsite; i < std::min(bsite + 2, L_); i++)
+                update_left_env(i, 0);
+            // Rebuild R_envs backward from boundary+1
+            for (int i = bsite + 1; i >= std::max(bsite, 0); i--)
+                update_right_env(i, 0);
+        }
+        HIP_CHECK(hipStreamSynchronize(streams_[0]));
+
         for (int sw = 0; sw < n_polish; sw++) {
             sweep_LR_full_1site();
             double eRL = sweep_RL_full_1site();
@@ -2072,11 +2125,19 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
             }
         }
     }
+    auto t_polish = std::chrono::high_resolution_clock::now();
+    double polish_sec = std::chrono::duration<double>(t_polish - t_parallel).count();
+    if (n_polish > 0)
+        printf("[phase] polish: %.3f s (%d sweep%s)\n", polish_sec, n_polish, n_polish > 1 ? "s" : "");
 
     auto t_end = std::chrono::high_resolution_clock::now();
     double total_time = std::chrono::duration<double>(t_end - t_start).count();
     printf("Final energy: %.12f\n", energy_);
-    printf("Total wall time: %.3f s\n", total_time);
+    printf("Total wall time: %.3f s (warmup=%.1f%% parallel=%.1f%% polish=%.1f%%)\n",
+           total_time,
+           total_time > 0 ? 100.0 * warmup_sec / total_time : 0.0,
+           total_time > 0 ? 100.0 * parallel_sec / total_time : 0.0,
+           total_time > 0 ? 100.0 * polish_sec / total_time : 0.0);
 
     return energy_;
 }

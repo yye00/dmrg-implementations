@@ -8,7 +8,7 @@
 set -u
 
 REPO="${REPO:-$HOME/clawd/work/dmrg-implementations}"
-REMOTE="${REMOTE:-hotaisle@23.183.40.84}"
+REMOTE="${REMOTE:-hotaisle@23.183.40.79}"
 REMOTE_REPO="${REMOTE_REPO:-~/dmrg-implementations}"
 INTERVAL="${INTERVAL:-300}"  # seconds
 
@@ -26,11 +26,15 @@ pull_once() {
     rsync -az \
         "${REMOTE}:${REMOTE_REPO}/docs/followups/r3_benchmark_run.md" \
         docs/followups/r3_benchmark_run.md 2>&1 | grep -v '^$' || true
+    rsync -az \
+        "${REMOTE}:${REMOTE_REPO}/docs/followups/pdmrg_study_run.md" \
+        docs/followups/pdmrg_study_run.md 2>&1 | grep -v '^$' || true
 }
 
 commit_push_once() {
     git add benchmarks/paper_results/mi300x/challenge/ \
-            docs/followups/r3_benchmark_run.md 2>/dev/null || true
+            docs/followups/r3_benchmark_run.md \
+            docs/followups/pdmrg_study_run.md 2>/dev/null || true
     if git diff --cached --quiet; then
         log "no changes"
         return 0

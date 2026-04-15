@@ -144,7 +144,8 @@ def _parse_gpu_output(stdout):
     return energy, wall_time
 
 
-def _build_gpu_cmd(impl, model, L, chi, sweeps, pdmrg_warmup=None, pdmrg_polish=None):
+def _build_gpu_cmd(impl, model, L, chi, sweeps,
+                   pdmrg_warmup=None, pdmrg_polish=None, pdmrg_local=None):
     exe = os.path.join(REPO_ROOT, GPU_IMPLS[impl])
     if not os.path.exists(exe):
         return None, f"Not found: {exe}"
@@ -155,23 +156,26 @@ def _build_gpu_cmd(impl, model, L, chi, sweeps, pdmrg_warmup=None, pdmrg_polish=
         cmd += ["--tfim"]
     if impl == "pdmrg-multi-gpu":
         cmd += ["--devices", "4"]
-    # PDMRG variants: always pass --warmup and --polish explicitly (CLAUDE.md rule)
+    # PDMRG variants: always pass --warmup, --polish, --local-sweeps explicitly (CLAUDE.md rule)
     if impl.startswith("pdmrg"):
         if pdmrg_warmup is not None:
             cmd += ["--warmup", str(pdmrg_warmup)]
         if pdmrg_polish is not None:
             cmd += ["--polish", str(pdmrg_polish)]
+        if pdmrg_local is not None:
+            cmd += ["--local-sweeps", str(pdmrg_local)]
     return cmd, None
 
 
 def run_gpu(impl, model, L, chi, sweeps, warmup=True, timeout=None,
-            pdmrg_warmup=None, pdmrg_polish=None):
+            pdmrg_warmup=None, pdmrg_polish=None, pdmrg_local=None):
     """Run GPU benchmark with optional warmup."""
     # Warmup: same exe, tiny problem
     if warmup:
         warmup_cmd, _ = _build_gpu_cmd(impl, model, 4, 4, 2,
                                         pdmrg_warmup=pdmrg_warmup,
-                                        pdmrg_polish=pdmrg_polish)
+                                        pdmrg_polish=pdmrg_polish,
+                                        pdmrg_local=pdmrg_local)
         if warmup_cmd:
             try:
                 subprocess.run(warmup_cmd, capture_output=True, text=True, timeout=30)
@@ -180,7 +184,8 @@ def run_gpu(impl, model, L, chi, sweeps, warmup=True, timeout=None,
 
     cmd, err = _build_gpu_cmd(impl, model, L, chi, sweeps,
                                pdmrg_warmup=pdmrg_warmup,
-                               pdmrg_polish=pdmrg_polish)
+                               pdmrg_polish=pdmrg_polish,
+                               pdmrg_local=pdmrg_local)
     if err:
         return {"energy": None, "time": None, "success": False, "error": err}
 
@@ -280,7 +285,7 @@ def _flush_impl_results(output_path, impl, arch, benchmark, ts, impl_results):
 
 def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
             output_dir=None, timestamp=None,
-            pdmrg_warmup=None, pdmrg_polish=None):
+            pdmrg_warmup=None, pdmrg_polish=None, pdmrg_local=None):
     """Run (impl × model × config) × repeats, flushing per-impl JSON after each config.
 
     Each result row stores a list `times` with all successful repeat timings plus
@@ -328,7 +333,8 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
                 r = run_gpu(impl, model, L, chi, sweeps,
                             warmup=(do_warmup and rep == 0),
                             pdmrg_warmup=pdmrg_warmup,
-                            pdmrg_polish=pdmrg_polish)
+                            pdmrg_polish=pdmrg_polish,
+                            pdmrg_local=pdmrg_local)
             else:
                 r = run_quimb(impl, model, L, chi, sweeps, threads=1)
             if r.get("success"):
@@ -397,6 +403,8 @@ def main():
                         help="Override --warmup N for pdmrg impls (MUST be explicit)")
     parser.add_argument("--pdmrg-polish", type=int, default=None,
                         help="Override --polish N for pdmrg impls (MUST be explicit)")
+    parser.add_argument("--pdmrg-local", type=int, default=None,
+                        help="Override --local-sweeps N for pdmrg impls")
     parser.add_argument("--tag", type=str, default=None,
                         help="Optional suffix for output filenames")
     parser.add_argument("--output-dir", type=str,
@@ -430,10 +438,11 @@ def main():
     print(f"  Configs:          {n_configs}  (× {args.repeats} repeats)")
     pdmrg_warmup = args.pdmrg_warmup
     pdmrg_polish = args.pdmrg_polish
+    pdmrg_local = args.pdmrg_local
 
     print(f"  GPU warmup:       {'OFF' if args.skip_warmup else 'ON'}")
-    if pdmrg_warmup is not None or pdmrg_polish is not None:
-        print(f"  PDMRG overrides:  warmup={pdmrg_warmup}, polish={pdmrg_polish}")
+    if pdmrg_warmup is not None or pdmrg_polish is not None or pdmrg_local is not None:
+        print(f"  PDMRG overrides:  warmup={pdmrg_warmup}, polish={pdmrg_polish}, local={pdmrg_local}")
     print(f"  Timestamp:        {ts}")
     print(f"  Output:           {args.output_dir}")
     print(f"{'#'*65}")
@@ -442,7 +451,8 @@ def main():
         impl_names, models, sizes_dict,
         do_warmup=not args.skip_warmup, repeats=args.repeats,
         output_dir=args.output_dir, timestamp=ts,
-        pdmrg_warmup=pdmrg_warmup, pdmrg_polish=pdmrg_polish)
+        pdmrg_warmup=pdmrg_warmup, pdmrg_polish=pdmrg_polish,
+        pdmrg_local=pdmrg_local)
 
     print(f"\n{'='*65}")
     print(f"  Final per-impl files:")
