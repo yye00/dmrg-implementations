@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "radam"
+version = "0.1.0"
+description = "Riemannian Adam (R-Adam) for MPS / Tensor Train ground-state optimization (CPU, numpy)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "RAdam Contributors"},
+]
+keywords = ["dmrg", "mps", "tensor-train", "riemannian", "adam", "optimization"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+dependencies = [
+    "numpy>=1.23",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+radam = "radam.__main__:main"
+
+[tool.setuptools]
+packages = ["radam"]
+
+[tool.setuptools.package-data]
+radam = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
