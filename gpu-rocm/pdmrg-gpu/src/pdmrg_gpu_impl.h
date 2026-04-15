@@ -13,6 +13,7 @@
 #include <mutex>
 #include <atomic>
 #include <stdexcept>
+#include "accurate_svd.h"
 
 #define HIP_CHECK(call) \
     do { \
@@ -1949,27 +1950,121 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
         // Step 2: Optimize θ with eigensolver
         energies[idx] = lanczos_eigensolver(bsite, ws.d_theta, theta_size, si);
 
-        // Step 3: SVD split → direction 'R': MPS[bsite]=U, MPS[bsite+1]=S·Vh
-        if (use_rsvd_)
-            rsvd_split(bsite, ws.d_theta, 'R', si);
-        else
-            svd_split(bsite, ws.d_theta, 'R', si);
+        // Step 3: Accurate SVD split at boundary (Stoudenmire Appendix)
+        // Standard SVD has poor relative accuracy for small singular values.
+        // Since V = 1/S amplifies errors, we need the recursive accurate SVD
+        // that achieves uniform relative accuracy for ALL singular values.
+        int m = cL * d_;
+        int n_svd = d_ * cR;
+        int full_k = std::min(m, n_svd);
+        int k = std::min(full_k, chi_max_);
+
+        // Copy theta from GPU to host
+        HIP_CHECK(hipMemcpyAsync(ws.h_svd_A.data(), ws.d_theta,
+                                  (size_t)m * n_svd * sizeof(Scalar),
+                                  hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
+
+        // Run accurate SVD on CPU (recursive refinement for small singular values)
+        accurate_svd<Scalar>(m, n_svd,
+                             ws.h_svd_A.data(), m,
+                             ws.h_svd_U.data(), m,
+                             ws.h_svd_S.data(),
+                             ws.h_svd_Vh.data(), full_k);
+
+        // Truncate to chi_max, dropping near-zero singular values
+        int new_k = k;
+        for (int i = 0; i < new_k; i++) {
+            if (ws.h_svd_S[i] < 1e-14) { new_k = i; break; }
+        }
+        if (new_k == 0) new_k = 1;
+
+        // Upload S to device (needed for scale_rows_by_real)
+        HIP_CHECK(hipMemcpyAsync(ws.d_svd_S, ws.h_svd_S.data(),
+                                  new_k * sizeof(RealType),
+                                  hipMemcpyHostToDevice, streams_[si]));
+
+        // MPS[bsite] = U[:, :new_k] (left-canonical)
+        allocate_mps_tensor(bsite, cL, new_k);
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[bsite], ws.h_svd_U.data(),
+                    (size_t)m * new_k * sizeof(Scalar),
+                    hipMemcpyHostToDevice, streams_[si]));
+
+        // MPS[bsite+1] = diag(S) @ Vh[:new_k, :] (absorbs singular values)
+        if (new_k == full_k) {
+            HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, ws.h_svd_Vh.data(),
+                        (size_t)full_k * n_svd * sizeof(Scalar),
+                        hipMemcpyHostToDevice, streams_[si]));
+        } else {
+            // Pack contiguous new_k rows from leading-dim full_k layout
+            for (int j = 0; j < n_svd; j++)
+                for (int i = 0; i < new_k; i++)
+                    ws.h_svd_tmp[i + j * new_k] = ws.h_svd_Vh[i + j * full_k];
+            HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, ws.h_svd_tmp.data(),
+                        (size_t)new_k * n_svd * sizeof(Scalar),
+                        hipMemcpyHostToDevice, streams_[si]));
+        }
+        allocate_mps_tensor(bsite + 1, new_k, cR);
+        int vh_ld = (new_k == full_k) ? full_k : new_k;
+        scale_rows_by_real(ws.d_svd_work, vh_ld, ws.d_svd_S,
+                           d_mps_tensors_[bsite + 1], new_k, new_k, n_svd, streams_[si]);
+
+        bond_dims_[bsite + 1] = new_k;
+        ws.heff_cached_site = -1;
 
         // Step 4: Update V = 1/clip(S, 1e-12) for next iteration
-        int new_chi = bond_dims_[bsite + 1];
-        boundary_states_[b].chi = new_chi;
-        boundary_states_[b].V.resize(new_chi);
+        boundary_states_[b].chi = new_k;
+        boundary_states_[b].V.resize(new_k);
 
         const RealType reg = RealType(1e-12);
-        for (int i = 0; i < new_chi; i++) {
+        for (int i = 0; i < new_k; i++) {
             RealType s_val = ws.h_svd_S[i];
             if (s_val < reg) s_val = reg;
             boundary_states_[b].V[i] = RealType(1.0) / s_val;
         }
 
-        // Step 5: Update environments from canonical tensors
+        // Step 5: Update environments from CANONICAL tensors
+        // L_env from U (left-canonical) — already in MPS[bsite]
         update_left_env(bsite, si);
+
+        // R_env must be built from Vh (right-canonical), NOT from S·Vh.
+        // Using S·Vh gives norm = S² ≠ I, which breaks the standard eigenvalue
+        // assumption (N_eff = I) in subsequent Lanczos eigensolves.
+        // Temporarily swap Vh into MPS[bsite+1], build R_env, then restore S·Vh.
+
+        // Save d_mps_tensors_[bsite+1] pointer (points to S·Vh)
+        Scalar* d_SVh_tensor = d_mps_tensors_[bsite + 1];
+
+        // Allocate temporary GPU buffer for Vh (right-canonical)
+        Scalar* d_Vh_canonical;
+        size_t vh_size = (size_t)new_k * n_svd;
+        HIP_CHECK(hipMalloc(&d_Vh_canonical, vh_size * sizeof(Scalar)));
+
+        // Upload Vh[:new_k, :] (without S) to the temporary buffer
+        if (new_k == full_k) {
+            HIP_CHECK(hipMemcpyAsync(d_Vh_canonical, ws.h_svd_Vh.data(),
+                        vh_size * sizeof(Scalar),
+                        hipMemcpyHostToDevice, streams_[si]));
+        } else {
+            // Sync before reusing h_svd_tmp — the earlier async H2D copy (S·Vh upload)
+            // may still be reading from it.
+            HIP_CHECK(hipStreamSynchronize(streams_[si]));
+            for (int j = 0; j < n_svd; j++)
+                for (int i = 0; i < new_k; i++)
+                    ws.h_svd_tmp[i + j * new_k] = ws.h_svd_Vh[i + j * full_k];
+            HIP_CHECK(hipMemcpyAsync(d_Vh_canonical, ws.h_svd_tmp.data(),
+                        vh_size * sizeof(Scalar),
+                        hipMemcpyHostToDevice, streams_[si]));
+        }
+
+        // Swap Vh into MPS slot, build R_env, then restore S·Vh
+        d_mps_tensors_[bsite + 1] = d_Vh_canonical;
         update_right_env(bsite + 1, si);
+        d_mps_tensors_[bsite + 1] = d_SVh_tensor;
+
+        // Free temporary Vh buffer
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
+        HIP_CHECK(hipFree(d_Vh_canonical));
     };
 
     if (n_active == 1) {
