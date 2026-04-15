@@ -2217,24 +2217,16 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     printf("[phase] parallel: %.3f s (%d outer × %d local sweeps)\n",
            parallel_sec, actual_outer, n_local_sweeps);
 
-    // === Polish phase: single-site full-chain sweeps ===
-    // Refines energy after segment sweeps. Single-site only (never two-site).
+    // === Polish phase: two-site full-chain sweeps ===
+    // Refines energy after segment sweeps. Two-site sweeps can fix bond-dim
+    // issues left by PDMRG and escape local minima.
     // Skipped when outer loop already converged or n_polish == 0.
     if (n_segments_ > 1 && n_polish > 0 && !outer_converged) {
-        // Incremental env rebuild: only rebuild environments near boundaries.
-        // After segment sweeps, interior envs are correct. Only boundary-adjacent
-        // envs may be stale (boundary merge modifies MPS at boundary bonds).
-        // Rebuild L_envs forward from each boundary site, R_envs backward.
-        for (int b = 0; b < (int)boundary_bonds_.size(); b++) {
-            int bsite = boundary_bonds_[b];
-            // Rebuild L_envs forward from boundary
-            for (int i = bsite; i < std::min(bsite + 2, L_); i++)
-                update_left_env(i, 0);
-            // Rebuild R_envs backward from boundary+1
-            for (int i = bsite + 1; i >= std::max(bsite, 0); i--)
-                update_right_env(i, 0);
-        }
-        HIP_CHECK(hipStreamSynchronize(streams_[0]));
+        // Full env rebuild: after parallel segment sweeps + boundary merges,
+        // environments across the chain are stale (built from old MPS tensors).
+        // An incremental 2-site rebuild propagates this staleness — we need
+        // a from-scratch walk from the trivial L_env[0] and R_env[L].
+        build_initial_environments();
 
         for (int sw = 0; sw < n_polish; sw++) {
             sweep_LR_full();
