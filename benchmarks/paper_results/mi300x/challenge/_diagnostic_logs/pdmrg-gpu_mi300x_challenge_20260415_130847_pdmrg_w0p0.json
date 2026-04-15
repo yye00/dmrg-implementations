@@ -1,0 +1,176 @@
+{
+  "implementation": "pdmrg-gpu",
+  "architecture": "mi300x",
+  "benchmark": "challenge",
+  "timestamp": "20260415_130847_pdmrg_w0p0",
+  "results": [
+    {
+      "impl": "pdmrg-gpu",
+      "model": "heisenberg",
+      "L": 50,
+      "chi": 64,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 37.948,
+      "time_median": 37.948,
+      "time_min": 37.378,
+      "times": [
+        38.171,
+        37.378,
+        37.948
+      ],
+      "energy": -21.954123000666,
+      "energies": [
+        -21.9551345994,
+        -21.95413948749,
+        -21.954123000666
+      ],
+      "repeats": 3,
+      "successful_reps": 3
+    },
+    {
+      "impl": "pdmrg-gpu",
+      "model": "heisenberg",
+      "L": 50,
+      "chi": 128,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 87.194,
+      "time_median": 87.194,
+      "time_min": 87.086,
+      "times": [
+        87.086,
+        87.194,
+        87.684
+      ],
+      "energy": -21.954278534791,
+      "energies": [
+        -21.954082371317,
+        -21.954505242815,
+        -21.954278534791
+      ],
+      "repeats": 3,
+      "successful_reps": 3
+    },
+    {
+      "impl": "pdmrg-gpu",
+      "model": "heisenberg",
+      "L": 50,
+      "chi": 256,
+      "sweeps": 15,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 147.29,
+      "time_median": 147.29,
+      "time_min": 146.705,
+      "times": [
+        147.29,
+        146.705,
+        148.196
+      ],
+      "energy": -21.954320531602,
+      "energies": [
+        -21.954225502531,
+        -21.954119320529,
+        -21.954320531602
+      ],
+      "repeats": 3,
+      "successful_reps": 3
+    },
+    {
+      "impl": "pdmrg-gpu",
+      "model": "heisenberg",
+      "L": 100,
+      "chi": 64,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 94.942,
+      "time_median": 94.942,
+      "time_min": 94.444,
+      "times": [
+        94.942,
+        95.177,
+        94.444
+      ],
+      "energy": -44.117767797106,
+      "energies": [
+        -44.119154483536,
+        -44.117641098849,
+        -44.117767797106
+      ],
+      "repeats": 3,
+      "successful_reps": 3
+    },
+    {
+      "impl": "pdmrg-gpu",
+      "model": "heisenberg",
+      "L": 100,
+      "chi": 128,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 228.782,
+      "time_median": 228.782,
+      "time_min": 227.871,
+      "times": [
+        229.324,
+        228.782,
+        227.871
+      ],
+      "energy": -44.117550124382,
+      "energies": [
+        -44.117657030114,
+        -44.11787879418,
+        -44.117550124382
+      ],
+      "repeats": 3,
+      "successful_reps": 3
+    },
+    {
+      "impl": "pdmrg-gpu",
+      "model": "heisenberg",
+      "L": 100,
+      "chi": 256,
+      "sweeps": 15,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 447.513,
+      "time_median": 447.513,
+      "time_min": 446.899,
+      "times": [
+        446.899,
+        450.195,
+        447.513
+      ],
+      "energy": -44.11837799066,
+      "energies": [
+        -44.11829768357,
+        -44.117789000295,
+        -44.11837799066
+      ],
+      "repeats": 3,
+      "successful_reps": 3
+    }
+  ]
+}
