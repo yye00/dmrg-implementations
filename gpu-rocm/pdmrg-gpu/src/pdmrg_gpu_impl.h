@@ -1973,7 +1973,7 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
 // ============================================================================
 
 template<typename Scalar>
-double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup) {
+double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup, int n_polish) {
     build_initial_environments();
 
     // Timer starts AFTER env build — measures sweep-to-convergence only
@@ -2056,16 +2056,14 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
         energy_prev = energy_;
     }
 
-    // === Polish phase: two-site full-chain sweeps to escape local minima ===
-    // Single-site polish gets trapped when PDMRG boundary bond structure is
-    // suboptimal. Two-site sweeps can re-optimize bond dimensions across
-    // segment boundaries, achieving the same accuracy as single-segment DMRG.
-    if (n_segments_ > 1) {
-        int n_polish = 10;
+    // === Polish phase: single-site full-chain sweeps ===
+    // Refines energy after segment sweeps. Single-site only (never two-site).
+    // Skipped when outer loop already converged or n_polish == 0.
+    if (n_segments_ > 1 && n_polish > 0 && !outer_converged) {
         build_initial_environments();
         for (int sw = 0; sw < n_polish; sw++) {
-            sweep_LR_full();
-            double eRL = sweep_RL_full();
+            sweep_LR_full_1site();
+            double eRL = sweep_RL_full_1site();
             double dE = std::abs(eRL - energy_);
             energy_ = eRL;
             if (dE < tol_) {

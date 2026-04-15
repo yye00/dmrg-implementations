@@ -95,8 +95,31 @@ rocm-smi --showproductname
 
 ---
 
-**Last Updated**: 2026-03-10
-**Purpose**: GPU-CPU parity fixes for gpu-rocm/pdmrg-gpu implementation
+## PDMRG Rules (ALL variants: pdmrg, pdmrg-gpu, pdmrg-gpu-opt, pdmrg-multigpu)
+
+**MANDATORY — these rules apply to ALL pdmrg variants in ALL contexts (benchmarks, tests, development):**
+
+1. **Warmup sweeps MUST be single-site.** NEVER two-site warmup. The functions
+   `sweep_LR_full_1site()` / `sweep_RL_full_1site()` are correct. NEVER call
+   `sweep_LR_full()` / `sweep_RL_full()` for warmup.
+2. **Polish sweeps MUST be single-site.** NEVER two-site polish. Same rule —
+   use `_1site` variants only.
+3. **Warmup and polish sweep counts MUST NOT exceed 2.** `n_warmup <= 2`,
+   `n_polish <= 2`. The defaults in code and benchmark scripts must reflect this.
+4. **Zero warmup (`n_warmup=0`) and zero polish (`n_polish=0`) MUST be
+   supported** as valid configurations.
+5. **Benchmarks use challenge-sized problems ONLY.** The ULTRA_TRIM or
+   CHALLENGE_SIZES grids in `run_mi300x_challenge.py`. Smaller problems
+   (L=4, L=8, etc.) are for smoke-testing / correctness verification during
+   development, NEVER for published performance numbers.
+6. **When running benchmarks, ALWAYS explicitly pass `--warmup N` and
+   `--polish N`** to the binary. NEVER rely on compiled-in defaults — defaults
+   drift and cause wasted benchmark runs.
+
+---
+
+**Last Updated**: 2026-04-15
+**Purpose**: DMRG GPU implementations + PDMRG performance study
 
 ## Local Directory Layout (updated 2026-04-02)
 

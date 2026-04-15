@@ -191,7 +191,7 @@ void build_josephson_mpo(int L, int d, int D_mpo,
 // Heisenberg test (real)
 // ============================================================================
 int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
-                    int n_local, int n_warmup, bool gpu_svd, bool use_rsvd, bool quiet) {
+                    int n_local, int n_warmup, int n_polish, bool gpu_svd, bool use_rsvd, bool quiet) {
     int d = 2;
     int D_mpo = 5;
 
@@ -200,8 +200,8 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
         printf("PDMRG-GPU Heisenberg Test (float64)\n");
         printf("======================================\n");
         printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d\n", L, d, chi_max, D_mpo);
-        printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
-               n_segments, n_outer, n_local, n_warmup);
+        printf("  segments=%d, outer=%d, local=%d, warmup=%d, polish=%d\n",
+               n_segments, n_outer, n_local, n_warmup, n_polish);
         printf("  SVD: %s%s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)",
                use_rsvd ? " + rSVD (Halko-Martinsson-Tropp)" : "");
         printf("======================================\n\n");
@@ -224,7 +224,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
     build_heisenberg_mpo(L, D_mpo, h_mpo_tensors);
     pdmrg.set_mpo(h_mpo_tensors);
 
-    double energy = pdmrg.run(n_outer, n_local, n_warmup);
+    double energy = pdmrg.run(n_outer, n_local, n_warmup, n_polish);
 
     // Final energy already printed by run()
 
@@ -246,7 +246,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
 // TFIM test (real)
 // ============================================================================
 int test_tfim(int L, int chi_max, int n_outer, int n_segments,
-              int n_local, int n_warmup, bool gpu_svd, bool use_rsvd,
+              int n_local, int n_warmup, int n_polish, bool gpu_svd, bool use_rsvd,
               double J, double h_field, bool quiet) {
     int d = 2;
     int D_mpo = 3;
@@ -256,8 +256,8 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
         printf("PDMRG-GPU TFIM Test (float64)\n");
         printf("======================================\n");
         printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d\n", L, d, chi_max, D_mpo);
-        printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
-               n_segments, n_outer, n_local, n_warmup);
+        printf("  segments=%d, outer=%d, local=%d, warmup=%d, polish=%d\n",
+               n_segments, n_outer, n_local, n_warmup, n_polish);
         printf("  J=%.4f, h=%.4f\n", J, h_field);
         printf("  SVD: %s%s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)",
                use_rsvd ? " + rSVD (Halko-Martinsson-Tropp)" : "");
@@ -274,7 +274,7 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
     build_tfim_mpo(L, D_mpo, J, h_field, h_mpo_tensors);
     pdmrg.set_mpo(h_mpo_tensors);
 
-    double energy = pdmrg.run(n_outer, n_local, n_warmup);
+    double energy = pdmrg.run(n_outer, n_local, n_warmup, n_polish);
 
     // Final energy already printed by run()
     if (!quiet) printf("Energy per site: %.12f\n", energy / L);
@@ -287,7 +287,7 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
 // Josephson Junction test (complex128)
 // ============================================================================
 int test_josephson(int L, int chi_max, int n_outer, int n_segments,
-                   int n_local, int n_warmup, bool gpu_svd, bool use_rsvd,
+                   int n_local, int n_warmup, int n_polish, bool gpu_svd, bool use_rsvd,
                    int n_max, double E_J, double E_C, double phi_ext, bool quiet) {
     int d = 2 * n_max + 1;
     int D_mpo = 4;
@@ -298,8 +298,8 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
         printf("======================================\n");
         printf("  L=%d, d=%d (n_max=%d), chi_max=%d, D_mpo=%d\n",
                L, d, n_max, chi_max, D_mpo);
-        printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
-               n_segments, n_outer, n_local, n_warmup);
+        printf("  segments=%d, outer=%d, local=%d, warmup=%d, polish=%d\n",
+               n_segments, n_outer, n_local, n_warmup, n_polish);
         printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/%.1f\n", E_J, E_C, M_PI / phi_ext);
         printf("  SVD: %s%s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)",
                use_rsvd ? " + rSVD (Halko-Martinsson-Tropp)" : "");
@@ -325,7 +325,7 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
     build_josephson_mpo(L, d, D_mpo, E_J, E_C, 0.0, n_max, phi_ext, h_mpo_tensors);
     pdmrg.set_mpo(h_mpo_tensors);
 
-    double energy = pdmrg.run(n_outer, n_local, n_warmup);
+    double energy = pdmrg.run(n_outer, n_local, n_warmup, n_polish);
 
     // Final energy already printed by run()
 
@@ -352,7 +352,8 @@ int main(int argc, char** argv) {
     int n_outer = 20;
     int n_segments = 2;
     int n_local = 2;
-    int n_warmup = 3;
+    int n_warmup = 1;
+    int n_polish = 0;
     bool gpu_svd = true;
     bool use_rsvd = false;
     bool quiet = false;
@@ -375,6 +376,7 @@ int main(int argc, char** argv) {
             if (std::string(argv[i]) == "--segments" && i+1 < argc) { n_segments = std::atoi(argv[++i]); continue; }
             if (std::string(argv[i]) == "--local-sweeps" && i+1 < argc) { n_local = std::atoi(argv[++i]); continue; }
             if (std::string(argv[i]) == "--warmup" && i+1 < argc) { n_warmup = std::atoi(argv[++i]); continue; }
+            if (std::string(argv[i]) == "--polish" && i+1 < argc) { n_polish = std::atoi(argv[++i]); continue; }
             if (std::string(argv[i]) == "--nmax" && i+1 < argc) { n_max = std::atoi(argv[++i]); continue; }
             if (std::string(argv[i]) == "--ej" && i+1 < argc) { E_J = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--ec" && i+1 < argc) { E_C = std::atof(argv[++i]); continue; }
@@ -389,13 +391,13 @@ int main(int argc, char** argv) {
 
     try {
         if (run_josephson) {
-            return test_josephson(L, chi_max, n_outer, n_segments, n_local, n_warmup,
+            return test_josephson(L, chi_max, n_outer, n_segments, n_local, n_warmup, n_polish,
                                   gpu_svd, use_rsvd, n_max, E_J, E_C, phi_ext, quiet);
         } else if (run_tfim) {
-            return test_tfim(L, chi_max, n_outer, n_segments, n_local, n_warmup,
+            return test_tfim(L, chi_max, n_outer, n_segments, n_local, n_warmup, n_polish,
                              gpu_svd, use_rsvd, J_tfim, h_field, quiet);
         } else {
-            return test_heisenberg(L, chi_max, n_outer, n_segments, n_local, n_warmup, gpu_svd, use_rsvd, quiet);
+            return test_heisenberg(L, chi_max, n_outer, n_segments, n_local, n_warmup, n_polish, gpu_svd, use_rsvd, quiet);
         }
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << std::endl;
