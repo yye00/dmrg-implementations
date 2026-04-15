@@ -1,10 +1,10 @@
-"""MPO builders for Heisenberg XXX and Transverse-Field Ising.
+"""MPO builders for Heisenberg XXX, TFIM, and Josephson junction array.
 
 All MPO cores have shape ``(mpo_L, mpo_R, d_up, d_down)``.  ``d_up`` is
 the "ket" physical index (contracted with the MPS core) and ``d_down`` is
 the "bra" index (contracted with the conjugated MPS core).
 
-Two models are provided:
+Three models are provided:
 
 * :func:`build_heisenberg_mpo` -- XXX chain
   ``H = J sum_i (Sx_i Sx_{i+1} + Sy_i Sy_{i+1} + Sz_i Sz_{i+1})
@@ -12,6 +12,13 @@ Two models are provided:
 
 * :func:`build_tfim_mpo` -- transverse-field Ising
   ``H = -J sum_i Sz_i Sz_{i+1} - hx sum_i Sx_i``
+
+* :func:`build_josephson_mpo` -- Josephson junction array
+  ``H = -E_J/2 sum_i (exp(i phi_ext) exp(i phi_i) exp(-i phi_{i+1}) + h.c.)
+        + E_C sum_i n_i^2  -  mu sum_i n_i``
+  with charge truncation ``|n| <= n_max`` (local dim ``d = 2*n_max + 1``).
+  External flux ``phi_ext != 0`` breaks time-reversal symmetry and
+  forces complex128 arithmetic.
 """
 
 from __future__ import annotations
@@ -100,5 +107,82 @@ def build_tfim_mpo(L: int, j: float = 1.0, hx: float = 1.0, *, dtype=np.complex1
             core = W[:, 0:1, :, :].copy()
         else:
             core = W.copy()
+        cores.append(core)
+    return cores
+
+
+def build_josephson_mpo(
+    L: int,
+    *,
+    E_J: float = 1.0,
+    E_C: float = 0.5,
+    mu: float = 0.0,
+    n_max: int = 2,
+    phi_ext: float = np.pi / 4,
+    dtype=np.complex128,
+):
+    """Build a Josephson junction array MPO.
+
+    Uses charge truncation ``|n| <= n_max`` giving local dimension
+    ``d = 2*n_max + 1`` with basis ordered ``|-n_max>, ..., |+n_max>``.
+    The operators are:
+
+    * ``n`` = diag(-n_max, ..., +n_max)
+    * ``exp(i phi)`` is the charge-raising ladder:
+      ``(exp_iphi)[j, i] = 1`` iff ``j = i + 1``.
+    * ``exp(-i phi) = (exp_iphi)^dagger``
+
+    Bulk MPO bond dimension is 4 using the standard nearest-neighbour
+    automaton:
+
+    ::
+
+        [[ I,            0,                       0,                            0 ],
+         [exp_miphi,     0,                       0,                            0 ],
+         [exp_iphi,      0,                       0,                            0 ],
+         [onsite,        -E_J/2 * e^{i phi_ext} * exp_iphi,
+                         -E_J/2 * e^{-i phi_ext} * exp_miphi,       I ]]
+
+    where ``onsite = E_C n^2 - mu n``.
+
+    This matches :func:`benchmarks.lib.models.build_josephson_mpo` (which
+    uses quimb's ``SpinHam1D``) up to a global sign convention.
+    """
+    d = 2 * n_max + 1
+    charges = np.arange(-n_max, n_max + 1, dtype=np.float64)
+
+    I_d = np.eye(d, dtype=dtype)
+    n_op = np.diag(charges).astype(dtype)
+    n2 = n_op @ n_op
+
+    exp_iphi = np.zeros((d, d), dtype=dtype)
+    for i in range(d - 1):
+        exp_iphi[i + 1, i] = 1.0
+    exp_miphi = exp_iphi.conj().T
+
+    flux_phase = np.exp(1j * phi_ext)
+    on_site = E_C * n2 - mu * n_op
+
+    W = np.zeros((4, 4, d, d), dtype=dtype)
+    # Row 0: completed channel
+    W[0, 0] = I_d
+    # Row 1: just completed hopping (need exp_miphi to close)
+    W[1, 0] = exp_miphi
+    # Row 2: just completed hopping (need exp_iphi to close)
+    W[2, 0] = exp_iphi
+    # Row 3: start channel
+    W[3, 0] = on_site
+    W[3, 1] = (-E_J / 2.0) * flux_phase * exp_iphi
+    W[3, 2] = (-E_J / 2.0) * np.conj(flux_phase) * exp_miphi
+    W[3, 3] = I_d
+
+    cores = []
+    for i in range(L):
+        if i == 0:
+            core = W[3:4, :, :, :].copy()       # (1, 4, d, d)
+        elif i == L - 1:
+            core = W[:, 0:1, :, :].copy()       # (4, 1, d, d)
+        else:
+            core = W.copy()                     # (4, 4, d, d)
         cores.append(core)
     return cores

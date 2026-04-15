@@ -67,11 +67,43 @@ core-shape.
 ## Supported Hamiltonians
 
 * `build_heisenberg_mpo(L, j, bz)` -- XXX chain plus a longitudinal
-  field.
-* `build_tfim_mpo(L, j, hx)` -- transverse-field Ising.
+  field.  Bond dim 5, real.
+* `build_tfim_mpo(L, j, hx)` -- transverse-field Ising.  Bond dim 3,
+  real.
+* `build_josephson_mpo(L, E_J, E_C, mu, n_max, phi_ext)` -- Josephson
+  junction array with external flux.  Bond dim 4, complex (``phi_ext``
+  breaks time-reversal symmetry).  Matches
+  `benchmarks/lib/models.py::build_josephson_mpo` exactly on an ED
+  cross-check.
 
 Adding a new model means producing a list of MPO cores with the shape
 convention above.
+
+
+## Benchmark harness integration
+
+This package is registered as the `radam` implementation in
+`benchmarks/lib/registry.py` with a runner at
+`benchmarks/lib/runners/radam_runner.py`, so the standard
+`benchmarks/run.py` entry points work:
+
+```bash
+# List all implementations (radam appears):
+python3 benchmarks/run.py list
+
+# Run the small-size validation (Heisenberg L=12 chi=20, Josephson L=8 chi=20):
+python3 benchmarks/run.py validate --impl radam
+
+# Run just one model:
+python3 benchmarks/run.py validate --impl radam --model heisenberg
+```
+
+**Small-scale proof-of-concept only.**  R-Adam is pure CPU numpy; the
+challenge grid in `run_mi300x_challenge.py` (chi=64-512, L=50-500) is
+out of scope.  Per-model defaults in the runner (`lr`,
+`epochs_per_sweep`, `min_lr`) are tuned for the small problem sizes
+only; they will not give benchmark-grade convergence at larger sizes
+without re-tuning, and no GPU port exists.
 
 
 ## Quickstart

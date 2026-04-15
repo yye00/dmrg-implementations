@@ -24,7 +24,7 @@ from .mps import (
     mps_norm_squared,
     mps_frob_norm_squared_cores,
 )
-from .mpo import build_heisenberg_mpo, build_tfim_mpo
+from .mpo import build_heisenberg_mpo, build_tfim_mpo, build_josephson_mpo
 from .environments import build_right_envs_H, build_left_envs_H
 from .gradient import euclidean_gradient
 from .projection import project_right_canonical, transport_momentum
@@ -44,6 +44,7 @@ __all__ = [
     "mps_frob_norm_squared_cores",
     "build_heisenberg_mpo",
     "build_tfim_mpo",
+    "build_josephson_mpo",
     "build_right_envs_H",
     "build_left_envs_H",
     "euclidean_gradient",

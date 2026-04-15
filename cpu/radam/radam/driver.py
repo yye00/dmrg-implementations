@@ -14,7 +14,7 @@ from typing import Callable, List, Optional
 import numpy as np
 
 from .mps import random_mps
-from .mpo import build_heisenberg_mpo, build_tfim_mpo
+from .mpo import build_heisenberg_mpo, build_tfim_mpo, build_josephson_mpo
 from .optimizer import RAdamState, radam_step
 
 
@@ -153,3 +153,22 @@ def run_tfim(L: int, chi: int, j: float = 1.0, hx: float = 1.0, **kw):
     """Convenience wrapper: build a TFIM MPO and run R-Adam."""
     H = build_tfim_mpo(L, j=j, hx=hx)
     return run_radam(H, L=L, chi=chi, d=2, **kw)
+
+
+def run_josephson(
+    L: int,
+    chi: int,
+    *,
+    E_J: float = 1.0,
+    E_C: float = 0.5,
+    mu: float = 0.0,
+    n_max: int = 2,
+    phi_ext: float = math.pi / 4,
+    **kw,
+):
+    """Convenience wrapper: build a Josephson-array MPO and run R-Adam."""
+    d = 2 * n_max + 1
+    H = build_josephson_mpo(
+        L, E_J=E_J, E_C=E_C, mu=mu, n_max=n_max, phi_ext=phi_ext,
+    )
+    return run_radam(H, L=L, chi=chi, d=d, **kw)

@@ -19,6 +19,15 @@ IMPLEMENTATIONS = {
         "runner": "quimb",
         "algorithm": "dmrg1",
     },
+
+    # --- Riemannian Adam (not a DMRG variant) ---
+    "radam": {
+        "type": "cpu-serial",
+        "description": "Riemannian Adam on TT manifold (CPU numpy); small-scale only",
+        "supports_threads": True,
+        "supports_np": False,
+        "runner": "radam",
+    },
     "quimb-dmrg2": {
         "type": "cpu-serial",
         "description": "Quimb DMRG two-site (CPU reference)",
