@@ -143,6 +143,8 @@ private:
         Scalar* d_rsvd_U_full;    // (m, r) for U = Q @ U_small on GPU
         std::vector<Scalar> h_rsvd_B;          // (r, n) host copy
         std::vector<Scalar> h_rsvd_U_small;    // (r, r) from SVD of B
+        // Pre-allocated Vh buffer for boundary merge R_env swap
+        Scalar* d_Vh_canonical;       // size: chi_max*d × d*chi_max (same as theta_size_max)
     };
     std::vector<StreamWorkspace> workspaces_;
 

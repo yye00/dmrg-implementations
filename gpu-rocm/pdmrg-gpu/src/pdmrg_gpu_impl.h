@@ -351,6 +351,10 @@ void PDMRGGPU<Scalar>::allocate_stream_workspaces() {
             ws.h_rsvd_B.resize((size_t)rsvd_r * rsvd_n);
             ws.h_rsvd_U_small.resize((size_t)rsvd_r * rsvd_r);
 
+            // Pre-allocated Vh buffer for boundary merge R_env swap (avoids hot-path hipMalloc)
+            // Max size = chi_max*d rows × d*chi_max cols = theta_size_max
+            HIP_CHECK(hipMalloc(&ws.d_Vh_canonical, theta_size_max_ * sizeof(Scalar)));
+
             // Query SVD workspace for the smaller matrix (rsvd_r x rsvd_n)
             {
                 int sm = rsvd_r, sn = rsvd_n;
@@ -439,6 +443,7 @@ void PDMRGGPU<Scalar>::free_gpu_resources() {
         if (ws.d_rsvd_B) hipFree(ws.d_rsvd_B);
         if (ws.d_rsvd_ipiv) hipFree(ws.d_rsvd_ipiv);
         if (ws.d_rsvd_U_full) hipFree(ws.d_rsvd_U_full);
+        if (ws.d_Vh_canonical) hipFree(ws.d_Vh_canonical);
     }
 
     for (auto& h : handles_) rocblas_destroy_handle(h);
@@ -983,8 +988,23 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
                 ws.d_heff_result, 1));
         }
 
-        // Full reorthogonalization (device pointer mode for gemv constants)
+        // Full reorthogonalization — "twice is enough" double CGS
+        // Single-pass CGS accumulates orthogonality defect ~ ε·n_iter·sqrt(N).
+        // At chi=128 (N=65536, n_iter=100) this reaches ~2.5e-12, right at our
+        // eigenvalue tolerance. A second pass reduces defect to ~ε².
         if (iter > 0) {
+            // First CGS pass
+            ROCBLAS_CHECK(Traits::gemv(handles_[si], Traits::op_h,
+                n, iter + 1, ws.d_const_one,
+                d_lanczos_v, n,
+                ws.d_heff_result, 1,
+                ws.d_const_zero, ws.d_ritz_coeffs, 1));
+            ROCBLAS_CHECK(Traits::gemv(handles_[si], rocblas_operation_none,
+                n, iter + 1, ws.d_const_neg_one,
+                d_lanczos_v, n,
+                ws.d_ritz_coeffs, 1,
+                ws.d_const_one, ws.d_heff_result, 1));
+            // Second CGS pass (reduces defect from ~ε·κ to ~ε²)
             ROCBLAS_CHECK(Traits::gemv(handles_[si], Traits::op_h,
                 n, iter + 1, ws.d_const_one,
                 d_lanczos_v, n,
@@ -2035,14 +2055,12 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
         // Save d_mps_tensors_[bsite+1] pointer (points to S·Vh)
         Scalar* d_SVh_tensor = d_mps_tensors_[bsite + 1];
 
-        // Allocate temporary GPU buffer for Vh (right-canonical)
-        Scalar* d_Vh_canonical;
+        // Use pre-allocated Vh buffer (avoids hot-path hipMalloc/hipFree)
         size_t vh_size = (size_t)new_k * n_svd;
-        HIP_CHECK(hipMalloc(&d_Vh_canonical, vh_size * sizeof(Scalar)));
 
-        // Upload Vh[:new_k, :] (without S) to the temporary buffer
+        // Upload Vh[:new_k, :] (without S) to the pre-allocated buffer
         if (new_k == full_k) {
-            HIP_CHECK(hipMemcpyAsync(d_Vh_canonical, ws.h_svd_Vh.data(),
+            HIP_CHECK(hipMemcpyAsync(ws.d_Vh_canonical, ws.h_svd_Vh.data(),
                         vh_size * sizeof(Scalar),
                         hipMemcpyHostToDevice, streams_[si]));
         } else {
@@ -2052,19 +2070,16 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
             for (int j = 0; j < n_svd; j++)
                 for (int i = 0; i < new_k; i++)
                     ws.h_svd_tmp[i + j * new_k] = ws.h_svd_Vh[i + j * full_k];
-            HIP_CHECK(hipMemcpyAsync(d_Vh_canonical, ws.h_svd_tmp.data(),
+            HIP_CHECK(hipMemcpyAsync(ws.d_Vh_canonical, ws.h_svd_tmp.data(),
                         vh_size * sizeof(Scalar),
                         hipMemcpyHostToDevice, streams_[si]));
         }
 
         // Swap Vh into MPS slot, build R_env, then restore S·Vh
-        d_mps_tensors_[bsite + 1] = d_Vh_canonical;
+        d_mps_tensors_[bsite + 1] = ws.d_Vh_canonical;
         update_right_env(bsite + 1, si);
         d_mps_tensors_[bsite + 1] = d_SVh_tensor;
-
-        // Free temporary Vh buffer
         HIP_CHECK(hipStreamSynchronize(streams_[si]));
-        HIP_CHECK(hipFree(d_Vh_canonical));
     };
 
     if (n_active == 1) {
@@ -2222,8 +2237,8 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
         HIP_CHECK(hipStreamSynchronize(streams_[0]));
 
         for (int sw = 0; sw < n_polish; sw++) {
-            sweep_LR_full_1site();
-            double eRL = sweep_RL_full_1site();
+            sweep_LR_full();
+            double eRL = sweep_RL_full();
             double dE = std::abs(eRL - energy_);
             energy_ = eRL;
             if (dE < tol_) {
