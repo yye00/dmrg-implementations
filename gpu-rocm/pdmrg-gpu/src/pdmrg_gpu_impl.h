@@ -2217,9 +2217,9 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     printf("[phase] parallel: %.3f s (%d outer × %d local sweeps)\n",
            parallel_sec, actual_outer, n_local_sweeps);
 
-    // === Polish phase: two-site full-chain sweeps ===
-    // Refines energy after segment sweeps. Two-site sweeps can fix bond-dim
-    // issues left by PDMRG and escape local minima.
+    // === Polish phase: single-site full-chain sweeps ===
+    // Refines energy after parallel segment sweeps. Single-site only (cheaper,
+    // and bond-dim adjustment is handled by recalibration sweeps).
     // Skipped when outer loop already converged or n_polish == 0.
     if (n_segments_ > 1 && n_polish > 0 && !outer_converged) {
         // Full env rebuild: after parallel segment sweeps + boundary merges,
@@ -2229,8 +2229,8 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
         build_initial_environments();
 
         for (int sw = 0; sw < n_polish; sw++) {
-            sweep_LR_full();
-            double eRL = sweep_RL_full();
+            sweep_LR_full_1site();
+            double eRL = sweep_RL_full_1site();
             double dE = std::abs(eRL - energy_);
             energy_ = eRL;
             if (dE < tol_) {
