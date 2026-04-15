@@ -18,3 +18,4 @@
 
 | variant | model | start | end | walltime | status |
 |---------|-------|-------|-----|----------|--------|
+| w0p0 | heisenberg | 20260415T130847Z | 14:01:21Z | 52m34s | OK |
