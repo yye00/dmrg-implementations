@@ -1,8 +1,9 @@
 """Riemannian Adam (R-Adam) for Tensor Train / MPS optimization.
 
 A CPU numpy implementation of Riemannian Adam applied to the fixed-rank
-Tensor Train (Matrix Product State) manifold, with support for Heisenberg
-and Transverse Field Ising (TFIM) Hamiltonians.
+Tensor Train (Matrix Product State) manifold, with support for
+Heisenberg, Transverse Field Ising (TFIM), and Josephson-junction-array
+Hamiltonians.
 
 Convention for all tensor shapes in this package:
 
@@ -11,6 +12,9 @@ Convention for all tensor shapes in this package:
 
 The full MPS / MPO are Python lists of these cores.  Edge sites use a
 trivial bond of size 1.
+
+For a quasi-Newton optimizer with tighter convergence on the same
+problems see the sibling ``rlbfgs`` package (``cpu/rlbfgs/``).
 """
 
 from .mps import (
@@ -30,9 +34,7 @@ from .gradient import euclidean_gradient
 from .projection import project_right_canonical, transport_momentum
 from .retraction import retract_and_recanonicalize
 from .optimizer import RAdamState, radam_step
-from .lbfgs import LBFGSState, rlbfgs_step, run_rlbfgs, lbfgs_two_loop, line_search_armijo
-from .driver import run_radam, run_warmstart_rlbfgs
-from .tangent import inner_real, norm_tangent, scale_cores, add_cores, sub_cores
+from .driver import run_radam, run_heisenberg, run_tfim, run_josephson
 
 __all__ = [
     "random_mps",
@@ -56,15 +58,7 @@ __all__ = [
     "RAdamState",
     "radam_step",
     "run_radam",
-    "LBFGSState",
-    "rlbfgs_step",
-    "run_rlbfgs",
-    "lbfgs_two_loop",
-    "line_search_armijo",
-    "run_warmstart_rlbfgs",
-    "inner_real",
-    "norm_tangent",
-    "scale_cores",
-    "add_cores",
-    "sub_cores",
+    "run_heisenberg",
+    "run_tfim",
+    "run_josephson",
 ]

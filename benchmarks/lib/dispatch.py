@@ -63,10 +63,16 @@ def run_implementation(impl_name, model, L, chi, max_sweeps=30, tol=1e-11,
 
     elif runner_name == "radam":
         from benchmarks.lib.runners.radam_runner import run
-        algo = impl.get("algorithm", "radam")
         result = run(
             model=model, L=L, chi=chi, max_sweeps=max_sweeps, tol=tol,
-            threads=threads, n_max=n_max, algorithm=algo, **kwargs,
+            threads=threads, n_max=n_max, **kwargs,
+        )
+
+    elif runner_name == "rlbfgs":
+        from benchmarks.lib.runners.rlbfgs_runner import run
+        result = run(
+            model=model, L=L, chi=chi, max_sweeps=max_sweeps, tol=tol,
+            threads=threads, n_max=n_max, **kwargs,
         )
 
     else:

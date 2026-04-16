@@ -65,7 +65,7 @@ def _apply_norm(L_N, R_N, A):
     return np.einsum("ak,kpb,cb->apc", L_N, A, R_N)
 
 
-def euclidean_gradient(X, H, *, return_energy: bool = True):
+def euclidean_gradient(X, H, *, return_energy: bool = True, return_envs: bool = False):
     """Return ``(gradient_cores, energy)`` (or just ``gradient_cores``).
 
     Parameters
@@ -77,6 +77,9 @@ def euclidean_gradient(X, H, *, return_energy: bool = True):
     return_energy : bool
         If True, also return the current Rayleigh-quotient energy as a
         real float.
+    return_envs : bool
+        If True, also return ``(L_N, R_N)`` (the norm environments).
+        These are needed by the metric-aware preconditioner.
 
     Returns
     -------
@@ -86,6 +89,8 @@ def euclidean_gradient(X, H, *, return_energy: bool = True):
         ``A_i*``.
     energy : float
         Current energy (only returned if ``return_energy`` is True).
+    envs : tuple
+        ``(L_N, R_N)`` (only returned if ``return_envs`` is True).
     """
     L = len(X)
     L_H = build_left_envs_H(X, H)
@@ -109,7 +114,56 @@ def euclidean_gradient(X, H, *, return_energy: bool = True):
         g = inv_xx * (h_times_A - E * n_times_A)
         grads.append(g)
 
+    out = (grads,)
     if return_energy:
-        return grads, E
-    return grads
+        out = out + (E,)
+    if return_envs:
+        out = out + ((L_N, R_N),)
+    if len(out) == 1:
+        return out[0]
+    return out
 
+
+def precondition_with_metric(grads, X, L_N, R_N, *, ridge: float = 1e-10):
+    """Apply the per-site Riemannian-metric preconditioner.
+
+    At a right-canonical MPS with centre at site 0, the manifold
+    metric on a tangent vector ``V_i`` (in the gauge-orthogonal
+    subspace at site ``i``) is
+
+        <V_i, V_i>_M = trace(V_i^H L_N[i] V_i R_N[i+1]^T)
+
+    The proper Riemannian gradient is therefore
+
+        G_i = L_N[i]^{-1} . eucl_grad_i . R_N[i+1]^{-T}
+
+    which we apply to make the L-BFGS Hessian estimate consistent with
+    the manifold metric.  For a numerically stable inverse we add a
+    small ridge ``ridge * trace(A) / dim`` to the diagonal of each
+    weight matrix.
+    """
+    out = []
+    for i, g in enumerate(grads):
+        chi_L, d, chi_R = g.shape
+        Ln = L_N[i]
+        Rn = R_N[i + 1]
+        # Ridge regularization so that nearly-rank-deficient weights
+        # do not blow up the preconditioned gradient.
+        if Ln.shape[0] > 0:
+            Ln_reg = Ln + ridge * np.eye(Ln.shape[0], dtype=Ln.dtype) * (
+                np.trace(Ln).real / max(Ln.shape[0], 1) + 1e-30
+            )
+            Ln_inv = np.linalg.inv(Ln_reg)
+        else:
+            Ln_inv = np.eye(0, dtype=Ln.dtype)
+        if Rn.shape[0] > 0:
+            Rn_reg = Rn + ridge * np.eye(Rn.shape[0], dtype=Rn.dtype) * (
+                np.trace(Rn).real / max(Rn.shape[0], 1) + 1e-30
+            )
+            Rn_inv_T = np.linalg.inv(Rn_reg).T
+        else:
+            Rn_inv_T = np.eye(0, dtype=Rn.dtype)
+        # g[chi_L, d, chi_R] -> (Ln_inv) [..., :, :] @ g @ Rn_inv^T
+        g_pre = np.einsum("ij,jpr,rs->ips", Ln_inv, g, Rn_inv_T)
+        out.append(g_pre)
+    return out

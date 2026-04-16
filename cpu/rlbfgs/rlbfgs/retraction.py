@@ -14,10 +14,19 @@ truncation is necessary since the addition does not enlarge any bond)
 and restores the right-canonical form with the orthogonality center at
 site 0.
 
-The final normalization step removes the radial drift in ``<X|X>``
-that would otherwise accumulate across iterations; the Rayleigh
-quotient ``<X|H|X>/<X|X>`` is invariant under scaling but without
-explicit normalization the norm walks, slowly rescaling the gradient.
+The final normalization step is essential for high-precision
+optimization: the Rayleigh quotient ``<X|H|X>/<X|X>`` is invariant
+under scaling, so the gradient at site 0 has no component in the
+radial direction at the analytic level, but tangent-space updates
+followed by retraction will accumulate numerical drift in ``<X|X>``
+that re-scales the gradient and, more importantly, corrupts the
+L-BFGS curvature pairs ``(s, y)`` across iterations.  Explicitly
+fixing ``<X|X> = 1`` after every retraction removes that drift.
+
+If you want to support an enlarging/truncating retraction (e.g., to
+run with a dynamic bond dimension), the formal rank-``2*chi`` TT
+addition followed by SVD compression would be plugged in here; it is
+not used by the default driver.
 """
 
 from __future__ import annotations

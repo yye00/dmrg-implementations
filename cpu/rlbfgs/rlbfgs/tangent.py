@@ -1,4 +1,4 @@
-"""Tangent-vector arithmetic helpers used by R-Adam and R-LBFGS.
+"""Tangent-vector arithmetic helpers for R-LBFGS on the TT manifold.
 
 Tangent vectors on the TT manifold are stored as **lists of numpy
 arrays** with the same shapes as the underlying MPS cores.  These
@@ -9,7 +9,7 @@ representation).
 Strictly speaking the manifold-induced metric at a right-canonical
 gauge has non-trivial weights from ``L_norm[i]`` at sites ``i >= 1``;
 however, the gauge-orthogonality of the tangent vectors (as enforced
-by :func:`radam.projection.project_right_canonical`) makes the
+by :func:`rlbfgs.projection.project_right_canonical`) makes the
 Euclidean choice a faithful and, in practice, well-conditioned proxy.
 
 All routines accept either real or complex dtype core lists.  Inner

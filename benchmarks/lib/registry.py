@@ -20,27 +20,26 @@ IMPLEMENTATIONS = {
         "algorithm": "dmrg1",
     },
 
-    # --- Riemannian Adam (not a DMRG variant) ---
+    # --- Riemannian Adam (first-order; not a DMRG variant) ---
     "radam": {
         "type": "cpu-serial",
         "description": "Riemannian Adam on TT manifold (CPU numpy); small-scale only",
         "supports_threads": True,
         "supports_np": False,
         "runner": "radam",
-        "algorithm": "radam",
     },
 
-    # --- Riemannian Adam warmup + R-LBFGS polish ---
-    "radam-warmstart": {
+    # --- Riemannian L-BFGS (quasi-Newton; warm-start driver) ---
+    "rlbfgs": {
         "type": "cpu-serial",
         "description": (
-            "R-Adam warmup -> R-LBFGS polish with metric preconditioning "
-            "(CPU numpy); small-scale, reaches < 1e-9 vs DMRG1"
+            "Riemannian L-BFGS (two-phase warmstart with metric "
+            "preconditioning) on TT manifold (CPU numpy); small-scale, "
+            "reaches ~1e-9 vs DMRG1"
         ),
         "supports_threads": True,
         "supports_np": False,
-        "runner": "radam",
-        "algorithm": "warmstart",
+        "runner": "rlbfgs",
     },
     "quimb-dmrg2": {
         "type": "cpu-serial",

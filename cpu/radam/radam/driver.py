@@ -13,7 +13,6 @@ from typing import Callable, List, Optional
 
 import numpy as np
 
-from .lbfgs import run_rlbfgs
 from .mps import random_mps
 from .mpo import build_heisenberg_mpo, build_tfim_mpo, build_josephson_mpo
 from .optimizer import RAdamState, radam_step
@@ -173,95 +172,3 @@ def run_josephson(
         L, E_J=E_J, E_C=E_C, mu=mu, n_max=n_max, phi_ext=phi_ext,
     )
     return run_radam(H, L=L, chi=chi, d=d, **kw)
-
-
-def run_warmstart_rlbfgs(
-    H,
-    L: int,
-    chi: int,
-    d: int = 2,
-    *,
-    # R-Adam warm-up parameters.
-    warmup_epochs: int = 200,
-    warmup_lr: float = 1e-2,
-    warmup_min_lr: float = 1e-4,
-    warmup_lr_schedule: Optional[str] = "cosine",
-    # R-LBFGS polish parameters.
-    polish_epochs: int = 1000,
-    polish_history: int = 20,
-    polish_tol: float = 1e-10,
-    polish_precondition: bool = False,
-    polish_ridge: float = 1e-10,
-    line_search_kwargs: Optional[dict] = None,
-    # Common.
-    seed: Optional[int] = 0,
-    log_every: int = 0,
-    dtype=np.complex128,
-):
-    """Two-stage optimizer: R-Adam warm-up followed by R-LBFGS polish.
-
-    The R-Adam stage is responsible for finding the right basin of
-    attraction (it is robust to a poor random initialization but only
-    converges geometrically on the Rayleigh-quotient).  Once close to
-    the minimum the R-LBFGS stage takes over and delivers
-    quasi-second-order convergence to high precision.
-
-    Returns a dict with the same keys as :func:`run_radam` plus
-    ``warmup_history`` and ``polish_history`` for diagnostics.
-    """
-    if len(H) != L:
-        raise ValueError(f"len(H)={len(H)} does not match L={L}")
-
-    if log_every > 0:
-        print(f"--- R-Adam warm-up: {warmup_epochs} epochs, lr={warmup_lr} ---")
-    warm = run_radam(
-        H,
-        L=L,
-        chi=chi,
-        d=d,
-        lr=warmup_lr,
-        max_epochs=warmup_epochs,
-        tol=0.0,                              # never stop early in warmup
-        lr_schedule=warmup_lr_schedule,
-        min_lr=warmup_min_lr,
-        seed=seed,
-        log_every=log_every,
-        dtype=dtype,
-    )
-
-    if log_every > 0:
-        print(
-            f"--- R-LBFGS polish: max {polish_epochs} epochs, "
-            f"history={polish_history}, tol={polish_tol} ---"
-        )
-    polish = run_rlbfgs(
-        H,
-        L=L,
-        chi=chi,
-        d=d,
-        initial_mps=warm["mps"],
-        history_size=polish_history,
-        max_epochs=polish_epochs,
-        tol=polish_tol,
-        seed=seed,
-        log_every=log_every,
-        line_search_kwargs=line_search_kwargs,
-        precondition=polish_precondition,
-        ridge=polish_ridge,
-        dtype=dtype,
-    )
-
-    return {
-        "mps": polish["mps"],
-        "energy": polish["energy"],
-        "grad_norm": polish["grad_norm"],
-        "epochs": warm["epochs"] + polish["epochs"],
-        "warmup_epochs": warm["epochs"],
-        "polish_epochs": polish["epochs"],
-        "warmup_history": warm["history"],
-        "polish_history": polish["history"],
-        "wall_time": warm["wall_time"] + polish["wall_time"],
-        "warmup_wall_time": warm["wall_time"],
-        "polish_wall_time": polish["wall_time"],
-        "converged": polish["converged"],
-    }

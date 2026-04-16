@@ -26,7 +26,6 @@ from .gradient import euclidean_gradient
 from .mps import mps_frob_norm_squared_cores, zeros_like_mps
 from .projection import project_right_canonical, transport_momentum
 from .retraction import retract_and_recanonicalize
-from .tangent import inner_real, norm_tangent  # noqa: F401  (public re-export)
 
 
 @dataclass

@@ -1,11 +1,11 @@
 """Riemannian L-BFGS optimizer for the fixed-rank TT / MPS manifold.
 
 This is a quasi-Newton optimizer with the standard L-BFGS two-loop
-recursion lifted to the TT manifold via vector transport.  The intended
-use mirrors the rationale at the top of :mod:`radam.optimizer`: get
-quasi-second-order convergence (matching DMRG's local-eigensolve
-convergence rate in the asymptotic regime) while still updating all
-cores simultaneously per iteration.
+recursion lifted to the TT manifold via vector transport.  Updates all
+MPS cores simultaneously per iteration (in contrast to DMRG's local
+sweep) and achieves quasi-second-order convergence once close to the
+minimum -- approaching the convergence rate of DMRG's local eigensolve
+while keeping the global-update pattern that saturates a GPU.
 
 Algorithm
 ---------
@@ -495,113 +495,3 @@ def rlbfgs_step(
     }
 
 
-def run_rlbfgs(
-    H,
-    L: int,
-    chi: int,
-    d: int = 2,
-    *,
-    initial_mps=None,
-    history_size: int = 10,
-    max_epochs: int = 500,
-    tol: float = 1e-10,
-    seed: Optional[int] = 0,
-    log_every: int = 0,
-    line_search: str = "wolfe",
-    line_search_kwargs: Optional[dict] = None,
-    callback: Optional[Callable[[int, dict], None]] = None,
-    precondition: bool = False,
-    ridge: float = 1e-10,
-    dtype=np.complex128,
-):
-    """Run R-LBFGS to convergence (or until ``max_epochs``).
-
-    Parameters
-    ----------
-    H : list of ndarray
-        MPO cores.
-    L, chi, d : int
-        Problem dimensions; used only when ``initial_mps`` is ``None``.
-    initial_mps : list of ndarray or None
-        Starting MPS.  If ``None``, a random right-canonical MPS is
-        used; otherwise the supplied MPS is right-canonicalized in
-        place.
-    history_size : int
-        L-BFGS memory ``m``.
-    max_epochs : int
-        Maximum R-LBFGS iterations.
-    tol : float
-        Convergence tolerance on Riemannian gradient norm.
-    seed : int or None
-        RNG seed for ``random_mps`` (only used if ``initial_mps``
-        is None).
-    log_every : int
-        Print every ``log_every`` iterations (0 disables logging).
-    line_search_kwargs : dict or None
-        Forwarded to :func:`line_search_armijo`.
-    callback : callable
-        Called as ``callback(epoch, info)`` after each iteration.
-
-    Returns
-    -------
-    dict
-        ``{"mps", "energy", "grad_norm", "epochs", "history",
-           "wall_time", "converged"}``.
-    """
-    import time
-
-    from .mps import random_mps, right_canonicalize
-
-    if initial_mps is None:
-        X = random_mps(L, chi, d=d, dtype=dtype, seed=seed)
-    else:
-        X = right_canonicalize([A.copy() for A in initial_mps])
-
-    state = LBFGSState(X=X, history_size=history_size)
-    history_log = []
-
-    t0 = time.perf_counter()
-    converged = False
-    for ep in range(1, max_epochs + 1):
-        info = rlbfgs_step(
-            state, H,
-            line_search=line_search,
-            line_search_kwargs=line_search_kwargs,
-            precondition=precondition,
-            ridge=ridge,
-        )
-        info["epoch"] = ep
-        history_log.append(info)
-        if callback is not None:
-            callback(ep, info)
-        if log_every > 0 and (ep == 1 or ep % log_every == 0):
-            print(
-                f"rlbfgs ep {ep:5d}  E={info['energy']: .12f}  "
-                f"||G||={info['grad_norm']:.3e}  alpha={info['step_size']:.2e}  "
-                f"|hist|={info['history_len']}"
-                + ("  [fallback]" if info["fallback_to_grad"] else "")
-                + ("  [ls-fail]" if info["ls_failed"] else "")
-            )
-        if info["grad_norm"] < tol:
-            converged = True
-            break
-
-    wall = time.perf_counter() - t0
-    final = history_log[-1]
-
-    if log_every > 0:
-        print(
-            f"rlbfgs done converged={converged} epochs={len(history_log)} "
-            f"E={final['energy']:.12f} ||G||={final['grad_norm']:.3e} "
-            f"wall={wall:.2f}s"
-        )
-
-    return {
-        "mps": state.X,
-        "energy": final["energy"],
-        "grad_norm": final["grad_norm"],
-        "epochs": len(history_log),
-        "history": history_log,
-        "wall_time": wall,
-        "converged": converged,
-    }
