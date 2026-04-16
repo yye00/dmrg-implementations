@@ -30,7 +30,9 @@ from .gradient import euclidean_gradient
 from .projection import project_right_canonical, transport_momentum
 from .retraction import retract_and_recanonicalize
 from .optimizer import RAdamState, radam_step
-from .driver import run_radam
+from .lbfgs import LBFGSState, rlbfgs_step, run_rlbfgs, lbfgs_two_loop, line_search_armijo
+from .driver import run_radam, run_warmstart_rlbfgs
+from .tangent import inner_real, norm_tangent, scale_cores, add_cores, sub_cores
 
 __all__ = [
     "random_mps",
@@ -54,4 +56,15 @@ __all__ = [
     "RAdamState",
     "radam_step",
     "run_radam",
+    "LBFGSState",
+    "rlbfgs_step",
+    "run_rlbfgs",
+    "lbfgs_two_loop",
+    "line_search_armijo",
+    "run_warmstart_rlbfgs",
+    "inner_real",
+    "norm_tangent",
+    "scale_cores",
+    "add_cores",
+    "sub_cores",
 ]

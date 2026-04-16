@@ -1,15 +1,26 @@
-# radam -- Riemannian Adam for MPS / Tensor Train (CPU, numpy)
+# radam -- Riemannian Adam **and Riemannian L-BFGS** for MPS / Tensor Train (CPU, numpy)
 
-A self-contained CPU + numpy implementation of the **Riemannian Adam**
-(R-Adam) optimizer applied to the fixed-rank Tensor Train (Matrix
-Product State) manifold, for finding ground states of 1D quantum
-Hamiltonians.  No `quimb`, no `torch`, no `jax` -- just `numpy`.
+A self-contained CPU + numpy implementation of two manifold optimizers
+on the fixed-rank Tensor Train (MPS) manifold:
 
-This is *not* a DMRG variant.  There is no local eigensolve, no
+* **R-Adam** -- first-order, momentum + scalar variance, simultaneous
+  all-core updates (the original prompt).
+* **R-LBFGS** -- quasi-second-order, two-loop recursion lifted to the
+  manifold via vector transport, with Strong-Wolfe line search,
+  cautious update, and a metric-preconditioning step that uses the
+  per-bond ``L_norm[i]`` weights to make the L-BFGS Hessian estimate
+  consistent with the manifold's induced metric.
+* **Warm-start** driver: short R-Adam warmup followed by
+  metric-preconditioned R-LBFGS polish.
+
+No `quimb`, no `torch`, no `jax` -- just `numpy`.
+
+These are *not* DMRG variants.  There is no local eigensolve, no
 two-site update, and no sweeping.  Every epoch computes the Euclidean
 gradient at every MPS core simultaneously, projects it onto the
-tangent space of the TT manifold, updates Adam momentum / variance,
-and retracts back to the manifold by re-canonicalization.
+tangent space of the TT manifold, updates either Adam moments
+(R-Adam) or the L-BFGS Hessian estimate from past gradient pairs
+(R-LBFGS), and retracts back to the manifold by re-canonicalization.
 
 
 ## Why Riemannian?
@@ -29,9 +40,9 @@ See the math write-up at the top of the source files
 `radam/optimizer.py`).
 
 
-## Algorithm
+## Algorithms
 
-Each R-Adam step performs:
+### R-Adam step
 
 1. **Euclidean gradient** `grad_i = dE / dA_i*` for every site, via
    left/right MPO and norm environments (`radam/gradient.py`).
@@ -47,10 +58,67 @@ Each R-Adam step performs:
 6. **Bias correction** (standard Adam).
 7. **Tangent step**
    `Delta_i = -lr * M_hat_i / (sqrt(v_hat) + eps)`.
-8. **Retraction**: `X <- right_canonicalize([A_i + Delta_i])`.
+8. **Retraction**: `X <- right_canonicalize([A_i + Delta_i]);
+   X[0] <- X[0] / sqrt(<X|X>)` (the explicit normalization at the end
+   prevents radial drift, which otherwise corrupts L-BFGS curvature
+   pairs across iterations).
 
 Convergence criterion: `sqrt(v_hat)` / Riemannian gradient norm below
 `tol`.
+
+### R-LBFGS step (with metric preconditioning)
+
+1. Compute the Euclidean gradient `grad_i = dE/dA_i*`.
+2. **Project** to the right-canonical tangent space:
+   ``g_phys = P_X(grad)``.
+3. **Precondition** with the manifold metric weights
+   ``L_norm[i]`` (left norm environments, computed alongside the
+   gradient).  Because ``L_norm[i]^{-1}`` preserves the gauge-orthogonal
+   condition ``V_i A_i^H = 0`` at sites ``i >= 1``, no second
+   projection is needed:
+   ``g = L_norm^{-1} . g_phys``.
+4. **Two-loop recursion** with on-the-fly vector transport (each
+   stored ``(s, y)`` pair is re-projected to the current tangent space
+   at the time of use).
+5. **Strong Wolfe line search** (Nocedal & Wright Algorithm 3.5/3.6).
+   The slope condition uses ``g_phys`` (not the preconditioned ``g``)
+   because that is what predicts ``dE/dalpha``.
+6. **Pair update** ``s = alpha * direction``,
+   ``y = g_new - P_{X_new}(g)`` with the **cautious** rule
+   (skip if ``<s, y> <= eps * ||s|| * ||y||``).
+
+The convergence criterion uses the un-preconditioned Riemannian
+gradient norm ``||g_phys||`` (the physical gradient).
+
+### Warm-start driver
+
+Short R-Adam warmup gets the state into a good basin of attraction;
+metric-preconditioned R-LBFGS then delivers quasi-second-order
+convergence to high precision.  See ``radam/driver.py::run_warmstart_rlbfgs``.
+
+## Convergence (CPU, numpy, single-threaded BLAS)
+
+Measured on this implementation against ``quimb`` single-site DMRG
+running on the same problem:
+
+| Problem                    | DMRG1 chi=20 (ref)       | warm-start R-LBFGS       | gap     | wall  |
+|----------------------------|--------------------------|--------------------------|---------|-------|
+| Heisenberg L=12 chi=20     | -5.142090632840526       | -5.142090628199          | 4.6e-9  | ~6 min |
+| Josephson  L=8  chi=20 d=5 | -2.84379784155192        | -2.84379784018189        | 1.4e-9  | ~25 min |
+
+The Josephson run uses ``polish_ridge=1e-4`` (the random
+initialization can have rank-deficient ``L_norm[i]``, so a generous
+ridge keeps the preconditioner stable) and 800 R-Adam warmup epochs
+followed by 1500 R-LBFGS polish epochs.  See
+``benchmarks/lib/runners/radam_runner.py::_DEFAULT_WARMSTART_HYPERPARAMS``
+for the exact parameters used by ``--impl radam-warmstart``.
+
+R-LBFGS is **substantially slower** than DMRG1 (DMRG1 reaches the
+same energy in ~2 seconds on the Josephson problem); this is a
+proof-of-concept that quasi-second-order convergence on the manifold
+is achievable with simultaneous all-core updates, *not* a claim of
+performance parity.  The motivation for the all-core update pattern
+is GPU saturation, not CPU competitiveness.
 
 
 ## Representation
@@ -82,28 +150,34 @@ convention above.
 
 ## Benchmark harness integration
 
-This package is registered as the `radam` implementation in
-`benchmarks/lib/registry.py` with a runner at
-`benchmarks/lib/runners/radam_runner.py`, so the standard
-`benchmarks/run.py` entry points work:
+Two implementations are registered in `benchmarks/lib/registry.py`,
+both routing through `benchmarks/lib/runners/radam_runner.py`:
+
+* `radam` -- plain Riemannian Adam.  Cheap per epoch, but not
+  competitive with DMRG on convergence.
+* `radam-warmstart` -- short R-Adam warmup followed by
+  metric-preconditioned R-LBFGS polish.  Reaches < 1e-9 of single-site
+  DMRG on the small grid.
 
 ```bash
-# List all implementations (radam appears):
+# List all implementations:
 python3 benchmarks/run.py list
 
-# Run the small-size validation (Heisenberg L=12 chi=20, Josephson L=8 chi=20):
+# Plain R-Adam (fast, loose):
 python3 benchmarks/run.py validate --impl radam
 
-# Run just one model:
-python3 benchmarks/run.py validate --impl radam --model heisenberg
+# Warm-start R-LBFGS (slow, tight: 1e-9-ish):
+python3 benchmarks/run.py validate --impl radam-warmstart
+
+# Both at once for head-to-head comparison:
+python3 benchmarks/run.py validate --impl quimb-dmrg1,radam,radam-warmstart
 ```
 
-**Small-scale proof-of-concept only.**  R-Adam is pure CPU numpy; the
+**Small-scale proof-of-concept only.**  This is pure CPU numpy; the
 challenge grid in `run_mi300x_challenge.py` (chi=64-512, L=50-500) is
-out of scope.  Per-model defaults in the runner (`lr`,
-`epochs_per_sweep`, `min_lr`) are tuned for the small problem sizes
-only; they will not give benchmark-grade convergence at larger sizes
-without re-tuning, and no GPU port exists.
+out of scope.  Per-model defaults in the runner are tuned for the
+small problem sizes only; they will not give benchmark-grade
+convergence at larger sizes without re-tuning, and no GPU port exists.
 
 
 ## Quickstart
@@ -145,15 +219,17 @@ result = run_heisenberg(
 | File | Purpose |
 | --- | --- |
 | `radam/mps.py`          | MPS init, canonical forms, norm, inner product |
-| `radam/mpo.py`          | Heisenberg / TFIM MPO builders |
+| `radam/mpo.py`          | Heisenberg / TFIM / Josephson MPO builders |
 | `radam/environments.py` | Left/right MPO and norm environments |
-| `radam/gradient.py`     | Euclidean gradient of Rayleigh quotient |
+| `radam/gradient.py`     | Euclidean gradient + metric preconditioner |
+| `radam/tangent.py`      | Tangent-vector arithmetic helpers |
 | `radam/projection.py`   | Tangent-space projection + vector transport |
-| `radam/retraction.py`   | Retraction (add delta + re-canonicalize) |
+| `radam/retraction.py`   | Retraction (add delta + re-canonicalize + normalize) |
 | `radam/optimizer.py`    | Per-step R-Adam update |
-| `radam/driver.py`       | Top-level loop, LR schedule, logging |
+| `radam/lbfgs.py`        | R-LBFGS step, two-loop, Strong Wolfe line search |
+| `radam/driver.py`       | Top-level loops, LR schedule, warm-start, logging |
 | `radam/__main__.py`     | `python -m radam ...` CLI |
-| `tests/`                | Unit + smoke tests |
+| `tests/`                | Unit + smoke tests (30 passing) |
 | `examples/`             | Standalone scripts |
 
 

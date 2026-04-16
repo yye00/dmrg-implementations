@@ -27,6 +27,20 @@ IMPLEMENTATIONS = {
         "supports_threads": True,
         "supports_np": False,
         "runner": "radam",
+        "algorithm": "radam",
+    },
+
+    # --- Riemannian Adam warmup + R-LBFGS polish ---
+    "radam-warmstart": {
+        "type": "cpu-serial",
+        "description": (
+            "R-Adam warmup -> R-LBFGS polish with metric preconditioning "
+            "(CPU numpy); small-scale, reaches < 1e-9 vs DMRG1"
+        ),
+        "supports_threads": True,
+        "supports_np": False,
+        "runner": "radam",
+        "algorithm": "warmstart",
     },
     "quimb-dmrg2": {
         "type": "cpu-serial",
