@@ -55,13 +55,25 @@ estimate consistent with the manifold's curvature.  Because
 
 Measured against `quimb` single-site DMRG at the same bond dim:
 
-| Problem                    | DMRG1 chi=20 (ref)  | R-LBFGS warmstart  | gap     |
-|----------------------------|---------------------|--------------------|---------|
-| Heisenberg L=12 chi=20     | -5.142090632840526  | -5.14209063...     | ~5e-9   |
-| Josephson  L=8  chi=20 d=5 | -2.84379784155192   | -2.84379784...     | ~1e-9   |
+| Problem                    | DMRG1 chi=20 (ref)  | R-LBFGS warmstart   | gap     | wall   |
+|----------------------------|---------------------|---------------------|---------|--------|
+| Heisenberg L=12 chi=20     | -5.142090632840526  | -5.142090628199     | 4.6e-9  | ~6 min |
+| Josephson  L=8  chi=20 d=5 | -2.84379784155192   | -2.84379784018189   | 1.4e-9  | ~32 min |
 
-R-LBFGS is **substantially slower than DMRG1 on CPU** (DMRG1 hits the
-same energy in ~2 s on Josephson; R-LBFGS takes minutes).  The
+These numbers use **R-Adam warmup + preconditioned R-LBFGS polish**,
+orchestrated by ``benchmarks/lib/runners/rlbfgs_runner.py``.  The
+``rlbfgs`` package by itself (no ``radam`` dependency) reaches
+~1e-7 on Josephson in the same budget -- the first-order R-Adam
+warmup is what squeezes out the final two orders of magnitude.
+
+Going below ~1e-9 on Josephson at chi=20 runs into the numerical
+noise floor of ``complex128`` arithmetic (the projected gradient
+saturates around ||G|| ~ 1e-5 even at the converged point).
+Higher-precision arithmetic or alternative gradient formulations
+would be needed to push further on CPU.
+
+R-LBFGS is **substantially slower than DMRG1 on CPU** (DMRG1 hits
+the same energy in ~2 s on Josephson; R-LBFGS takes ~30 min).  The
 motivation for the all-cores-simultaneous update pattern is GPU
 saturation, not CPU performance parity; this package is a CPU proof
 of concept that the convergence properties hold.
