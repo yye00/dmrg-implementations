@@ -1,0 +1,10 @@
+CMD: /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu/build/dmrg_gpu --ladder --L 100 --chi 128 --sweeps 10 --jleg 1.0 --jrung 1.0
+======================================
+Heisenberg 2-leg Ladder DMRG-GPU Test (float64)
+======================================
+  L_rungs=100 (2*L_rungs=200 spins), d=4, chi_max=128, D_mpo=8, sweeps=10
+  J_leg=1.0000, J_rung=1.0000
+======================================
+
+Final energy: -115.275387663285
+Total wall time: 29.042 s

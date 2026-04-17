@@ -1,0 +1,15 @@
+CMD: /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/build/pdmrg_gpu --ladder --L 100 --chi 128 --outer 6 --segments 4 --local 2 --warmup 2 --polish 0 --jleg 1.0 --jrung 1.0
+======================================
+PDMRG-GPU Heisenberg 2-leg Ladder Test (float64)
+======================================
+  L_rungs=100 (2*L_rungs=200 spins), d=4, chi_max=128, D_mpo=8
+  segments=4, outer=6, local=2, warmup=2, polish=0, recal=0
+  J_leg=1.0000, J_rung=1.0000
+  SVD: GPU (rocsolver)
+======================================
+
+[phase] warmup: 15.034 s (2 sweeps)
+Converged after 2 outer iterations!
+[phase] parallel: 61.031 s (2 outer × 2 local sweeps)
+Final energy: -115.275387664258
+Total wall time: 76.065 s (warmup=19.8% parallel=80.2% polish=0.0%)
