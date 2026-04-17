@@ -279,6 +279,86 @@ static inline void build_ladder_mpo(int L_rungs, double J_leg, double J_rung,
     }
 }
 
+// ============================================================================
+// J1-J2-J3 Heisenberg chain (real, d=2, D_mpo=20)
+// ============================================================================
+// H = J1 sum_i S_i . S_{i+1} + J2 sum_i S_i . S_{i+2} + J3 sum_i S_i . S_{i+3}
+//
+// Automaton states (columns on each bond):
+//   0       : waiting (identity channel)
+//   1,2,3   : NN S+, S-, Sz  (close at NEXT site)
+//   4,5,6   : NNN S+, S-, Sz (need 1 identity pass)
+//   7,8,9   : NNN S+, S-, Sz after 1 pass (close at THIS site)
+//   10,11,12: NNNN (r=3) S+, S-, Sz  (need 2 identity passes)
+//   13,14,15: NNNN S+, S-, Sz after 1 pass
+//   16,17,18: NNNN S+, S-, Sz after 2 passes (close at THIS site)
+//   19      : closed
+//
+// The natural frustrated regime is J2/J1 in [0.2, 0.7] with J3/J1 small.
+static inline void build_j1j2j3_mpo(int L, double J1, double J2, double J3,
+                                    std::vector<double*>& h_mpo_tensors) {
+    const int d = 2;
+    const int D = 20;
+
+    auto set_op = [&](double* W, int w, int wp, const double (&op)[4]) {
+        for (int s = 0; s < d; s++)
+            for (int sp = 0; sp < d; sp++)
+                W[w + s*D + sp*D*d + wp*D*d*d] = op[sp*d + s];
+    };
+
+    // Operator flat layout matches build_j1j2_mpo convention (see note above).
+    const double Sp[4] = {0, 1, 0, 0};
+    const double Sm[4] = {0, 0, 1, 0};
+    const double Sz[4] = {0.5, 0, 0, -0.5};
+    const double Id[4] = {1, 0, 0, 1};
+    const double J1_half_Sm[4] = {0, 0, 0.5*J1, 0};
+    const double J1_half_Sp[4] = {0, 0.5*J1, 0, 0};
+    const double J1_Sz[4]      = {0.5*J1, 0, 0, -0.5*J1};
+    const double J2_half_Sm[4] = {0, 0, 0.5*J2, 0};
+    const double J2_half_Sp[4] = {0, 0.5*J2, 0, 0};
+    const double J2_Sz[4]      = {0.5*J2, 0, 0, -0.5*J2};
+    const double J3_half_Sm[4] = {0, 0, 0.5*J3, 0};
+    const double J3_half_Sp[4] = {0, 0.5*J3, 0, 0};
+    const double J3_Sz[4]      = {0.5*J3, 0, 0, -0.5*J3};
+
+    for (int site = 0; site < L; site++) {
+        int size = D * d * d * D;
+        h_mpo_tensors[site] = new double[size]();
+        double* W = h_mpo_tensors[site];
+
+        if (site == 0) {
+            // Only row 0 reachable.
+            set_op(W, 0, 0,  Id);
+            set_op(W, 0, 1,  Sp);   set_op(W, 0, 2,  Sm);   set_op(W, 0, 3,  Sz);
+            set_op(W, 0, 4,  Sp);   set_op(W, 0, 5,  Sm);   set_op(W, 0, 6,  Sz);
+            set_op(W, 0, 10, Sp);   set_op(W, 0, 11, Sm);   set_op(W, 0, 12, Sz);
+        } else if (site == L - 1) {
+            // Only col D-1 reachable.
+            set_op(W, 1, 19, J1_half_Sm); set_op(W, 2, 19, J1_half_Sp); set_op(W, 3, 19, J1_Sz);
+            set_op(W, 7, 19, J2_half_Sm); set_op(W, 8, 19, J2_half_Sp); set_op(W, 9, 19, J2_Sz);
+            set_op(W, 16, 19, J3_half_Sm); set_op(W, 17, 19, J3_half_Sp); set_op(W, 18, 19, J3_Sz);
+            set_op(W, 19, 19, Id);
+        } else {
+            // Full bulk automaton.
+            set_op(W, 0, 0,  Id);
+            set_op(W, 0, 1,  Sp);   set_op(W, 0, 2,  Sm);   set_op(W, 0, 3,  Sz);
+            set_op(W, 0, 4,  Sp);   set_op(W, 0, 5,  Sm);   set_op(W, 0, 6,  Sz);
+            set_op(W, 0, 10, Sp);   set_op(W, 0, 11, Sm);   set_op(W, 0, 12, Sz);
+
+            set_op(W, 1, 19, J1_half_Sm); set_op(W, 2, 19, J1_half_Sp); set_op(W, 3, 19, J1_Sz);
+
+            set_op(W, 4, 7,  Id);   set_op(W, 5, 8,  Id);   set_op(W, 6, 9,  Id);
+            set_op(W, 7, 19, J2_half_Sm); set_op(W, 8, 19, J2_half_Sp); set_op(W, 9, 19, J2_Sz);
+
+            set_op(W, 10, 13, Id);  set_op(W, 11, 14, Id);  set_op(W, 12, 15, Id);
+            set_op(W, 13, 16, Id);  set_op(W, 14, 17, Id);  set_op(W, 15, 18, Id);
+            set_op(W, 16, 19, J3_half_Sm); set_op(W, 17, 19, J3_half_Sp); set_op(W, 18, 19, J3_Sz);
+
+            set_op(W, 19, 19, Id);
+        }
+    }
+}
+
 }  // namespace challenge_mpos
 
 #endif  // CHALLENGE_MPOS_H

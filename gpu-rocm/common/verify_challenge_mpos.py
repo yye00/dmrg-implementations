@@ -285,17 +285,130 @@ def verify_ladder(L_rungs: int, J_leg: float, J_rung: float, tol: float = 1e-10)
     assert abs(e0_direct - e0_mpo) < tol
 
 
+# ------------------------------------------------------------------
+# J1-J2-J3 Heisenberg
+# ------------------------------------------------------------------
+def build_j1j2j3_mpo_numpy(L: int, J1: float, J2: float, J3: float) -> list[np.ndarray]:
+    """Builds MPO matching challenge_mpos.h build_j1j2j3_mpo (D=20)."""
+    d = 2
+    D = 20
+    Sp_op, Sm_op, Sz_op, Id_op = Sp, Sm, Sz, Id2
+
+    def mk_bulk() -> np.ndarray:
+        W = np.zeros((D, d, d, D))
+        # row 0 starts everything
+        W[0, :, :, 0] = Id_op
+        # NN
+        W[0, :, :, 1] = Sp_op
+        W[0, :, :, 2] = Sm_op
+        W[0, :, :, 3] = Sz_op
+        # NNN
+        W[0, :, :, 4] = Sp_op
+        W[0, :, :, 5] = Sm_op
+        W[0, :, :, 6] = Sz_op
+        # NNNN
+        W[0, :, :, 10] = Sp_op
+        W[0, :, :, 11] = Sm_op
+        W[0, :, :, 12] = Sz_op
+        # NN close
+        W[1, :, :, 19] = 0.5 * J1 * Sm_op
+        W[2, :, :, 19] = 0.5 * J1 * Sp_op
+        W[3, :, :, 19] = J1 * Sz_op
+        # NNN pass + close
+        W[4, :, :, 7] = Id_op
+        W[5, :, :, 8] = Id_op
+        W[6, :, :, 9] = Id_op
+        W[7, :, :, 19] = 0.5 * J2 * Sm_op
+        W[8, :, :, 19] = 0.5 * J2 * Sp_op
+        W[9, :, :, 19] = J2 * Sz_op
+        # NNNN pass1 + pass2 + close
+        W[10, :, :, 13] = Id_op
+        W[11, :, :, 14] = Id_op
+        W[12, :, :, 15] = Id_op
+        W[13, :, :, 16] = Id_op
+        W[14, :, :, 17] = Id_op
+        W[15, :, :, 18] = Id_op
+        W[16, :, :, 19] = 0.5 * J3 * Sm_op
+        W[17, :, :, 19] = 0.5 * J3 * Sp_op
+        W[18, :, :, 19] = J3 * Sz_op
+        # accumulator
+        W[19, :, :, 19] = Id_op
+        return W
+
+    Ws: list[np.ndarray] = []
+    for site in range(L):
+        Wbulk = mk_bulk()
+        if site == 0:
+            W = np.zeros_like(Wbulk)
+            W[0, :, :, :] = Wbulk[0, :, :, :]
+        elif site == L - 1:
+            W = np.zeros_like(Wbulk)
+            W[:, :, :, D - 1] = Wbulk[:, :, :, D - 1]
+        else:
+            W = Wbulk
+        Ws.append(W)
+    return Ws
+
+
+def build_j1j2j3_hamiltonian_direct(L: int, J1: float, J2: float, J3: float) -> np.ndarray:
+    dim = 2 ** L
+
+    def single_site(op: np.ndarray, site: int) -> np.ndarray:
+        mats = [Id2] * L
+        mats[site] = op
+        out = mats[0]
+        for m in mats[1:]:
+            out = np.kron(out, m)
+        return out
+
+    def pair(op_a: np.ndarray, op_b: np.ndarray, i: int, j: int) -> np.ndarray:
+        return single_site(op_a, i) @ single_site(op_b, j)
+
+    H = np.zeros((dim, dim))
+    for i in range(L):
+        for (dr, J) in [(1, J1), (2, J2), (3, J3)]:
+            j = i + dr
+            if j < L:
+                H += 0.5 * J * pair(Sp, Sm, i, j)
+                H += 0.5 * J * pair(Sm, Sp, i, j)
+                H += J * pair(Sz, Sz, i, j)
+    return H
+
+
+def verify_j1j2j3(L: int, J1: float, J2: float, J3: float, tol: float = 1e-10) -> None:
+    H_direct = build_j1j2j3_hamiltonian_direct(L, J1, J2, J3)
+    Ws = build_j1j2j3_mpo_numpy(L, J1, J2, J3)
+    H_mpo = mpo_to_hamiltonian(Ws)
+    err = np.max(np.abs(H_direct - H_mpo))
+    e0_direct = float(np.linalg.eigvalsh(H_direct)[0])
+    e0_mpo = float(np.linalg.eigvalsh(H_mpo)[0])
+    print(f"  J1-J2-J3 L={L:2d} J1={J1:.2f} J2={J2:.2f} J3={J3:.2f}: "
+          f"|H_mpo - H_direct|_max = {err:.2e}  E0_direct = {e0_direct:.10f}  "
+          f"E0_mpo = {e0_mpo:.10f}")
+    assert err < tol, f"H mismatch {err}"
+    assert abs(e0_direct - e0_mpo) < tol
+
+
 if __name__ == "__main__":
     print("Verifying J1-J2 Heisenberg MPO ...")
     verify_j1j2(L=4, J1=1.0, J2=0.0)   # degenerates to Heisenberg
     verify_j1j2(L=4, J1=1.0, J2=0.5)   # frustrated (Majumdar-Ghosh nearby)
     verify_j1j2(L=6, J1=1.0, J2=0.5)
     verify_j1j2(L=8, J1=1.0, J2=0.5)
+    verify_j1j2(L=6, J1=1.0, J2=0.4)   # non-MG frustrated
+    verify_j1j2(L=8, J1=1.0, J2=0.4)
 
     print("Verifying 2-leg ladder MPO ...")
     verify_ladder(L_rungs=2, J_leg=1.0, J_rung=1.0)   # 4 spins: 2x2 ladder
     verify_ladder(L_rungs=3, J_leg=1.0, J_rung=1.0)
     verify_ladder(L_rungs=4, J_leg=1.0, J_rung=1.0)
     verify_ladder(L_rungs=3, J_leg=1.0, J_rung=2.0)   # rung-dominated
+
+    print("Verifying J1-J2-J3 Heisenberg MPO ...")
+    verify_j1j2j3(L=4, J1=1.0, J2=0.5, J3=0.0)  # degenerates to J1-J2
+    verify_j1j2j3(L=6, J1=1.0, J2=0.5, J3=0.0)
+    verify_j1j2j3(L=6, J1=1.0, J2=0.4, J3=0.2)
+    verify_j1j2j3(L=8, J1=1.0, J2=0.4, J3=0.2)
+    verify_j1j2j3(L=8, J1=1.0, J2=0.5, J3=0.25)
 
     print("All MPO checks passed.")

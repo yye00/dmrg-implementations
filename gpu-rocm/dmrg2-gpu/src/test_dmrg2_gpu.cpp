@@ -6,6 +6,7 @@
 #include <vector>
 #include <cstring>
 #include <string>
+#include <tuple>
 
 using Complex = hipDoubleComplex;
 
@@ -368,6 +369,55 @@ int test_j1j2(int L, int chi_max, int n_sweeps, double J1, double J2, bool quiet
 }
 
 // ============================================================================
+// J1-J2-J3 Heisenberg test (real, extended-range frustrated chain)
+// ============================================================================
+int test_j1j2j3(int L, int chi_max, int n_sweeps,
+                double J1, double J2, double J3, bool quiet) {
+    int d = 2;
+    int D_mpo = 20;
+
+    if (!quiet) {
+        printf("======================================\n");
+        printf("J1-J2-J3 Heisenberg DMRG2-GPU Test (float64)\n");
+        printf("======================================\n");
+        printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
+        printf("  J1=%.4f, J2=%.4f, J3=%.4f\n", J1, J2, J3);
+        printf("======================================\n\n");
+    }
+
+    std::map<std::tuple<int,double,double,double>, double> exact_energies = {
+        {std::make_tuple(6, 1.0, 0.4, 0.2), -2.3229239173},
+        {std::make_tuple(8, 1.0, 0.4, 0.2), -3.1205086380},
+        {std::make_tuple(8, 1.0, 0.5, 0.25), -3.0690408638},
+    };
+
+    DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    dmrg.set_quiet(quiet);
+    dmrg.initialize_mps_random();
+
+    std::vector<double*> h_mpo_tensors(L);
+    challenge_mpos::build_j1j2j3_mpo(L, J1, J2, J3, h_mpo_tensors);
+    dmrg.set_mpo(h_mpo_tensors);
+
+    double energy = dmrg.run(n_sweeps);
+
+    int ret = 0;
+    auto key = std::make_tuple(L, J1, J2, J3);
+    auto it = exact_energies.find(key);
+    if (!quiet && it != exact_energies.end()) {
+        double exact = it->second;
+        double error = std::abs(energy - exact);
+        printf("Exact energy: %.12f\n", exact);
+        printf("Absolute error: %.2e\n", error);
+        if (error < 1e-8) printf("PASS\n");
+        else { printf("FAIL\n"); ret = 1; }
+    }
+
+    for (auto ptr : h_mpo_tensors) delete[] ptr;
+    return ret;
+}
+
+// ============================================================================
 // Heisenberg 2-leg ladder test (real, d=4 supersite per rung)
 // ============================================================================
 int test_ladder(int L_rungs, int chi_max, int n_sweeps,
@@ -428,12 +478,13 @@ int main(int argc, char** argv) {
     bool run_josephson = false;
     bool run_tfim = false;
     bool run_j1j2 = false;
+    bool run_j1j2j3 = false;
     bool run_ladder = false;
     bool quiet = false;
     int n_max = 1;
     double E_J = 1.0, E_C = 0.5, phi_ext = M_PI / 4;
     double J_tfim = 1.0, h_field = 1.0;
-    double J1 = 1.0, J2 = 0.5;
+    double J1 = 1.0, J2 = 0.5, J3 = 0.25;
     double J_leg = 1.0, J_rung = 1.0;
 
     // Parse args
@@ -443,6 +494,7 @@ int main(int argc, char** argv) {
             if (std::string(argv[i]) == "--josephson") { run_josephson = true; continue; }
             if (std::string(argv[i]) == "--tfim") { run_tfim = true; continue; }
             if (std::string(argv[i]) == "--j1j2") { run_j1j2 = true; continue; }
+            if (std::string(argv[i]) == "--j1j2j3") { run_j1j2j3 = true; continue; }
             if (std::string(argv[i]) == "--ladder") { run_ladder = true; continue; }
             if (std::string(argv[i]) == "--quiet") { quiet = true; continue; }
             if (std::string(argv[i]) == "--hfield" && i+1 < argc) { h_field = std::atof(argv[++i]); continue; }
@@ -452,6 +504,7 @@ int main(int argc, char** argv) {
             if (std::string(argv[i]) == "--phi" && i+1 < argc) { phi_ext = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--j1" && i+1 < argc) { J1 = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--j2" && i+1 < argc) { J2 = std::atof(argv[++i]); continue; }
+            if (std::string(argv[i]) == "--j3" && i+1 < argc) { J3 = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--jleg" && i+1 < argc) { J_leg = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--jrung" && i+1 < argc) { J_rung = std::atof(argv[++i]); continue; }
             if (argv[i][0] == '-') continue;
@@ -469,6 +522,8 @@ int main(int argc, char** argv) {
             return test_tfim(L, chi_max, n_sweeps, J_tfim, h_field, quiet);
         } else if (run_j1j2) {
             return test_j1j2(L, chi_max, n_sweeps, J1, J2, quiet);
+        } else if (run_j1j2j3) {
+            return test_j1j2j3(L, chi_max, n_sweeps, J1, J2, J3, quiet);
         } else if (run_ladder) {
             return test_ladder(L, chi_max, n_sweeps, J_leg, J_rung, quiet);
         } else {
