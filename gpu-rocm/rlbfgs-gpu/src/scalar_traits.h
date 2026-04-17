@@ -40,6 +40,23 @@ extern "C" void zheev_(const char* jobz, const char* uplo, const int* n,
                        hipDoubleComplex* work, const int* lwork,
                        double* rwork, int* info);
 
+// QR factorization (for right-canonicalization on host)
+extern "C" void dgeqrf_(const int* m, const int* n, double* a, const int* lda,
+                        double* tau, double* work, const int* lwork, int* info);
+
+extern "C" void dorgqr_(const int* m, const int* n, const int* k,
+                        double* a, const int* lda, const double* tau,
+                        double* work, const int* lwork, int* info);
+
+extern "C" void zgeqrf_(const int* m, const int* n, hipDoubleComplex* a, const int* lda,
+                        hipDoubleComplex* tau, hipDoubleComplex* work,
+                        const int* lwork, int* info);
+
+extern "C" void zungqr_(const int* m, const int* n, const int* k,
+                        hipDoubleComplex* a, const int* lda,
+                        const hipDoubleComplex* tau, hipDoubleComplex* work,
+                        const int* lwork, int* info);
+
 template<typename T> struct ScalarTraits;
 
 // ============================================================================
