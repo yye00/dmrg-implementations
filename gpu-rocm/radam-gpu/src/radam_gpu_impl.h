@@ -344,10 +344,6 @@ void RAdamGPU<Scalar>::right_canonicalize_mps() {
         std::vector<Scalar> tau(min_mn);
         std::vector<Scalar> work(1);
         int lwork = -1, info = 0;
-        extern "C" void dgeqrf_(const int*, const int*, double*, const int*, double*, double*, const int*, int*);
-        extern "C" void dorgqr_(const int*, const int*, const int*, double*, const int*, double*, double*, const int*, int*);
-        extern "C" void zgeqrf_(const int*, const int*, hipDoubleComplex*, const int*, hipDoubleComplex*, hipDoubleComplex*, const int*, int*);
-        extern "C" void zungqr_(const int*, const int*, const int*, hipDoubleComplex*, const int*, hipDoubleComplex*, hipDoubleComplex*, const int*, int*);
 
         // Workspace query
         if constexpr (Traits::is_complex) {
