@@ -319,23 +319,17 @@ void RAdamGPU<Scalar>::right_canonicalize_mps() {
         HIP_CHECK(hipMemcpy(h_A.data(), d_mps_[i],
                             (size_t)rows * cols * sizeof(Scalar), hipMemcpyDeviceToHost));
 
-        // Re-lay to column-major view (chi_L, d*chi_R) — storage already matches.
-        // We want Q with row-orthonormal rows: flatten A as (chi_L × d*chi_R), then
-        //   A^T (shape (d*chi_R) × chi_L) QR'd → Q: (d*chi_R × chi_L), R: (chi_L × chi_L).
-        //   The row-orthonormal A_new is Q^H, i.e., conj-transpose of Q, with same shape.
-        // Simpler: use cgesqrf on A^T, then take the "R^H" for the neighbor and Q^H for site.
-        //
-        // Concrete steps (host LAPACK geqrf/orgqr on double/complex):
-        // Build M = A.conj().T (shape (cols × rows)) in column-major.
+        // A is stored col-major (rows × cols) = (chi_L × d*chi_R):
+        //   h_A[a + p*rows] = A[a, p]     for a ∈ [0, rows), p ∈ [0, cols).
+        // Build M = A^H, col-major (cols × rows):
+        //   h_M[p + a*cols] = conj(A[a, p]) = conj(h_A[a + p*rows]).
         std::vector<Scalar> h_M((size_t)cols * rows);
-        if constexpr (Traits::is_complex) {
-            for (int j = 0; j < cols; j++)
-                for (int k = 0; k < rows; k++)
-                    h_M[k * cols + j] = hipConj(h_A[k * cols + j]);
-        } else {
-            for (int j = 0; j < cols; j++)
-                for (int k = 0; k < rows; k++)
-                    h_M[k * cols + j] = h_A[k * cols + j];
+        for (int a = 0; a < rows; a++) {
+            for (int p = 0; p < cols; p++) {
+                Scalar v = h_A[a + (size_t)p * rows];
+                if constexpr (Traits::is_complex) v = hipConj(v);
+                h_M[p + (size_t)a * cols] = v;
+            }
         }
 
         // geqrf expects column-major. M is (cols × rows), col-major lda=cols.
@@ -406,21 +400,19 @@ void RAdamGPU<Scalar>::right_canonicalize_mps() {
         // Form R^H (conj-transpose of R) and absorb into left neighbour's right bond.
         // R is (min_mn × n_qr), we need R^H of shape (n_qr × min_mn) = (chi_L_old × new_chi_L).
         std::vector<Scalar> h_RH((size_t)n_qr * min_mn);
-        if constexpr (Traits::is_complex) {
-            for (int j = 0; j < min_mn; j++)
-                for (int k = 0; k < n_qr; k++)
-                    h_RH[k + j * n_qr] = hipConj(h_R[j + k * min_mn]);
-        } else {
-            for (int j = 0; j < min_mn; j++)
-                for (int k = 0; k < n_qr; k++)
-                    h_RH[k + j * n_qr] = h_R[j + k * min_mn];
+        for (int i_row = 0; i_row < min_mn; i_row++) {
+            for (int k = 0; k < n_qr; k++) {
+                Scalar v = h_R[i_row + (size_t)k * min_mn];
+                if constexpr (Traits::is_complex) v = hipConj(v);
+                h_RH[k + (size_t)i_row * n_qr] = v;
+            }
         }
 
         // Contract R^H into left-neighbour's right bond:
         //   B_new[l, p, k] = sum_s B_old[l, p, s] * RH[s, k],  where B_old shape (cL_prev, d, chi_L_old)
         // Copy B_old to host, contract, copy back.
         int cL_prev = chi_L(i - 1);
-        int cR_old  = chi_L(i);   // old bond = n_qr = chi_L_old
+        int cR_old  = n_qr;   // old chi_L of site i, before we overwrote bond_dims_[i] above
         int B_old_sz = cL_prev * d_ * cR_old;
         std::vector<Scalar> h_B_old(B_old_sz);
         HIP_CHECK(hipMemcpy(h_B_old.data(), d_mps_[i - 1], B_old_sz * sizeof(Scalar), hipMemcpyDeviceToHost));
