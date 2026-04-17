@@ -1244,6 +1244,31 @@ double RAdamGPU<Scalar>::run(const Config& cfg) {
     }
 
     // 2) R-Adam loop
+    // Pre-loop: if warmup already converged to grad_tol, skip Adam entirely.
+    // This prevents Adam from perturbing an already-minimum state via its
+    // adaptive step |G|/(sqrt(v)+eps), which does not vanish as |G|→0.
+    {
+        build_initial_H_envs();
+        build_all_L_N_envs();
+        double E0 = compute_all_gradients();
+        tangent_project_inplace();
+        double g0 = std::sqrt(grad_frobenius_norm_sq());
+        if (cfg.verbose) {
+            std::cout << "[pre-Adam] E=" << std::fixed << std::setprecision(12) << E0
+                      << "  |g|=" << std::scientific << std::setprecision(3) << g0
+                      << std::endl;
+        }
+        if (g0 < cfg.grad_tol) {
+            if (cfg.verbose) {
+                std::cout << "[skip Adam] |g| < " << cfg.grad_tol
+                          << " — warmup already converged" << std::endl;
+            }
+            energy_ = E0;
+            n_epochs_done_ = 0;
+            return energy_;
+        }
+    }
+
     // Zero momentum at start.
     for (int i = 0; i < L_; i++) {
         int sz = chi_L(i) * d_ * chi_R(i);
