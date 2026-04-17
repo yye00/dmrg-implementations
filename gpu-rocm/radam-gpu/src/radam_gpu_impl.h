@@ -1289,6 +1289,21 @@ double RAdamGPU<Scalar>::run(const Config& cfg) {
         double E = compute_all_gradients();
         // 2b) Project to tangent space
         tangent_project_inplace();
+        // 2b') Early convergence check BEFORE taking Adam step.
+        // If we are already below grad_tol, further stepping (with Adam's
+        // adaptive |G|/sqrt(v) scaling) would only perturb a converged state.
+        double pre_gnorm = std::sqrt(grad_frobenius_norm_sq());
+        if (pre_gnorm < cfg.grad_tol) {
+            if (cfg.verbose) {
+                std::cout << "[converged at step " << step << " (pre-step)] "
+                          << "E=" << std::fixed << std::setprecision(12) << E
+                          << "  |g|=" << std::scientific << std::setprecision(3)
+                          << pre_gnorm << std::endl;
+            }
+            n_epochs_done_ = step - 1;
+            energy_ = E;
+            break;
+        }
         // 2c) Adam update: overwrites d_grad_ with Delta; updates d_M_
         double gnorm;
         adam_update(step, lr, cfg.beta1, cfg.beta2, cfg.eps, v_state, gnorm);

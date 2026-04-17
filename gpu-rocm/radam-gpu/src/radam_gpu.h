@@ -31,7 +31,8 @@ public:
         double beta1 = 0.9;
         double beta2 = 0.999;
         double eps = 1e-8;
-        double grad_tol = 1e-9;
+        double grad_tol = 1e-8;      // Adam's |G|/sqrt(v) step doesn't vanish with |G|;
+                                     // polishing below ~1e-8 without line search perturbs state.
         double energy_tol = 1e-12;
         bool cosine_lr = false;
         bool verbose = true;
