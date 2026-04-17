@@ -775,11 +775,13 @@ void RAdamGPU<Scalar>::apply_norm(int site, const Scalar* d_in, Scalar* d_out) {
 
 template<typename Scalar>
 double RAdamGPU<Scalar>::compute_energy_from_envs() {
-    // <X|H|X> lives in d_L_H_[L] (shape 1×D_mpo×1; the final state has chi=1 at boundary).
-    // <X|X>    lives in d_L_N_[L] (1×1 scalar).
-    // After chaining, both envs are single-scalar tensors at index L.
+    // L_H_[L] has layout (chi_L=1, D_mpo, chi_R=1) col-major → D_mpo entries at offsets 0..D_mpo-1.
+    // The right boundary vector selects channel D_mpo-1 (the "final" MPO row of the chain),
+    // yielding the scalar <X|H|X>.
+    // L_N_[L] is 1×1 → single scalar <X|X>.
     Scalar h_xhx, h_xx;
-    HIP_CHECK(hipMemcpy(&h_xhx, d_L_H_[L_], sizeof(Scalar), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(&h_xhx, d_L_H_[L_] + (size_t)(D_mpo_ - 1), sizeof(Scalar),
+                        hipMemcpyDeviceToHost));
     HIP_CHECK(hipMemcpy(&h_xx,  d_L_N_[L_], sizeof(Scalar), hipMemcpyDeviceToHost));
     double xhx = Traits::real_part(h_xhx);
     double xx  = Traits::real_part(h_xx);
