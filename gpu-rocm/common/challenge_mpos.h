@@ -58,17 +58,24 @@ static inline void build_j1j2_mpo(int L, double J1, double J2,
                 W[w + s*D + sp*D*d + wp*D*d*d] = op[sp*d + s];
     };
 
-    // Operator matrices (stored as op[sp*d + s], i.e. column-major 2x2).
-    const double Sp[4] = {0, 1, 0, 0};   // S+ : |0><1|
-    const double Sm[4] = {0, 0, 1, 0};   // S- : |1><0|
+    // Operator matrices in column-major flat layout: op[sp*d + s].
+    // NOTE: The existing GPU-native MPOs (Heisenberg/TFIM/Josephson) use names
+    // "Sp"/"Sm" but the flat data represents swapped operators in a
+    // {0=up, 1=dn} basis — the variable named Sp actually stores |1><0| (S-)
+    // and Sm stores |0><1| (S+).  This is a benign Sy-gauge equivalence for
+    // Heisenberg NN, but we must keep the SAME data layout for J1-J2 so the
+    // MPO closers match (Sp-opens-paired-with-Sm-closes).
+    const double Sp[4] = {0, 1, 0, 0};
+    const double Sm[4] = {0, 0, 1, 0};
     const double Sz[4] = {0.5, 0, 0, -0.5};
     const double Id[4] = {1, 0, 0, 1};
-    const double J1_half_Sm[4] = {0, 0.5*J1, 0, 0};
-    const double J1_half_Sp[4] = {0, 0, 0.5*J1, 0};
-    const double J1_Sz[4]     = {0.5*J1, 0, 0, -0.5*J1};
-    const double J2_half_Sm[4] = {0, 0.5*J2, 0, 0};
-    const double J2_half_Sp[4] = {0, 0, 0.5*J2, 0};
-    const double J2_Sz[4]     = {0.5*J2, 0, 0, -0.5*J2};
+    // Scaled closers: same flat layout as the "Sm"/"Sp" variables above.
+    const double J1_half_Sm[4] = {0, 0, 0.5*J1, 0};
+    const double J1_half_Sp[4] = {0, 0.5*J1, 0, 0};
+    const double J1_Sz[4]      = {0.5*J1, 0, 0, -0.5*J1};
+    const double J2_half_Sm[4] = {0, 0, 0.5*J2, 0};
+    const double J2_half_Sp[4] = {0, 0.5*J2, 0, 0};
+    const double J2_Sz[4]      = {0.5*J2, 0, 0, -0.5*J2};
 
     for (int site = 0; site < L; site++) {
         int size = D * d * d * D;
