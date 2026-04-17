@@ -1,0 +1,10 @@
+CMD: /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg2-gpu/build/dmrg2_gpu --j1j2 --L 100 --chi 128 --sweeps 5 --j1 1.0 --j2 0.7
+======================================
+J1-J2 Heisenberg DMRG2-GPU Test (float64)
+======================================
+  L=100, d=2, chi_max=128, D_mpo=11, sweeps=5
+  J1=1.0000, J2=0.7000
+======================================
+
+Final energy: -39.666801292498
+Total wall time: 57.142 s

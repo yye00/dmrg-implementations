@@ -1,0 +1,15 @@
+CMD: /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/build/pdmrg_gpu --j1j2j3 --L 100 --chi 64 --outer 10 --segments 4 --local 2 --warmup 2 --polish 0 --j1 1.0 --j2 0.4 --j3 0.2
+======================================
+PDMRG-GPU J1-J2-J3 Heisenberg Test (float64)
+======================================
+  L=100, d=2, chi_max=64, D_mpo=20
+  segments=4, outer=10, local=2, warmup=2, polish=0, recal=0
+  J1=1.0000, J2=0.4000, J3=0.2000
+  SVD: GPU (rocsolver)
+======================================
+
+[phase] warmup: 6.622 s (2 sweeps)
+Converged after 6 outer iterations!
+[phase] parallel: 24.834 s (6 outer × 2 local sweeps)
+Final energy: -40.036903557211
+Total wall time: 31.456 s (warmup=21.1% parallel=78.9% polish=0.0%)
