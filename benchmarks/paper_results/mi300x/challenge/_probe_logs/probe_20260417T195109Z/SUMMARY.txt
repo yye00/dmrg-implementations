@@ -1,0 +1,4 @@
+=== Probe started Fri Apr 17 07:51:09 PM UTC 2026 ===
+  heisenberg L=50 chi=128 rep=1 elapsed=13.558s
+  heisenberg L=50 chi=128 rep=2 elapsed=13.586s
+  heisenberg L=50 chi=128 rep=3 elapsed=13.504s

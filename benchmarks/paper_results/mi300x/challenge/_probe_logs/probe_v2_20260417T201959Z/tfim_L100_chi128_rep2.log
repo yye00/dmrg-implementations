@@ -1,0 +1,16 @@
+======================================
+PDMRG-GPU TFIM Test (float64)
+======================================
+  L=100, d=2, chi_max=128, D_mpo=3
+  segments=2, outer=20, local=2, warmup=3, polish=10, recal=0
+  J=1.0000, h=1.0000
+  SVD: GPU (rocsolver)
+======================================
+
+[phase] warmup: 29.876 s (3 sweeps)
+Converged after 1 outer iterations!
+[phase] parallel: 17.890 s (1 outer × 2 local sweeps)
+[phase] polish: 20.040 s (10 sweeps)
+Final energy: -126.959294083183
+Total wall time: 67.805 s (warmup=44.1% parallel=26.4% polish=29.6%)
+Energy per site: -1.269592940832

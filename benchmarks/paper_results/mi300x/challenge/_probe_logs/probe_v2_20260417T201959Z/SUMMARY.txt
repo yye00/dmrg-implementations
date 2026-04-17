@@ -1,0 +1,15 @@
+=== Probe v2 started Fri Apr 17 08:19:59 PM UTC 2026 ===
+PDMRG_FORCE_POLISH=1 (polish runs even when outer converged)
+--- heisenberg L=50 chi=128 ---
+  rep=1 total=18.683s  warmup=6.899s parallel=5.936s polish=5.064s
+  rep=2 total=18.653s  warmup=6.880s parallel=5.894s polish=5.099s
+--- heisenberg L=100 chi=128 ---
+  rep=1 total=59.272s  warmup=17.335s parallel=26.775s polish=14.336s
+  rep=2 total=56.525s  warmup=14.808s parallel=26.457s polish=14.430s
+--- tfim L=50 chi=128 ---
+  rep=1 total=23.524s  warmup=9.730s parallel=7.567s polish=5.432s
+  rep=2 total=22.493s  warmup=9.776s parallel=6.715s polish=5.217s
+--- tfim L=100 chi=128 ---
+  rep=1 total=69.161s  warmup=28.887s parallel=18.215s polish=21.229s
+  rep=2 total=68.644s  warmup=29.876s parallel=17.890s polish=20.040s
+=== Probe v2 done Fri Apr 17 08:25:36 PM UTC 2026 ===

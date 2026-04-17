@@ -1,0 +1,14 @@
+======================================
+PDMRG-GPU Heisenberg Test (float64)
+======================================
+  L=100, d=2, chi_max=128, D_mpo=5
+  segments=2, outer=20, local=2, warmup=3, polish=10, recal=0
+  SVD: GPU (rocsolver)
+======================================
+
+[phase] warmup: 14.808 s (3 sweeps)
+Converged after 2 outer iterations!
+[phase] parallel: 26.457 s (2 outer × 2 local sweeps)
+[phase] polish: 14.430 s (10 sweeps)
+Final energy: -44.127566104795
+Total wall time: 55.695 s (warmup=26.6% parallel=47.5% polish=25.9%)
