@@ -1,9 +1,11 @@
 #include "dmrg2_gpu.h"
+#include "challenge_mpos.h"
 #include <iostream>
 #include <map>
 #include <cmath>
 #include <vector>
 #include <cstring>
+#include <string>
 
 using Complex = hipDoubleComplex;
 
@@ -321,6 +323,102 @@ int test_josephson(int L, int chi_max, int n_sweeps,
 }
 
 // ============================================================================
+// J1-J2 Heisenberg test (real, frustrated chain)
+// ============================================================================
+int test_j1j2(int L, int chi_max, int n_sweeps, double J1, double J2, bool quiet) {
+    int d = 2;
+    int D_mpo = 11;
+
+    if (!quiet) {
+        printf("======================================\n");
+        printf("J1-J2 Heisenberg DMRG2-GPU Test (float64)\n");
+        printf("======================================\n");
+        printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
+        printf("  J1=%.4f, J2=%.4f\n", J1, J2);
+        printf("======================================\n\n");
+    }
+
+    std::map<int, double> exact_energies;
+    if (std::abs(J1 - 1.0) < 1e-12 && std::abs(J2 - 0.5) < 1e-12) {
+        exact_energies = { {4, -1.5}, {6, -2.25}, {8, -3.0} };
+    }
+
+    DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    dmrg.set_quiet(quiet);
+    dmrg.initialize_mps_random();
+
+    std::vector<double*> h_mpo_tensors(L);
+    challenge_mpos::build_j1j2_mpo(L, J1, J2, h_mpo_tensors);
+    dmrg.set_mpo(h_mpo_tensors);
+
+    double energy = dmrg.run(n_sweeps);
+
+    int ret = 0;
+    if (!quiet && exact_energies.count(L) > 0) {
+        double exact = exact_energies[L];
+        double error = std::abs(energy - exact);
+        printf("Exact energy: %.12f\n", exact);
+        printf("Absolute error: %.2e\n", error);
+        if (error < 1e-8) printf("PASS\n");
+        else { printf("FAIL\n"); ret = 1; }
+    }
+
+    for (auto ptr : h_mpo_tensors) delete[] ptr;
+    return ret;
+}
+
+// ============================================================================
+// Heisenberg 2-leg ladder test (real, d=4 supersite per rung)
+// ============================================================================
+int test_ladder(int L_rungs, int chi_max, int n_sweeps,
+                double J_leg, double J_rung, bool quiet) {
+    int d = 4;
+    int D_mpo = 8;
+
+    if (!quiet) {
+        printf("======================================\n");
+        printf("Heisenberg 2-leg Ladder DMRG2-GPU Test (float64)\n");
+        printf("======================================\n");
+        printf("  L_rungs=%d (2*L_rungs=%d spins), d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n",
+               L_rungs, 2*L_rungs, d, chi_max, D_mpo, n_sweeps);
+        printf("  J_leg=%.4f, J_rung=%.4f\n", J_leg, J_rung);
+        printf("======================================\n\n");
+    }
+
+    std::map<int, double> exact_energies;
+    if (std::abs(J_leg - 1.0) < 1e-12 && std::abs(J_rung - 1.0) < 1e-12) {
+        exact_energies = {
+            {2, -2.0},
+            {3, -3.1293852415718166},
+            {4, -4.2930664566945656},
+        };
+    }
+
+    DMRG2GPU<double> dmrg(L_rungs, d, chi_max, D_mpo, 1e-12);
+    dmrg.set_quiet(quiet);
+    dmrg.initialize_mps_random();
+
+    std::vector<double*> h_mpo_tensors(L_rungs);
+    challenge_mpos::build_ladder_mpo(L_rungs, J_leg, J_rung, h_mpo_tensors);
+    dmrg.set_mpo(h_mpo_tensors);
+
+    double energy = dmrg.run(n_sweeps);
+
+    int ret = 0;
+    if (!quiet && exact_energies.count(L_rungs) > 0) {
+        double exact = exact_energies[L_rungs];
+        double error = std::abs(energy - exact);
+        printf("Exact energy: %.12f\n", exact);
+        printf("Absolute error: %.2e\n", error);
+        if (error < 1e-8) printf("PASS\n");
+        else { printf("FAIL\n"); ret = 1; }
+    }
+
+    for (auto ptr : h_mpo_tensors) delete[] ptr;
+    return ret;
+}
+
+// ============================================================================
 // Main
 // ============================================================================
 int main(int argc, char** argv) {
@@ -329,10 +427,14 @@ int main(int argc, char** argv) {
     int n_sweeps = 30;
     bool run_josephson = false;
     bool run_tfim = false;
+    bool run_j1j2 = false;
+    bool run_ladder = false;
     bool quiet = false;
     int n_max = 1;
     double E_J = 1.0, E_C = 0.5, phi_ext = M_PI / 4;
     double J_tfim = 1.0, h_field = 1.0;
+    double J1 = 1.0, J2 = 0.5;
+    double J_leg = 1.0, J_rung = 1.0;
 
     // Parse args
     {
@@ -340,12 +442,18 @@ int main(int argc, char** argv) {
         for (int i = 1; i < argc; i++) {
             if (std::string(argv[i]) == "--josephson") { run_josephson = true; continue; }
             if (std::string(argv[i]) == "--tfim") { run_tfim = true; continue; }
+            if (std::string(argv[i]) == "--j1j2") { run_j1j2 = true; continue; }
+            if (std::string(argv[i]) == "--ladder") { run_ladder = true; continue; }
             if (std::string(argv[i]) == "--quiet") { quiet = true; continue; }
             if (std::string(argv[i]) == "--hfield" && i+1 < argc) { h_field = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--nmax" && i+1 < argc) { n_max = std::atoi(argv[++i]); continue; }
             if (std::string(argv[i]) == "--ej" && i+1 < argc) { E_J = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--ec" && i+1 < argc) { E_C = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--phi" && i+1 < argc) { phi_ext = std::atof(argv[++i]); continue; }
+            if (std::string(argv[i]) == "--j1" && i+1 < argc) { J1 = std::atof(argv[++i]); continue; }
+            if (std::string(argv[i]) == "--j2" && i+1 < argc) { J2 = std::atof(argv[++i]); continue; }
+            if (std::string(argv[i]) == "--jleg" && i+1 < argc) { J_leg = std::atof(argv[++i]); continue; }
+            if (std::string(argv[i]) == "--jrung" && i+1 < argc) { J_rung = std::atof(argv[++i]); continue; }
             if (argv[i][0] == '-') continue;
             if (pos == 0) L = std::atoi(argv[i]);
             else if (pos == 1) chi_max = std::atoi(argv[i]);
@@ -359,6 +467,10 @@ int main(int argc, char** argv) {
             return test_josephson(L, chi_max, n_sweeps, n_max, E_J, E_C, phi_ext, quiet);
         } else if (run_tfim) {
             return test_tfim(L, chi_max, n_sweeps, J_tfim, h_field, quiet);
+        } else if (run_j1j2) {
+            return test_j1j2(L, chi_max, n_sweeps, J1, J2, quiet);
+        } else if (run_ladder) {
+            return test_ladder(L, chi_max, n_sweeps, J_leg, J_rung, quiet);
         } else {
             return test_heisenberg(L, chi_max, n_sweeps, quiet);
         }
