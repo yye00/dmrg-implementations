@@ -242,6 +242,17 @@ private:
     std::vector<Scalar> h_svd_U_, h_svd_Vh_, h_svd_tmp_;
     std::vector<RealType> h_svd_S_;
 
+    // Randomized SVD workspace (allocated only when opts_.rsvd is on).
+    // All sized at worst-case shapes derived from (chi_max, d) and the
+    // fixed oversampling constant.
+    static constexpr int RSVD_OVERSAMPLE_ = 10;
+    Scalar* d_rsvd_omega_   = nullptr;   // (n_svd x r) Gaussian test matrix
+    Scalar* d_rsvd_Y_       = nullptr;   // (m x r), overwritten with Q by geqrf+orgqr
+    Scalar* d_rsvd_tau_     = nullptr;   // Householder scalars for geqrf/orgqr
+    Scalar* d_rsvd_B_       = nullptr;   // (r x n_svd) = Q^H A
+    Scalar* d_rsvd_U_small_ = nullptr;   // (r x r) left singular vectors of B
+    int     rsvd_r_max_     = 0;
+
     // Ablation flags + phase timers
     GpuOpts opts_;
     PhaseTimer t_lanczos_;      // full lanczos_eigensolver call

@@ -280,9 +280,29 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
 
     // Host workspace for SVD results (copied back from GPU)
     h_svd_U_.resize(svd_max_dim * chi_max_);
-    h_svd_S_.resize(chi_max_);
+    // S and E sized to accommodate the small-SVD output inside RSVD, which
+    // can produce up to r = chi_max + OVERSAMPLE singular values.
+    int s_alloc = chi_max_ + (opts_.rsvd ? RSVD_OVERSAMPLE_ : 0);
+    h_svd_S_.resize(s_alloc);
     h_svd_Vh_.resize(chi_max_ * svd_max_dim);
     h_svd_tmp_.resize(svd_max_dim * chi_max_);
+
+    if (opts_.rsvd) {
+        // Resize device S and E buffers to fit up to chi_max + oversample.
+        HIP_CHECK(hipFree(d_svd_S_));
+        HIP_CHECK(hipFree(d_svd_E_));
+        HIP_CHECK(hipMalloc(&d_svd_S_, s_alloc * sizeof(RealType)));
+        HIP_CHECK(hipMalloc(&d_svd_E_, s_alloc * sizeof(RealType)));
+
+        rsvd_r_max_ = chi_max_ + RSVD_OVERSAMPLE_;
+        int n_max = svd_max_dim;  // chi_max * d, the max n_svd dimension
+        int m_max = svd_max_dim;  // same bound for m
+        HIP_CHECK(hipMalloc(&d_rsvd_omega_,   (size_t)n_max * rsvd_r_max_ * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_Y_,       (size_t)m_max * rsvd_r_max_ * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_tau_,     (size_t)rsvd_r_max_ * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_B_,       (size_t)rsvd_r_max_ * n_max * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_U_small_, (size_t)rsvd_r_max_ * rsvd_r_max_ * sizeof(Scalar)));
+    }
 }
 
 // ============================================================================
@@ -342,6 +362,12 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
     if (d_svd_work_) hipFree(d_svd_work_);
     if (d_svdj_residual_) hipFree(d_svdj_residual_);
     if (d_svdj_n_sweeps_) hipFree(d_svdj_n_sweeps_);
+
+    if (d_rsvd_omega_)   hipFree(d_rsvd_omega_);
+    if (d_rsvd_Y_)       hipFree(d_rsvd_Y_);
+    if (d_rsvd_tau_)     hipFree(d_rsvd_tau_);
+    if (d_rsvd_B_)       hipFree(d_rsvd_B_);
+    if (d_rsvd_U_small_) hipFree(d_rsvd_U_small_);
 
     rocblas_destroy_handle(rocblas_h_);
     rocblas_destroy_handle(rocblas_h_env_);
@@ -1019,22 +1045,107 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_);
 
-    // GPU SVD via size-gated dispatcher (R3-F2 + regression fix): Jacobi
-    // for large / real; bidiagonal fallback for small complex shapes where
-    // zgesvdj regresses. See docs/followups/r3_regression_analysis.md.
-    HIP_CHECK(hipMemcpyAsync(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar),
-                             hipMemcpyDeviceToDevice, stream_));
+    // Choose between full SVD (rocsolver_gesvd_auto) and randomized SVD
+    // (Halko-Martinsson-Tropp). RSVD is only profitable when the matrix
+    // is tall/fat (full_k > k + p) and wastefulness of the k+p oversample
+    // is outweighed by the cheaper smaller SVD. vh_lda tracks Vh's leading
+    // dim because the RSVD small-SVD output has lda = r_use, not full_k.
+    int vh_lda = full_k;
+    int svd_k  = full_k;              // number of singular pairs produced by the SVD stage
+    bool used_rsvd = opts_.rsvd
+                  && full_k > k + RSVD_OVERSAMPLE_
+                  && m > 2 * k;
 
-    Traits::rocsolver_gesvd_auto(rocblas_h_,
-        rocblas_svect_singular, rocblas_svect_singular,
-        m, n_svd,
-        d_svd_A_, m,
-        d_svd_S_,
-        d_svd_U_, m,
-        d_svd_Vh_, full_k,
-        d_svd_E_,
-        d_svdj_residual_, d_svdj_n_sweeps_,
-        d_svd_info_);
+    if (!used_rsvd) {
+        // GPU SVD via size-gated dispatcher (Jacobi for large / real; bidiagonal
+        // fallback for small complex shapes where zgesvdj regresses).
+        HIP_CHECK(hipMemcpyAsync(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar),
+                                 hipMemcpyDeviceToDevice, stream_));
+        Traits::rocsolver_gesvd_auto(rocblas_h_,
+            rocblas_svect_singular, rocblas_svect_singular,
+            m, n_svd,
+            d_svd_A_, m,
+            d_svd_S_,
+            d_svd_U_, m,
+            d_svd_Vh_, full_k,
+            d_svd_E_,
+            d_svdj_residual_, d_svdj_n_sweeps_,
+            d_svd_info_);
+    } else {
+        // --- Randomized SVD (Halko–Martinsson–Tropp) ---
+        // Approximates the leading k singular triplets of A ~ (m x n_svd)
+        // with r = k + p oversampling. Matches the algorithm from
+        // pdmrg-gpu-opt's rsvd_split but keeps the small B-SVD on the GPU.
+        int r_use = std::min({k + RSVD_OVERSAMPLE_, full_k, rsvd_r_max_});
+
+        // Ω ∈ C^{n_svd x r_use}, i.i.d. Gaussian-ish (uses Traits::random_val()).
+        // Regenerate per SVD so the random projection is fresh each call;
+        // the host-side loop is tiny compared to the subsequent GEMM/QR.
+        {
+            std::vector<Scalar> h_omega((size_t)n_svd * r_use);
+            for (size_t i = 0; i < h_omega.size(); i++) {
+                h_omega[i] = Traits::random_val();
+            }
+            HIP_CHECK(hipMemcpyAsync(d_rsvd_omega_, h_omega.data(),
+                h_omega.size() * sizeof(Scalar), hipMemcpyHostToDevice, stream_));
+        }
+
+        Scalar one = Traits::one(), zero_val = Traits::zero();
+
+        // Y = A · Ω  —  (m x r_use)
+        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            rocblas_operation_none, rocblas_operation_none,
+            m, r_use, n_svd, &one,
+            d_theta, m,
+            d_rsvd_omega_, n_svd,
+            &zero_val,
+            d_rsvd_Y_, m));
+
+        // QR(Y): rocsolver_geqrf overwrites Y with R in the upper triangle
+        // and the Householder vectors below; rocsolver_orgqr/ungqr then
+        // reifies Q into the same buffer.
+        ROCBLAS_CHECK(Traits::rocsolver_geqrf(rocblas_h_, m, r_use,
+            d_rsvd_Y_, m, d_rsvd_tau_));
+        ROCBLAS_CHECK(Traits::rocsolver_orgqr(rocblas_h_, m, r_use, r_use,
+            d_rsvd_Y_, m, d_rsvd_tau_));
+
+        // B = Q^H · A  —  (r_use x n_svd)
+        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            Traits::op_h, rocblas_operation_none,
+            r_use, n_svd, m, &one,
+            d_rsvd_Y_, m,
+            d_theta, m,
+            &zero_val,
+            d_rsvd_B_, r_use));
+
+        // SVD(B) on GPU: B ~ U_small · S · Vh. Writes d_svd_S_ (r_use-ish
+        // singular values), d_rsvd_U_small_ (r_use x r_use), d_svd_Vh_
+        // (b_k x n_svd) where b_k = min(r_use, n_svd).
+        int b_k = std::min(r_use, n_svd);
+        Traits::rocsolver_gesvd_auto(rocblas_h_,
+            rocblas_svect_singular, rocblas_svect_singular,
+            r_use, n_svd,
+            d_rsvd_B_, r_use,
+            d_svd_S_,
+            d_rsvd_U_small_, r_use,
+            d_svd_Vh_, b_k,
+            d_svd_E_,
+            d_svdj_residual_, d_svdj_n_sweeps_,
+            d_svd_info_);
+
+        // U = Q · U_small  —  (m x b_k), written into d_svd_U_ where the
+        // downstream extract code already expects it with lda = m.
+        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            rocblas_operation_none, rocblas_operation_none,
+            m, b_k, r_use, &one,
+            d_rsvd_Y_, m,
+            d_rsvd_U_small_, r_use,
+            &zero_val,
+            d_svd_U_, m));
+
+        vh_lda = b_k;
+        svd_k  = b_k;
+    }
 
     // Truncation: find new_k on GPU, copy just 1 int back.
     //
@@ -1044,12 +1155,15 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
     // Those modes enter subsequent GEMMs multiplied by ~0 — no numerical
     // impact within the 1e-10 DMRG tolerance, just a small amount of wasted
     // compute on the tail columns.
+    // Cap truncation target at the actual number of singular pairs produced
+    // by the SVD stage (svd_k == full_k for full SVD; svd_k == b_k for RSVD).
+    int k_target = std::min(k, svd_k);
     int new_k;
     if (opts_.device_k) {
-        new_k = k;
+        new_k = k_target;
     } else {
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
-                           d_svd_S_, k, 1e-14, d_svd_info_);
+                           d_svd_S_, k_target, 1e-14, d_svd_info_);
         HIP_CHECK(hipMemcpy(&new_k, d_svd_info_, sizeof(int), hipMemcpyDeviceToHost));
     }
 
@@ -1060,7 +1174,7 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
 
         // MPS[site] = U[:, :new_k]  (column slice, on GPU)
         allocate_mps_tensor(site, cL, new_chi_R);
-        if (new_k == full_k) {
+        if (new_k == svd_k) {
             HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], d_svd_U_,
                                      m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice, stream_));
         } else {
@@ -1074,11 +1188,12 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
         t_svd_.end(stream_);
         t_absorb_.begin(stream_);
 
-        // S*Vh → d_svd_work_ (scale rows of Vh by S, on GPU)
+        // S*Vh → d_svd_work_ (scale rows of Vh by S, on GPU).
+        // Vh's leading dim is vh_lda (= full_k in the full-SVD path, = b_k in RSVD).
         {
             int total = new_k * n_svd;
             hipLaunchKernelGGL((scale_rows_by_diag_kernel<Scalar, RealType>), dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
-                               d_svd_S_, d_svd_Vh_, full_k, d_svd_work_, new_k, new_k, n_svd);
+                               d_svd_S_, d_svd_Vh_, vh_lda, d_svd_work_, new_k, new_k, n_svd);
         }
 
         // Absorb S*Vh into A[site+1]
@@ -1102,15 +1217,17 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
     } else {  // direction == 'L'
         int new_chi_L = new_k;
 
-        // MPS[site] = Vh[:new_k, :]  (row slice = column slice of Vh in col-major)
+        // MPS[site] = Vh[:new_k, :]  (row slice = column slice of Vh in col-major).
+        // Vh's leading dim is vh_lda (full_k for full SVD, b_k for RSVD).
         allocate_mps_tensor(site, new_chi_L, cR);
-        if (new_chi_L == full_k) {
+        if (new_chi_L == svd_k && vh_lda == new_chi_L) {
             HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], d_svd_Vh_,
-                                     full_k * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice, stream_));
+                                     (size_t)vh_lda * n_svd * sizeof(Scalar),
+                                     hipMemcpyDeviceToDevice, stream_));
         } else {
             int total = new_chi_L * n_svd;
             hipLaunchKernelGGL(extract_cols_kernel<Scalar>, dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
-                               d_svd_Vh_, full_k, d_mps_tensors_[site], new_chi_L, new_chi_L, n_svd);
+                               d_svd_Vh_, vh_lda, d_mps_tensors_[site], new_chi_L, new_chi_L, n_svd);
         }
         // MPS[site] = Vh is now queued on stream_. Signal the env stream so
         // update_right_env(site) can start concurrently with the absorb below.
