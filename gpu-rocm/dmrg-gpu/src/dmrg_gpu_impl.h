@@ -687,8 +687,8 @@ void DMRGGPU<Scalar>::build_initial_environments() {
 template<typename Scalar>
 void DMRGGPU<Scalar>::form_theta(int site, Scalar* d_theta) {
     int size = chi_L(site) * d_ * chi_R(site);
-    HIP_CHECK(hipMemcpy(d_theta, d_mps_tensors_[site],
-                        size * sizeof(Scalar), hipMemcpyDeviceToDevice));
+    HIP_CHECK(hipMemcpyAsync(d_theta, d_mps_tensors_[site],
+                             size * sizeof(Scalar), hipMemcpyDeviceToDevice, stream_));
 }
 
 template<typename Scalar>
@@ -883,7 +883,8 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
     // GPU SVD via size-gated dispatcher (R3-F2 + regression fix): Jacobi
     // for large / real; bidiagonal fallback for small complex shapes where
     // zgesvdj regresses. See docs/followups/r3_regression_analysis.md.
-    HIP_CHECK(hipMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice));
+    HIP_CHECK(hipMemcpyAsync(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar),
+                             hipMemcpyDeviceToDevice, stream_));
 
     Traits::rocsolver_gesvd_auto(rocblas_h_,
         rocblas_svect_singular, rocblas_svect_singular,
@@ -939,8 +940,9 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
                 d_mps_tensors_[site + 1], cR, &zero_val,
                 d_T1_, new_k));
             allocate_mps_tensor(site + 1, new_chi_R, next_cR);
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], d_T1_,
-                                new_k * d_ * next_cR * sizeof(Scalar), hipMemcpyDeviceToDevice));
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], d_T1_,
+                                     new_k * d_ * next_cR * sizeof(Scalar),
+                                     hipMemcpyDeviceToDevice, stream_));
         }
         bond_dims_[site + 1] = new_chi_R;
 
@@ -979,8 +981,9 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
                 d_svd_work_, m, &zero_val,
                 d_T1_, prev_cL * d_));
             allocate_mps_tensor(site - 1, prev_cL, new_chi_L);
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site - 1], d_T1_,
-                                prev_cL * d_ * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice));
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site - 1], d_T1_,
+                                     prev_cL * d_ * new_k * sizeof(Scalar),
+                                     hipMemcpyDeviceToDevice, stream_));
         }
         bond_dims_[site] = new_chi_L;
     }
@@ -1038,8 +1041,8 @@ double DMRGGPU<Scalar>::sweep_left_to_right() {
         form_theta(site, d_theta_);
         energy = lanczos_eigensolver(site, d_theta_);
         int sz = chi_L(site) * d_ * chi_R(site);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_theta_, sz * sizeof(Scalar),
-                            hipMemcpyDeviceToDevice));
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], d_theta_,
+                                 sz * sizeof(Scalar), hipMemcpyDeviceToDevice, stream_));
     }
 
     return energy;
@@ -1074,8 +1077,8 @@ double DMRGGPU<Scalar>::sweep_right_to_left() {
         form_theta(site, d_theta_);
         energy = lanczos_eigensolver(site, d_theta_);
         int sz = chi_L(site) * d_ * chi_R(site);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_theta_, sz * sizeof(Scalar),
-                            hipMemcpyDeviceToDevice));
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], d_theta_,
+                                 sz * sizeof(Scalar), hipMemcpyDeviceToDevice, stream_));
     }
 
     return energy;
