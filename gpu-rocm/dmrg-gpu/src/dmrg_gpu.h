@@ -136,6 +136,7 @@ public:
 private:
     // System parameters
     int L_, d_, chi_max_, D_mpo_;
+    int D_mpo_actual_;      // user-supplied MPO bond dim; D_mpo_ may be padded (D_PAD)
     double tol_;
     double energy_;
 
