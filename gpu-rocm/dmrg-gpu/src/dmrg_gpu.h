@@ -154,6 +154,15 @@ private:
     std::vector<Scalar*> d_W_left_;
     std::vector<Scalar*> d_W_right_;
 
+    // SPARSE_MPO: per-site compacted index lists of nonzero rows (w*d+s) of
+    // W_left and nonzero columns (wp*d+sp). Empty when opts_.sparse_mpo is
+    // off; populated at set_mpo time. apply_heff uses these to compact the
+    // Step 1 / Step 3 batched GEMMs to only the nonzero batches.
+    std::vector<int*> d_WL_nnz_rows_;   // length nnz_rows_count_[site]
+    std::vector<int*> d_WL_nnz_cols_;   // length nnz_cols_count_[site]
+    std::vector<int>  nnz_rows_count_;
+    std::vector<int>  nnz_cols_count_;
+
     std::vector<int> L_env_alloc_chi_;
     std::vector<int> R_env_alloc_chi_;
 

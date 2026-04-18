@@ -436,6 +436,13 @@ __global__ void extract_cols_kernel(const Scalar* in, int lda_in,
 
 // ============================================================================
 
+// Scalar magnitude for sparsity detection (real + complex).
+inline double scalar_abs(double a) { return std::fabs(a); }
+inline double scalar_abs(hipDoubleComplex a) {
+    double re = hipCreal(a), im = hipCimag(a);
+    return std::sqrt(re * re + im * im);
+}
+
 // Generic scalar add/mul used by fused kernels (real + complex).
 __host__ __device__ inline double scalar_add(double a, double b) { return a + b; }
 __host__ __device__ inline double scalar_mul(double a, double b) { return a * b; }
