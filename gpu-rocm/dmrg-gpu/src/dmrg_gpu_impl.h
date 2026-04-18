@@ -824,8 +824,12 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
         // Switch back to host pointer mode
         ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
 
-        // Convergence check every 3 iterations after iter >= 4
-        if (iter >= 4 && iter % 3 == 0) {
+        // Convergence check every 3 iterations after iter >= 4.
+        // LANCZOS_FIXED skips the check entirely → no mid-loop host syncs,
+        // runs the full max_iter iterations. Cost: ~2-3× more apply_heff per
+        // site if Lanczos converges early. Benefit: eliminates stream drain
+        // + D2H readback on every third iter, which dominates at small n.
+        if (!opts_.lanczos_fixed && iter >= 4 && iter % 3 == 0) {
             HIP_CHECK(hipStreamSynchronize(stream_));
 
             int ncheck = iter + 1;
@@ -941,11 +945,22 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
         d_svdj_residual_, d_svdj_n_sweeps_,
         d_svd_info_);
 
-    // Truncation: find new_k on GPU, copy just 1 int back
-    hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
-                       d_svd_S_, k, 1e-14, d_svd_info_);
+    // Truncation: find new_k on GPU, copy just 1 int back.
+    //
+    // DEVICE_K skips the truncation kernel and the D2H readback, using k
+    // (= min(chi_max, full_k)) directly. Consequences: (a) no stream drain
+    // per site, and (b) near-zero singular values below 1e-14 are kept.
+    // Those modes enter subsequent GEMMs multiplied by ~0 — no numerical
+    // impact within the 1e-10 DMRG tolerance, just a small amount of wasted
+    // compute on the tail columns.
     int new_k;
-    HIP_CHECK(hipMemcpy(&new_k, d_svd_info_, sizeof(int), hipMemcpyDeviceToHost));
+    if (opts_.device_k) {
+        new_k = k;
+    } else {
+        hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
+                           d_svd_S_, k, 1e-14, d_svd_info_);
+        HIP_CHECK(hipMemcpy(&new_k, d_svd_info_, sizeof(int), hipMemcpyDeviceToHost));
+    }
 
     int threads = 256;
 
