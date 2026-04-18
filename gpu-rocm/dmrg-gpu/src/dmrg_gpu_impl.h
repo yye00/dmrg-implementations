@@ -109,6 +109,10 @@ template<typename Scalar>
 DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), tol_(tol), energy_(0.0) {
 
+    opts_.load_from_env();
+    opts_.print(stderr);
+    init_timers();
+
     // Bond dimensions
     bond_dims_.resize(L + 1);
     bond_dims_[0] = 1;
@@ -305,6 +309,37 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
 }
 
 // ============================================================================
+// Phase timers
+// ============================================================================
+
+template<typename Scalar>
+void DMRGGPU<Scalar>::init_timers() {
+    t_lanczos_.init("lanczos", opts_.profile);
+    t_apply_heff_.init("apply_heff", opts_.profile);
+    t_svd_.init("svd", opts_.profile);
+    t_absorb_.init("absorb", opts_.profile);
+    t_env_update_.init("env_update", opts_.profile);
+}
+
+template<typename Scalar>
+void DMRGGPU<Scalar>::report_timers() {
+    if (!opts_.profile) return;
+    auto row = [](PhaseTimer& t) {
+        double ms = t.total_ms();
+        int c = t.calls();
+        double per = c > 0 ? ms / c : 0.0;
+        std::fprintf(stderr, "  %-12s: %10.2f ms   (%6d calls, %8.3f ms/call)\n",
+                     t.name, ms, c, per);
+    };
+    std::fprintf(stderr, "== Phase timings ==\n");
+    row(t_lanczos_);
+    row(t_apply_heff_);
+    row(t_svd_);
+    row(t_absorb_);
+    row(t_env_update_);
+}
+
+// ============================================================================
 // Memory management
 // ============================================================================
 
@@ -423,6 +458,7 @@ void DMRGGPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
 
 template<typename Scalar>
 void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_result) {
+    t_apply_heff_.begin(stream_);
     int cL = chi_L(site);
     int cR = chi_R(site);
     int D = D_mpo_, d = d_;
@@ -501,6 +537,7 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
             &zero_val,
             d_result, 1));
     }
+    t_apply_heff_.end(stream_);
 }
 
 // ============================================================================
@@ -513,6 +550,7 @@ void DMRGGPU<Scalar>::update_left_env(int site) {
     // it can overlap with the absorb(S*Vh) GEMM running on stream_. The caller
     // is responsible for making stream_env_ wait on event_canon_ready_ so that
     // MPS[site] = U has been written before this runs.
+    t_env_update_.begin(stream_env_);
     int chi_in = bond_dims_[site];
     int chi_out = bond_dims_[site + 1];
     int D = D_mpo_, d = d_;
@@ -577,6 +615,7 @@ void DMRGGPU<Scalar>::update_left_env(int site) {
     if constexpr (Traits::is_complex) {
         conjugate_inplace(L_new, chi_out * D * chi_out, stream_env_);
     }
+    t_env_update_.end(stream_env_);
 }
 
 // ============================================================================
@@ -586,6 +625,7 @@ void DMRGGPU<Scalar>::update_left_env(int site) {
 template<typename Scalar>
 void DMRGGPU<Scalar>::update_right_env(int site) {
     // Runs on stream_env_ (see update_left_env).
+    t_env_update_.begin(stream_env_);
     int chi_in = bond_dims_[site + 1];
     int chi_out = bond_dims_[site];
     int D = D_mpo_, d = d_;
@@ -648,6 +688,7 @@ void DMRGGPU<Scalar>::update_right_env(int site) {
                 D));
         }
     }
+    t_env_update_.end(stream_env_);
 }
 
 // ============================================================================
@@ -693,6 +734,7 @@ void DMRGGPU<Scalar>::form_theta(int site, Scalar* d_theta) {
 
 template<typename Scalar>
 double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
+    t_lanczos_.begin(stream_);
     int n = chi_L(site) * d_ * chi_R(site);
     int max_iter = std::min(max_lanczos_iter_, n);
     double tol_lanczos = 1e-12;
@@ -862,6 +904,7 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
     ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
 
+    t_lanczos_.end(stream_);
     return energy;
 }
 
@@ -871,6 +914,7 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
 
 template<typename Scalar>
 void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char direction) {
+    t_svd_.begin(stream_);
     int cL = chi_L(site);
     int cR = chi_R(site);
 
@@ -921,6 +965,8 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
         // MPS[site] = U is now queued on stream_. Signal the env stream so
         // update_left_env(site) can start concurrently with the absorb below.
         HIP_CHECK(hipEventRecord(event_canon_ready_, stream_));
+        t_svd_.end(stream_);
+        t_absorb_.begin(stream_);
 
         // S*Vh → d_svd_work_ (scale rows of Vh by S, on GPU)
         {
@@ -945,6 +991,7 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
                                      hipMemcpyDeviceToDevice, stream_));
         }
         bond_dims_[site + 1] = new_chi_R;
+        t_absorb_.end(stream_);
 
     } else {  // direction == 'L'
         int new_chi_L = new_k;
@@ -962,6 +1009,8 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
         // MPS[site] = Vh is now queued on stream_. Signal the env stream so
         // update_right_env(site) can start concurrently with the absorb below.
         HIP_CHECK(hipEventRecord(event_canon_ready_, stream_));
+        t_svd_.end(stream_);
+        t_absorb_.begin(stream_);
 
         // U*S → d_svd_work_ (scale columns of U by S, on GPU)
         {
@@ -986,6 +1035,7 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
                                      hipMemcpyDeviceToDevice, stream_));
         }
         bond_dims_[site] = new_chi_L;
+        t_absorb_.end(stream_);
     }
 }
 
@@ -1109,6 +1159,7 @@ double DMRGGPU<Scalar>::run(int n_sweeps) {
     double total_time = std::chrono::duration<double>(t_end - t_start).count();
     printf("Final energy: %.12f\n", energy_);
     printf("Total wall time: %.3f s\n", total_time);
+    report_timers();
 
     return energy_;
 }
