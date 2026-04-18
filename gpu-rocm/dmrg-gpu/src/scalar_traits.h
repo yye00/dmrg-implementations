@@ -436,6 +436,18 @@ __global__ void extract_cols_kernel(const Scalar* in, int lda_in,
 
 // ============================================================================
 
+// Generic scalar add/mul used by fused kernels (real + complex).
+__host__ __device__ inline double scalar_add(double a, double b) { return a + b; }
+__host__ __device__ inline double scalar_mul(double a, double b) { return a * b; }
+__host__ __device__ inline hipDoubleComplex scalar_add(hipDoubleComplex a, hipDoubleComplex b) {
+    return make_hipDoubleComplex(hipCreal(a) + hipCreal(b), hipCimag(a) + hipCimag(b));
+}
+__host__ __device__ inline hipDoubleComplex scalar_mul(hipDoubleComplex a, hipDoubleComplex b) {
+    return make_hipDoubleComplex(
+        hipCreal(a) * hipCreal(b) - hipCimag(a) * hipCimag(b),
+        hipCreal(a) * hipCimag(b) + hipCimag(a) * hipCreal(b));
+}
+
 __global__ inline void conjugate_complex_kernel(hipDoubleComplex* data, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     if (i < n) {
