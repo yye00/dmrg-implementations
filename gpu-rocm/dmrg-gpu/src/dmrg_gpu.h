@@ -63,12 +63,33 @@ private:
     std::vector<int> R_env_alloc_chi_;
 
     // GPU handles
+    //
+    // Dual-stream pipeline (forward sweep):
+    //   stream_      : Lanczos + SVD + absorb(S*Vh) into MPS[site+1]
+    //   stream_env_  : update_left_env(site) → L[site+1]
+    // After SVD writes U into MPS[site], event_canon_ready_ is recorded on
+    // stream_ and stream_env_ waits on it before starting env_update. The env
+    // update then runs concurrently with the absorb GEMM on stream_ (they touch
+    // disjoint memory — env_update reads MPS[site]/L[site]/W and writes
+    // L[site+1]; absorb reads S*Vh and MPS[site+1] and writes MPS[site+1]).
+    // Before the next site's Lanczos, stream_ waits on event_env_done_ so that
+    // apply_heff sees the updated L[site+1]. Symmetric setup for the backward
+    // sweep (update_right_env).
     hipStream_t stream_;
+    hipStream_t stream_env_;
     rocblas_handle rocblas_h_;
+    rocblas_handle rocblas_h_env_;
+    hipEvent_t event_canon_ready_;   // signaled after MPS[site] (U or Vh) is written
+    hipEvent_t event_env_done_;      // signaled after L[site+1] / R[site] is written
+    bool env_update_pending_ = false;
 
-    // Contraction intermediates
+    // Contraction intermediates (main stream)
     Scalar* d_T1_;
     Scalar* d_T2_;
+    // Contraction intermediates (env stream) — must be disjoint from main
+    // stream's scratch so absorb and env_update can run concurrently.
+    Scalar* d_T1_env_;
+    Scalar* d_T2_env_;
 
     // Lanczos workspace (pre-allocated)
     Scalar* d_theta_;
@@ -97,10 +118,14 @@ private:
     Scalar* d_const_zero_;
     Scalar* d_const_neg_one_;
 
-    // Batched GEMM pointer arrays (on device)
+    // Batched GEMM pointer arrays (on device) — main stream
     Scalar** d_batch_A_;
     Scalar** d_batch_B_;
     Scalar** d_batch_C_;
+    // Batched GEMM pointer arrays (on device) — env stream
+    Scalar** d_batch_A_env_;
+    Scalar** d_batch_B_env_;
+    Scalar** d_batch_C_env_;
 
     // Length-D_mpo vector of ones on device; used as the reduction vector for
     // Step 3 of apply_heff (R3-F1 full-batched collapse).
