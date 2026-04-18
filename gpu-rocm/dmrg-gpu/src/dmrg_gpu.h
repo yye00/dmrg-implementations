@@ -267,6 +267,11 @@ private:
     // LANCZOS_GRAPH: cached HIP-graph exec per (site, cL, cR) for apply_heff.
     // Key is a packed 64-bit integer; lazy-populated on first call at each
     // (site, cL, cR) shape. All entries destroyed in free_gpu_resources.
+    // d_heff_input_ is a fixed-address bounce buffer: before each graph
+    // replay, the caller's theta is memcpy'd here so captured-graph kernels
+    // can read from a constant address across Lanczos iterations. Only
+    // allocated when opts_.lanczos_graph is on.
+    Scalar* d_heff_input_ = nullptr;
     std::unordered_map<uint64_t, hipGraphExec_t> apply_heff_graph_cache_;
     static inline uint64_t graph_key(int site, int cL, int cR) {
         return ((uint64_t)(uint32_t)site << 40) |

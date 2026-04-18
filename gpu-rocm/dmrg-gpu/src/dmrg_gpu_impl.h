@@ -335,16 +335,31 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     h_svd_Vh_.resize(chi_max_ * svd_max_dim);
     h_svd_tmp_.resize(svd_max_dim * chi_max_);
 
+    if (opts_.lanczos_graph) {
+        // Bounce buffer so captured apply_heff graphs read from a fixed
+        // address regardless of which Lanczos v_i the caller passes in.
+        HIP_CHECK(hipMalloc(&d_heff_input_, (size_t)theta_size_max_ * sizeof(Scalar)));
+    }
+
     if (opts_.rsvd) {
-        // Resize device S and E buffers to fit up to chi_max + oversample.
+        // RSVD's small SVD produces up to (chi_max + p) singular pairs, and the
+        // subsequent U = Q·U_small GEMM writes a (m x b_k) matrix into d_svd_U_
+        // with b_k up to chi_max + p. The baseline sizes (m x chi_max) and
+        // (chi_max x n) wouldn't fit, so grow those buffers plus d_svd_S_ /
+        // d_svd_E_ when the flag is on.
+        int r_max = chi_max_ + RSVD_OVERSAMPLE_;
         HIP_CHECK(hipFree(d_svd_S_));
         HIP_CHECK(hipFree(d_svd_E_));
-        HIP_CHECK(hipMalloc(&d_svd_S_, s_alloc * sizeof(RealType)));
-        HIP_CHECK(hipMalloc(&d_svd_E_, s_alloc * sizeof(RealType)));
+        HIP_CHECK(hipFree(d_svd_U_));
+        HIP_CHECK(hipFree(d_svd_Vh_));
+        HIP_CHECK(hipMalloc(&d_svd_S_,  r_max * sizeof(RealType)));
+        HIP_CHECK(hipMalloc(&d_svd_E_,  r_max * sizeof(RealType)));
+        HIP_CHECK(hipMalloc(&d_svd_U_,  (size_t)svd_max_dim * r_max * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_svd_Vh_, (size_t)r_max * svd_max_dim * sizeof(Scalar)));
 
-        rsvd_r_max_ = chi_max_ + RSVD_OVERSAMPLE_;
-        int n_max = svd_max_dim;  // chi_max * d, the max n_svd dimension
-        int m_max = svd_max_dim;  // same bound for m
+        rsvd_r_max_ = r_max;
+        int n_max = svd_max_dim;
+        int m_max = svd_max_dim;
         HIP_CHECK(hipMalloc(&d_rsvd_omega_,   (size_t)n_max * rsvd_r_max_ * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&d_rsvd_Y_,       (size_t)m_max * rsvd_r_max_ * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&d_rsvd_tau_,     (size_t)rsvd_r_max_ * sizeof(Scalar)));
@@ -423,6 +438,7 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
         hipGraphExecDestroy(kv.second);
     }
     apply_heff_graph_cache_.clear();
+    if (d_heff_input_) hipFree(d_heff_input_);
 
     rocblas_destroy_handle(rocblas_h_);
     rocblas_destroy_handle(rocblas_h_env_);
@@ -655,14 +671,26 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
     int cL = chi_L(site);
     int cR = chi_R(site);
 
-    // LANCZOS_GRAPH: look up a cached graph keyed by (site, cL, cR). On
-    // hit, replay and return. On miss, run the body under stream capture,
-    // instantiate, cache, then launch the new graph. Rocblas pointer mode
-    // must be `host` on entry/replay because apply_heff's GEMM constants
-    // (one/zero_val) live on the host. The Lanczos driver resets the mode
-    // to host at the end of each iteration, so this invariant holds.
+    // LANCZOS_GRAPH path:
+    //   (a) Stage the caller's theta into a fixed-address bounce buffer
+    //       BEFORE any capture window — so every graph replay reads from
+    //       the same d_heff_input_ regardless of which v_i was passed.
+    //       The memcpy is outside capture, so it executes on every call.
+    //   (b) On cache hit, launch the cached graph and return.
+    //   (c) On cache miss, run the body under hipStreamBeginCapture →
+    //       EndCapture → Instantiate → cache → Launch.
+    // Rocblas pointer mode must be `host` on entry/replay because the
+    // captured GEMM constants (one / zero_val) live on the host. The
+    // Lanczos driver restores host mode at the end of each iteration.
+    const Scalar* theta_src = d_theta_in;
     bool graph_capture_miss = false;
     if (opts_.lanczos_graph) {
+        int n_theta = cL * d_ * cR;
+        HIP_CHECK(hipMemcpyAsync(d_heff_input_, d_theta_in,
+                                 (size_t)n_theta * sizeof(Scalar),
+                                 hipMemcpyDeviceToDevice, stream_));
+        theta_src = d_heff_input_;
+
         uint64_t key = graph_key(site, cL, cR);
         auto it = apply_heff_graph_cache_.find(key);
         if (it != apply_heff_graph_cache_.end()) {
@@ -702,7 +730,7 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
             hipLaunchKernelGGL(setup_batch_ptrs_wd_sparse<Scalar>,
                                dim3(1), dim3(nnz), 0, stream_,
                                d_batch_A_, d_batch_B_, d_batch_C_,
-                               L_env, const_cast<Scalar*>(d_theta_in), V,
+                               L_env, const_cast<Scalar*>(theta_src), V,
                                d_WL_nnz_rows_[site],
                                d, cL, cL, cL * cR);
             ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
@@ -717,7 +745,7 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
         } else {
             hipLaunchKernelGGL(setup_batch_ptrs_wd<Scalar>, dim3(1), dim3(D*d), 0, stream_,
                                d_batch_A_, d_batch_B_, d_batch_C_,
-                               L_env, const_cast<Scalar*>(d_theta_in), V,
+                               L_env, const_cast<Scalar*>(theta_src), V,
                                d, cL, cL, cL * cR);
             ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
                 Traits::op_t, rocblas_operation_none,
