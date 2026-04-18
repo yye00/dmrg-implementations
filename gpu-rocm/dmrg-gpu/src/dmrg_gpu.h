@@ -7,6 +7,8 @@
 #include <string>
 #include <cstdlib>
 #include <cstdio>
+#include <unordered_map>
+#include <cstdint>
 #include "scalar_traits.h"
 
 // ============================================================================
@@ -261,6 +263,16 @@ private:
     Scalar* d_rsvd_B_       = nullptr;   // (r x n_svd) = Q^H A
     Scalar* d_rsvd_U_small_ = nullptr;   // (r x r) left singular vectors of B
     int     rsvd_r_max_     = 0;
+
+    // LANCZOS_GRAPH: cached HIP-graph exec per (site, cL, cR) for apply_heff.
+    // Key is a packed 64-bit integer; lazy-populated on first call at each
+    // (site, cL, cR) shape. All entries destroyed in free_gpu_resources.
+    std::unordered_map<uint64_t, hipGraphExec_t> apply_heff_graph_cache_;
+    static inline uint64_t graph_key(int site, int cL, int cR) {
+        return ((uint64_t)(uint32_t)site << 40) |
+               ((uint64_t)(uint32_t)cL   << 20) |
+                (uint64_t)(uint32_t)cR;
+    }
 
     // Ablation flags + phase timers
     GpuOpts opts_;

@@ -419,6 +419,11 @@ void DMRGGPU<Scalar>::free_gpu_resources() {
     if (d_rsvd_B_)       hipFree(d_rsvd_B_);
     if (d_rsvd_U_small_) hipFree(d_rsvd_U_small_);
 
+    for (auto& kv : apply_heff_graph_cache_) {
+        hipGraphExecDestroy(kv.second);
+    }
+    apply_heff_graph_cache_.clear();
+
     rocblas_destroy_handle(rocblas_h_);
     rocblas_destroy_handle(rocblas_h_env_);
     hipEventDestroy(event_canon_ready_);
@@ -649,6 +654,26 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
     t_apply_heff_.begin(stream_);
     int cL = chi_L(site);
     int cR = chi_R(site);
+
+    // LANCZOS_GRAPH: look up a cached graph keyed by (site, cL, cR). On
+    // hit, replay and return. On miss, run the body under stream capture,
+    // instantiate, cache, then launch the new graph. Rocblas pointer mode
+    // must be `host` on entry/replay because apply_heff's GEMM constants
+    // (one/zero_val) live on the host. The Lanczos driver resets the mode
+    // to host at the end of each iteration, so this invariant holds.
+    bool graph_capture_miss = false;
+    if (opts_.lanczos_graph) {
+        uint64_t key = graph_key(site, cL, cR);
+        auto it = apply_heff_graph_cache_.find(key);
+        if (it != apply_heff_graph_cache_.end()) {
+            HIP_CHECK(hipGraphLaunch(it->second, stream_));
+            t_apply_heff_.end(stream_);
+            return;
+        }
+        graph_capture_miss = true;
+        HIP_CHECK(hipStreamBeginCapture(stream_, hipStreamCaptureModeGlobal));
+    }
+
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
 
@@ -767,6 +792,17 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
             &zero_val,
             d_result, 1));
     }
+
+    if (graph_capture_miss) {
+        hipGraph_t graph;
+        HIP_CHECK(hipStreamEndCapture(stream_, &graph));
+        hipGraphExec_t exec;
+        HIP_CHECK(hipGraphInstantiate(&exec, graph, nullptr, nullptr, 0));
+        HIP_CHECK(hipGraphDestroy(graph));
+        apply_heff_graph_cache_[graph_key(site, cL, cR)] = exec;
+        HIP_CHECK(hipGraphLaunch(exec, stream_));
+    }
+
     t_apply_heff_.end(stream_);
 }
 
