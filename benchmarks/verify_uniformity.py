@@ -24,8 +24,9 @@ OPT_VARIANTS     = ["dmrg-gpu-opt", "dmrg2-gpu-opt", "pdmrg-gpu-opt"]
 # Variants that must NOT carry advanced opts (explicit exclusion)
 BASE_VARIANTS    = ["dmrg-gpu-base", "dmrg2-gpu-base", "pdmrg-gpu-base"]
 
-# Required features: each is a (label, regex) pair checked in the variant's
-# header + impl files (case-sensitive, any hit counts).
+# Required scaffolding features: each is a (label, regex) pair checked in the
+# variant's header + impl files (case-sensitive, any hit counts).
+# These are UNIFORM across all -gpu and -gpu-opt variants.
 REQUIRED_FEATURES = [
     ("include_gpu_opts",    r'#include\s+"\.\./\.\./common/gpu_opts\.h"'),
     ("GpuOpts_member",      r'\bGpuOpts\s+opts_'),
@@ -37,8 +38,15 @@ REQUIRED_FEATURES = [
     ("PhaseTimer_lanczos",  r'PhaseTimer\s+t_lanczos_'),
     ("PhaseTimer_heff",     r'PhaseTimer\s+t_apply_heff_'),
     ("PhaseTimer_svd",      r'PhaseTimer\s+t_svd_'),
-    ("device_k_use",        r'opts_\.device_k\b'),
     ("lanczos_fixed_use",   r'opts_\.lanczos_fixed\b'),
+]
+
+# Conditional features: applicable only if the variant uses a device-side SVD.
+# DEVICE_K skips a D2H readback of the truncation rank — meaningful only when
+# truncation happens on GPU. -opt variants that use a CPU LAPACK SVD path are
+# exempt from this check.
+CONDITIONAL_FEATURES = [
+    ("device_k_use", r'opts_\.device_k\b', r'rocsolver_gesvd|svd_truncate_kernel'),
 ]
 
 # Features that MUST NOT appear in -base variants
@@ -94,13 +102,21 @@ def audit():
             for label, regex in REQUIRED_FEATURES:
                 if scan(files, regex) is None:
                     missing.append(label)
+            # Conditional features: check only if precondition is met
+            for label, regex, precond in CONDITIONAL_FEATURES:
+                if scan(files, precond) is not None:
+                    # precondition met → feature must be wired
+                    if scan(files, regex) is None:
+                        missing.append(label)
+            total_checks = len(REQUIRED_FEATURES) + sum(
+                1 for _, _, pc in CONDITIONAL_FEATURES if scan(files, pc) is not None)
             if missing:
-                print(f"  {v}: MISSING {len(missing)}/{len(REQUIRED_FEATURES)}")
+                print(f"  {v}: MISSING {len(missing)}/{total_checks}")
                 for m in missing:
                     print(f"      - {m}")
                 failures.append(f"{v}: missing {','.join(missing)}")
             else:
-                print(f"  {v}: OK ({len(REQUIRED_FEATURES)}/{len(REQUIRED_FEATURES)})")
+                print(f"  {v}: OK ({total_checks}/{total_checks})")
 
     # Base tier: must NOT have scaffolding
     print(f"\n[BASE tier — must NOT carry scaffolding]")
@@ -122,10 +138,10 @@ def audit():
         else:
             print(f"  {v}: OK (clean)")
 
-    # Newton-Schulz: must be gone from all -gpu and -gpu-opt
+    # Newton-Schulz: must be gone from all -gpu and -gpu-opt (headers AND .cpp)
     print(f"\n[Newton-Schulz — must be absent from all -gpu and -gpu-opt]")
     for v in PRIMARY_VARIANTS + OPT_VARIANTS:
-        files = files_for(v)
+        files = files_for(v)  # already includes both .h and .cpp
         if not files:
             continue
         ns_hits = []

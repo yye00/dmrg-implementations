@@ -186,7 +186,7 @@ int test_heisenberg(int L, int chi_max, int n_sweeps) {
 
     printf("======================================\n");
     printf("Two-Site DMRG-GPU-OPT Heisenberg Test (float64)\n");
-    printf("  Newton-Schulz + Block-Davidson\n");
+    printf("  Block-Davidson\n");
     printf("======================================\n");
     printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
     printf("======================================\n\n");
@@ -232,7 +232,7 @@ int test_tfim(int L, int chi_max, int n_sweeps,
 
     printf("======================================\n");
     printf("Two-Site DMRG-GPU-OPT TFIM Test (float64)\n");
-    printf("  Newton-Schulz + Block-Davidson\n");
+    printf("  Block-Davidson\n");
     printf("======================================\n");
     printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
     printf("  J=%.4f, h=%.4f\n", J, h_field);
@@ -265,7 +265,7 @@ int test_josephson(int L, int chi_max, int n_sweeps,
 
     printf("======================================\n");
     printf("Two-Site DMRG-GPU-OPT Josephson Test (complex128)\n");
-    printf("  Newton-Schulz + Block-Davidson\n");
+    printf("  Block-Davidson\n");
     printf("======================================\n");
     printf("  L=%d, d=%d (n_max=%d), chi_max=%d, D_mpo=%d, sweeps=%d\n",
            L, d, n_max, chi_max, D_mpo, n_sweeps);
@@ -340,7 +340,7 @@ int main(int argc, char** argv) {
     }
 
     printf("========================================\n");
-    printf("Two-Site DMRG-GPU-OPT (Newton-Schulz + Block-Davidson)\n");
+    printf("Two-Site DMRG-GPU-OPT (Block-Davidson)\n");
     printf("========================================\n\n");
 
     try {
