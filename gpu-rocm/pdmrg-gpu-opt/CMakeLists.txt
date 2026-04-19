@@ -7,7 +7,7 @@ set(CMAKE_CXX_COMPILER /opt/rocm/llvm/bin/clang++)
 project(PDMRG_GPU_OPT LANGUAGES CXX HIP)
 
 # ==========================================
-# PDMRG-GPU-OPT: Newton-Schulz + Block-Davidson
+# PDMRG-GPU-OPT: Block-Davidson
 # ==========================================
 
 set(CMAKE_CXX_STANDARD 17)
@@ -79,8 +79,8 @@ target_link_libraries(pdmrg_gpu_opt
 # Build info
 # ==========================================
 message(STATUS "==============================================")
-message(STATUS "PDMRG-GPU-OPT: Newton-Schulz + Block-Davidson")
+message(STATUS "PDMRG-GPU-OPT: Block-Davidson")
 message(STATUS "==============================================")
 message(STATUS "GPU targets: ${GPU_TARGETS}")
-message(STATUS "Backend: rocBLAS GEMM + Newton-Schulz + Block-Davidson")
+message(STATUS "Backend: rocBLAS GEMM + Block-Davidson")
 message(STATUS "==============================================")

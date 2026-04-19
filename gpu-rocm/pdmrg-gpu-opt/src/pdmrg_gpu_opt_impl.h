@@ -137,7 +137,6 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
     davidson_b_ = 4;
     davidson_max_sub_ = std::min(davidson_b_ * 8, theta_size_max_);
     use_cpu_svd_ = false;
-    use_ns_split_ = true;  // default: use Newton-Schulz for bond split
     use_davidson_ = false;  // default: use Lanczos (device-pointer-mode, 2-3 syncs/bond)
     use_rsvd_ = false;
     lanczos_use_1site_ = false;
@@ -160,8 +159,6 @@ void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
     int svd_max_m = chi_max_ * d_;
     int svd_max_n = d_ * chi_max_;
     int svd_max_k = std::min(svd_max_m, svd_max_n);
-    int max_ns_m = chi_max_ * d_;  // largest dimension for Newton-Schulz
-    int max_ns_n = chi_max_ * d_;  // may equal m for square theta
 
     workspaces_.resize(n_segments_);
 
@@ -217,12 +214,6 @@ void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
             HIP_CHECK(hipMemcpy(ws.d_const_neg_one, &h_neg_one, sizeof(Scalar), hipMemcpyHostToDevice));
         }
 
-        // === Newton-Schulz workspace ===
-        HIP_CHECK(hipMalloc(&ws.d_ns_U, (size_t)max_ns_m * max_ns_n * sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&ws.d_ns_U_new, (size_t)max_ns_m * max_ns_n * sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&ws.d_ns_gram, (size_t)max_ns_n * max_ns_n * sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&ws.d_ns_P, (size_t)max_ns_n * max_ns_n * sizeof(Scalar)));
-
         // === SVD workspace ===
         HIP_CHECK(hipMalloc(&ws.d_svd_A, theta_size_max_ * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_svd_U, (size_t)svd_max_m * svd_max_k * sizeof(Scalar)));
@@ -256,30 +247,6 @@ void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
                 opt_size = (int)work_opt + 1;
             }
             ws.h_svd_work.resize(opt_size);
-        }
-
-        // NS-split eigendecomp workspace
-        int ns_k = svd_max_k;  // max P matrix dimension
-        ws.h_ns_PtP.resize((size_t)ns_k * ns_k);
-        ws.h_ns_eigvals.resize(ns_k);
-        ws.h_ns_syev_rwork.resize(Traits::syev_rwork_size(ns_k));
-        // Query optimal workspace for dsyev/zheev
-        {
-            int n_q = ns_k;
-            int lwork_q = -1;
-            Scalar work_opt;
-            int info;
-            const char jobz = 'V', uplo = 'U';
-            Traits::lapack_syev(&jobz, &uplo, &n_q, nullptr, &n_q, nullptr,
-                    &work_opt, &lwork_q,
-                    ws.h_ns_syev_rwork.empty() ? nullptr : ws.h_ns_syev_rwork.data(), &info);
-            int opt_size;
-            if constexpr (Traits::is_complex) {
-                opt_size = (int)Traits::real_part(work_opt) + 1;
-            } else {
-                opt_size = (int)work_opt + 1;
-            }
-            ws.h_ns_syev_work.resize(opt_size);
         }
 
         // === rSVD workspace (Halko-Martinsson-Tropp with GPU QR) ===
@@ -358,11 +325,6 @@ void PDMRGGPUOpt<Scalar>::free_gpu_resources() {
         if (ws.d_const_one) hipFree(ws.d_const_one);
         if (ws.d_const_zero) hipFree(ws.d_const_zero);
         if (ws.d_const_neg_one) hipFree(ws.d_const_neg_one);
-        // Newton-Schulz
-        if (ws.d_ns_U) hipFree(ws.d_ns_U);
-        if (ws.d_ns_U_new) hipFree(ws.d_ns_U_new);
-        if (ws.d_ns_gram) hipFree(ws.d_ns_gram);
-        if (ws.d_ns_P) hipFree(ws.d_ns_P);
         // SVD
         if (ws.d_svd_A) hipFree(ws.d_svd_A);
         if (ws.d_svd_U) hipFree(ws.d_svd_U);
@@ -872,405 +834,6 @@ void PDMRGGPUOpt<Scalar>::build_initial_environments() {
         update_right_env(i, 0);
     }
     HIP_CHECK(hipStreamSynchronize(streams_[0]));
-}
-
-// ============================================================================
-// Newton-Schulz Left Polar Decomposition (tall/square, m >= n)
-// A = U @ P, where U^H U = I_n, P = U^H A is PSD
-// ============================================================================
-
-template<typename Scalar>
-void PDMRGGPUOpt<Scalar>::newton_schulz_left(
-    Scalar* d_A, int m, int n,
-    Scalar* d_U, Scalar* d_P,
-    int si, double tol, int* out_iters) {
-
-    auto& ws = workspaces_[si];
-    Scalar one = Traits::one(), zero_val = Traits::zero();
-    Scalar half = Traits::make_scalar(0.5);
-
-    // Compute ||A||_F
-    RealType fro;
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
-    ROCBLAS_CHECK(Traits::nrm2(handles_[si], m * n, d_A, 1, &fro));
-
-    if (fro < 1e-300) {
-        HIP_CHECK(hipMemsetAsync(d_U, 0, m * n * sizeof(Scalar), streams_[si]));
-        HIP_CHECK(hipMemsetAsync(d_P, 0, n * n * sizeof(Scalar), streams_[si]));
-        if (out_iters) *out_iters = 0;
-        return;
-    }
-
-    // U = A / ||A||_F
-    HIP_CHECK(hipMemcpyAsync(d_U, d_A, m * n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
-    RealType inv_fro = 1.0 / fro;
-    ROCBLAS_CHECK(Traits::scal_real(handles_[si], m * n, &inv_fro, d_U, 1));
-
-    Scalar* d_gram = ws.d_ns_gram;    // (n, n)
-    Scalar* d_U_new = ws.d_ns_U_new;  // (m, n)
-
-    int total_iters = 0;
-    for (int iter = 0; iter < 30; iter++) {
-        // 1. gram = U^H @ U  → (n, n)
-        ROCBLAS_CHECK(Traits::gemm(handles_[si],
-            Traits::op_h, rocblas_operation_none,
-            n, n, m, &one, d_U, m, d_U, m, &zero_val, d_gram, n));
-
-        // 2. gram = 3I - gram  (in-place)
-        launch_scaled_identity_minus(d_gram, n, 3.0, streams_[si]);
-
-        // 3. U_new = 0.5 * U @ gram  → (m, n)
-        ROCBLAS_CHECK(Traits::gemm(handles_[si],
-            rocblas_operation_none, rocblas_operation_none,
-            m, n, n, &half, d_U, m, d_gram, n, &zero_val, d_U_new, m));
-
-        total_iters = iter + 1;
-
-        // Convergence check every 3 iterations
-        if (iter >= 2 && iter % 3 == 0) {
-            // diff = U_new - U → compute in d_heff_result (scratch)
-            HIP_CHECK(hipMemcpyAsync(ws.d_heff_result, d_U_new, m * n * sizeof(Scalar),
-                                      hipMemcpyDeviceToDevice, streams_[si]));
-            Scalar neg_one = Traits::neg(Traits::one());
-            ROCBLAS_CHECK(Traits::axpy(handles_[si], m * n, &neg_one, d_U, 1, ws.d_heff_result, 1));
-
-            RealType diff_norm;
-            HIP_CHECK(hipStreamSynchronize(streams_[si]));
-            ROCBLAS_CHECK(Traits::nrm2(handles_[si], m * n, ws.d_heff_result, 1, &diff_norm));
-
-            // Swap U ← U_new
-            std::swap(d_U, d_U_new);
-            // Fix workspace pointer if we swapped
-            if (d_U == ws.d_ns_U_new) {
-                // d_U is now d_ns_U_new, d_U_new is d_ns_U
-                // This is fine, just keep going with swapped pointers
-            }
-
-            if (diff_norm < tol) break;
-        } else {
-            // Swap without convergence check
-            std::swap(d_U, d_U_new);
-        }
-    }
-
-    if (out_iters) *out_iters = total_iters;
-
-    // Ensure d_U is in ws.d_ns_U (the expected output location)
-    // After swaps, d_U might be in d_ns_U_new
-    if (d_U != ws.d_ns_U) {
-        HIP_CHECK(hipMemcpyAsync(ws.d_ns_U, d_U, m * n * sizeof(Scalar),
-                                  hipMemcpyDeviceToDevice, streams_[si]));
-    }
-
-    // P = U^H @ A  → (n, m) × (m, n) → (n, n)
-    ROCBLAS_CHECK(Traits::gemm(handles_[si],
-        Traits::op_h, rocblas_operation_none,
-        n, n, m, &one, ws.d_ns_U, m, d_A, m, &zero_val, d_P, n));
-}
-
-// ============================================================================
-// Newton-Schulz Right Polar Decomposition (wide, m < n)
-// A = L @ Q, where Q Q^H = I_m, L = A @ Q^H is PSD
-// ============================================================================
-
-template<typename Scalar>
-void PDMRGGPUOpt<Scalar>::newton_schulz_right(
-    Scalar* d_A, int m, int n,
-    Scalar* d_L, Scalar* d_Q,
-    int si, double tol, int* out_iters) {
-
-    auto& ws = workspaces_[si];
-    Scalar one = Traits::one(), zero_val = Traits::zero();
-    Scalar half = Traits::make_scalar(0.5);
-
-    // Compute ||A||_F
-    RealType fro;
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
-    ROCBLAS_CHECK(Traits::nrm2(handles_[si], m * n, d_A, 1, &fro));
-
-    if (fro < 1e-300) {
-        HIP_CHECK(hipMemsetAsync(d_Q, 0, m * n * sizeof(Scalar), streams_[si]));
-        HIP_CHECK(hipMemsetAsync(d_L, 0, m * m * sizeof(Scalar), streams_[si]));
-        if (out_iters) *out_iters = 0;
-        return;
-    }
-
-    // Q = A / ||A||_F
-    HIP_CHECK(hipMemcpyAsync(d_Q, d_A, m * n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
-    RealType inv_fro = 1.0 / fro;
-    ROCBLAS_CHECK(Traits::scal_real(handles_[si], m * n, &inv_fro, d_Q, 1));
-
-    Scalar* d_gram = ws.d_ns_gram;     // reuse for (m, m)
-    Scalar* d_Q_new = ws.d_ns_U_new;   // reuse for (m, n)
-
-    int total_iters = 0;
-    for (int iter = 0; iter < 30; iter++) {
-        // 1. gram = Q @ Q^H  → (m, m)
-        ROCBLAS_CHECK(Traits::gemm(handles_[si],
-            rocblas_operation_none, Traits::op_h,
-            m, m, n, &one, d_Q, m, d_Q, m, &zero_val, d_gram, m));
-
-        // 2. gram = 3I - gram  (in-place)
-        launch_scaled_identity_minus(d_gram, m, 3.0, streams_[si]);
-
-        // 3. Q_new = 0.5 * gram @ Q  → (m, n)
-        ROCBLAS_CHECK(Traits::gemm(handles_[si],
-            rocblas_operation_none, rocblas_operation_none,
-            m, n, m, &half, d_gram, m, d_Q, m, &zero_val, d_Q_new, m));
-
-        total_iters = iter + 1;
-
-        if (iter >= 2 && iter % 3 == 0) {
-            HIP_CHECK(hipMemcpyAsync(ws.d_heff_result, d_Q_new, m * n * sizeof(Scalar),
-                                      hipMemcpyDeviceToDevice, streams_[si]));
-            Scalar neg_one = Traits::neg(Traits::one());
-            ROCBLAS_CHECK(Traits::axpy(handles_[si], m * n, &neg_one, d_Q, 1, ws.d_heff_result, 1));
-
-            RealType diff_norm;
-            HIP_CHECK(hipStreamSynchronize(streams_[si]));
-            ROCBLAS_CHECK(Traits::nrm2(handles_[si], m * n, ws.d_heff_result, 1, &diff_norm));
-
-            std::swap(d_Q, d_Q_new);
-            if (diff_norm < tol) break;
-        } else {
-            std::swap(d_Q, d_Q_new);
-        }
-    }
-
-    if (out_iters) *out_iters = total_iters;
-
-    // Ensure d_Q is in the right place
-    if (d_Q != ws.d_ns_U_new && d_Q != ws.d_ns_U) {
-        // shouldn't happen, but safety
-    }
-    // Q might have been swapped. Copy to a known location for output.
-    // We use d_ns_U_new as Q's home
-    Scalar* final_Q = d_Q;
-
-    // L = A @ Q^H  → (m, n) × (n, m) → (m, m)
-    ROCBLAS_CHECK(Traits::gemm(handles_[si],
-        rocblas_operation_none, Traits::op_h,
-        m, m, n, &one, d_A, m, final_Q, m, &zero_val, d_L, m));
-
-    // Copy Q to output location if needed
-    if (final_Q != d_Q) {
-        HIP_CHECK(hipMemcpyAsync(d_Q, final_Q, m * n * sizeof(Scalar),
-                                  hipMemcpyDeviceToDevice, streams_[si]));
-    }
-}
-
-// ============================================================================
-// Newton-Schulz bond split (Option A)
-// Uses Newton-Schulz + eigendecomposition of P^H P for truncation
-// ============================================================================
-
-template<typename Scalar>
-void PDMRGGPUOpt<Scalar>::ns_split(int site, Scalar* d_theta, char direction, int si) {
-    int cL = chi_L(site);
-    int cR = chi_R(site + 1);
-    auto& ws = workspaces_[si];
-
-    int m = cL * d_;
-    int n_svd = d_ * cR;
-    int k = std::min(m, n_svd);
-    int max_k = std::min(k, chi_max_user_);
-
-    // For very small systems, fall back to SVD
-    if (k <= 4 || m < 2 || n_svd < 2) {
-        svd_split(site, d_theta, direction, si);
-        return;
-    }
-
-    if (m >= n_svd) {
-        // Tall/square: left Newton-Schulz → A = U_ns @ P
-        // U_ns is (m, n_svd) isometric, P is (n_svd, n_svd)
-        int ns_iters = 0;
-        newton_schulz_left(d_theta, m, n_svd, ws.d_ns_U, ws.d_ns_P, si, 1e-10, &ns_iters);
-
-        // If NS didn't converge well, fall back to SVD
-        if (ns_iters >= 29) {
-            svd_split(site, d_theta, direction, si);
-            return;
-        }
-
-        HIP_CHECK(hipStreamSynchronize(streams_[si]));
-
-        // Verify ||U^H U - I||_F < tol to catch silent NS failures.
-        // Compute U^H U into d_ns_gram (n_svd × n_svd), then check diagonal/off-diagonal.
-        {
-            Scalar one_v = Traits::one(), zero_v = Traits::zero();
-            ROCBLAS_CHECK(Traits::gemm(handles_[si],
-                Traits::op_h, rocblas_operation_none,
-                n_svd, n_svd, m, &one_v, ws.d_ns_U, m, ws.d_ns_U, m,
-                &zero_v, ws.d_ns_gram, n_svd));
-
-            // Copy to host and check ||UtU - I||_F
-            std::vector<Scalar> h_UtU(n_svd * n_svd);
-            HIP_CHECK(hipMemcpy(h_UtU.data(), ws.d_ns_gram,
-                                n_svd * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
-            RealType frob2 = 0.0;
-            for (int j = 0; j < n_svd; j++) {
-                for (int i = 0; i < n_svd; i++) {
-                    RealType re = Traits::real_part(h_UtU[i + j * n_svd]);
-                    if (i == j) re -= 1.0;
-                    frob2 += re * re;
-                    if constexpr (Traits::is_complex) {
-                        RealType im = hipCimag(h_UtU[i + j * n_svd]);
-                        frob2 += im * im;
-                    }
-                }
-            }
-            if (std::sqrt(frob2) > 1e-10) {
-                svd_split(site, d_theta, direction, si);
-                return;
-            }
-        }
-
-        // Eigendecompose P^H P → eigenvalues σ², eigenvectors V
-        // P^H P on GPU: (n_svd, n_svd) × (n_svd, n_svd) → (n_svd, n_svd)
-        Scalar one = Traits::one(), zero_val = Traits::zero();
-        Scalar* d_PtP = ws.d_ns_gram;  // reuse gram buffer for (n_svd, n_svd)
-        ROCBLAS_CHECK(Traits::gemm(handles_[si],
-            Traits::op_h, rocblas_operation_none,
-            n_svd, n_svd, n_svd, &one, ws.d_ns_P, n_svd, ws.d_ns_P, n_svd,
-            &zero_val, d_PtP, n_svd));
-
-        // Copy P^H P to host
-        HIP_CHECK(hipMemcpy(ws.h_ns_PtP.data(), d_PtP, n_svd * n_svd * sizeof(Scalar),
-                            hipMemcpyDeviceToHost));
-
-        // Eigendecompose on CPU
-        int info;
-        const char jobz = 'V', uplo = 'U';
-        int lwork = (int)ws.h_ns_syev_work.size();
-        Traits::lapack_syev(&jobz, &uplo, &n_svd,
-                ws.h_ns_PtP.data(), &n_svd,
-                ws.h_ns_eigvals.data(),
-                ws.h_ns_syev_work.data(), &lwork,
-                ws.h_ns_syev_rwork.empty() ? nullptr : ws.h_ns_syev_rwork.data(),
-                &info);
-
-        if (info != 0) {
-            // Eigendecomp failed, fall back to SVD
-            svd_split(site, d_theta, direction, si);
-            return;
-        }
-
-        // Eigenvalues are in ascending order. Singular values = sqrt(eigenvalues).
-        // Reverse to get descending order.
-        std::vector<RealType> sing_vals(n_svd);
-        for (int i = 0; i < n_svd; i++) {
-            RealType ev = ws.h_ns_eigvals[n_svd - 1 - i];
-            sing_vals[i] = (ev > 0) ? std::sqrt(ev) : 0.0;
-        }
-
-        // Eigenvectors are columns of h_ns_PtP (overwritten by dsyev).
-        // They correspond to ascending eigenvalues. We need descending order.
-        // V_reversed[:, i] = V[:, n_svd-1-i]
-        // Since P^H P = V Σ² V^H, and SVD of P gives P = U_p S Vh,
-        // then P^H P = Vh^H S² Vh, so Vh = V^H (reversed).
-
-        // Truncation
-        int new_k = std::min(max_k, n_svd);
-        for (int i = 0; i < new_k; i++) {
-            if (sing_vals[i] < 1e-14) { new_k = i; break; }
-        }
-        if (new_k == 0) new_k = 1;
-
-        // Build Vh_trunc (new_k × n_svd) on host: rows are reversed eigenvectors
-        // V[:, n_svd-1-i] → row i of Vh
-        std::vector<Scalar> h_Vh_trunc(new_k * n_svd);
-        for (int i = 0; i < new_k; i++) {
-            int src_col = n_svd - 1 - i;  // reversed index
-            for (int j = 0; j < n_svd; j++) {
-                // Vh[i, j] = conj(V[j, src_col])
-                Scalar v_val = ws.h_ns_PtP[j + src_col * n_svd];
-                if constexpr (Traits::is_complex) {
-                    h_Vh_trunc[i + j * new_k] = make_hipDoubleComplex(hipCreal(v_val), -hipCimag(v_val));
-                } else {
-                    h_Vh_trunc[i + j * new_k] = v_val;
-                }
-            }
-        }
-
-        // Upload Vh_trunc to GPU (into d_svd_Vh)
-        HIP_CHECK(hipMemcpy(ws.d_svd_Vh, h_Vh_trunc.data(),
-                            new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
-
-        // Compute U_p_trunc = P @ V_trunc @ diag(1/S) on GPU
-        // V_trunc[:, i] = eigenvector for i-th largest eigenvalue = column (n_svd-1-i)
-        // First: upload V_trunc (n_svd × new_k) to GPU
-        std::vector<Scalar> h_V_trunc(n_svd * new_k);
-        for (int i = 0; i < new_k; i++) {
-            int src_col = n_svd - 1 - i;
-            for (int j = 0; j < n_svd; j++) {
-                h_V_trunc[j + i * n_svd] = ws.h_ns_PtP[j + src_col * n_svd];
-            }
-        }
-        HIP_CHECK(hipMemcpy(ws.d_svd_U, h_V_trunc.data(),
-                            n_svd * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
-
-        // U_p = P @ V_trunc → (n_svd, n_svd) × (n_svd, new_k) → (n_svd, new_k)
-        // Store in d_svd_work (reuse)
-        ROCBLAS_CHECK(Traits::gemm(handles_[si],
-            rocblas_operation_none, rocblas_operation_none,
-            n_svd, new_k, n_svd, &one, ws.d_ns_P, n_svd,
-            ws.d_svd_U, n_svd, &zero_val, ws.d_svd_work, n_svd));
-
-        // Scale columns by 1/S: U_p[:, i] /= S[i]
-        for (int i = 0; i < new_k; i++) {
-            if (sing_vals[i] > 1e-14) {
-                RealType inv_s = 1.0 / sing_vals[i];
-                ROCBLAS_CHECK(Traits::scal_real(handles_[si], n_svd, &inv_s,
-                    ws.d_svd_work + i * n_svd, 1));
-            }
-        }
-
-        // U_full = U_ns @ U_p → (m, n_svd) × (n_svd, new_k) → (m, new_k)
-        // Store in d_svd_A (reuse)
-        ROCBLAS_CHECK(Traits::gemm(handles_[si],
-            rocblas_operation_none, rocblas_operation_none,
-            m, new_k, n_svd, &one, ws.d_ns_U, m,
-            ws.d_svd_work, n_svd, &zero_val, ws.d_svd_A, m));
-
-        HIP_CHECK(hipStreamSynchronize(streams_[si]));
-
-        // Upload singular values to device for GPU-side scaling
-        HIP_CHECK(hipMemcpyAsync(ws.d_svd_S, sing_vals.data(), new_k * sizeof(RealType),
-                                  hipMemcpyHostToDevice, streams_[si]));
-
-        // Store MPS tensors — scale on GPU
-        if (direction == 'R') {
-            // MPS[site] = U_full[:, :new_k] → (cL*d, new_k) = (m, new_k)
-            allocate_mps_tensor(site, cL, new_k);
-            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.d_svd_A,
-                        m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
-
-            // MPS[site+1] = diag(S) @ Vh[:new_k, :] — Vh is on device at d_svd_Vh, scale rows on GPU
-            allocate_mps_tensor(site + 1, new_k, cR);
-            scale_rows_by_real(ws.d_svd_Vh, new_k, ws.d_svd_S,
-                               d_mps_tensors_[site + 1], new_k, new_k, n_svd, streams_[si]);
-        } else {
-            // MPS[site] = U_full @ diag(S) → scale columns of U_full on GPU
-            allocate_mps_tensor(site, cL, new_k);
-            scale_columns_by_real(ws.d_svd_A, m, ws.d_svd_S,
-                                  d_mps_tensors_[site], m, m, new_k, streams_[si]);
-
-            // MPS[site+1] = Vh[:new_k, :] — upload from host
-            allocate_mps_tensor(site + 1, new_k, cR);
-            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], h_Vh_trunc.data(),
-                        new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
-        }
-
-        bond_dims_[site + 1] = new_k;
-        ws.heff_cached_site = -1;
-
-    } else {
-        // Wide case: right Newton-Schulz → A = L @ Q
-        // Small matrix at boundaries — fall back to SVD for simplicity.
-        svd_split(site, d_theta, direction, si);
-        return;
-    }
 }
 
 // ============================================================================
@@ -2333,122 +1896,13 @@ double PDMRGGPUOpt<Scalar>::optimize_bond(int site, char direction, int si) {
     }
 
     // Bond split
-    if (use_ns_split_) {
-        ns_split(site, ws.d_theta, direction, si);
-    } else if (use_rsvd_) {
+    if (use_rsvd_) {
         rsvd_split(site, ws.d_theta, direction, si);
     } else {
         svd_split(site, ws.d_theta, direction, si);
     }
 
     return energy;
-}
-
-// ============================================================================
-// Canonicalization via Newton-Schulz
-// ============================================================================
-
-template<typename Scalar>
-void PDMRGGPUOpt<Scalar>::left_canonize_site(int site, int si) {
-    // MPS[site] has shape (chi_L, d, chi_R) stored as (chi_L*d, chi_R) in column-major
-    int cL = chi_L(site);
-    int cR = chi_R(site);
-    int m = cL * d_;  // rows
-    int n = cR;       // cols
-
-    if (m < n) return;  // can't left-canonize if wide (boundary case)
-
-    auto& ws = workspaces_[si];
-    Scalar one = Traits::one(), zero_val = Traits::zero();
-
-    // Newton-Schulz: MPS[site] = U @ P
-    newton_schulz_left(d_mps_tensors_[site], m, n, ws.d_ns_U, ws.d_ns_P, si, 1e-10);
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
-
-    // MPS[site] = U (left-isometric)
-    HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.d_ns_U, m * n * sizeof(Scalar),
-                              hipMemcpyDeviceToDevice, streams_[si]));
-
-    // Absorb P into MPS[site+1]: MPS[site+1] = P @ MPS[site+1]
-    if (site + 1 < L_) {
-        int cR_next = chi_R(site + 1);
-        // P is (n, n) = (cR, cR), MPS[site+1] is (cR, d*cR_next)
-        // new_MPS[site+1] = P @ MPS[site+1]: (cR, cR) × (cR, d*cR_next) → (cR, d*cR_next)
-        ROCBLAS_CHECK(Traits::gemm(handles_[si],
-            rocblas_operation_none, rocblas_operation_none,
-            n, d_ * cR_next, n,
-            &one, ws.d_ns_P, n,
-            d_mps_tensors_[site + 1], n,
-            &zero_val, ws.d_heff_result, n));
-
-        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], ws.d_heff_result,
-                    n * d_ * cR_next * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
-    }
-}
-
-template<typename Scalar>
-void PDMRGGPUOpt<Scalar>::right_canonize_site(int site, int si) {
-    // MPS[site] has shape (chi_L, d, chi_R) stored as (chi_L, d*chi_R) in column-major
-    int cL = chi_L(site);
-    int cR = chi_R(site);
-    int m = cL;        // rows
-    int n = d_ * cR;   // cols
-
-    if (m >= n) return;  // can't right-canonize if tall (boundary case)
-
-    auto& ws = workspaces_[si];
-    Scalar one = Traits::one(), zero_val = Traits::zero();
-
-    // Right Newton-Schulz: MPS[site] = L @ Q where Q Q^H = I_m
-    // d_ns_P will hold L (m × m), d_ns_U will hold Q (m × n)
-    newton_schulz_right(d_mps_tensors_[site], m, n, ws.d_ns_P, ws.d_ns_U, si, 1e-10);
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
-
-    // MPS[site] = Q (right-isometric)
-    HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.d_ns_U, m * n * sizeof(Scalar),
-                              hipMemcpyDeviceToDevice, streams_[si]));
-
-    // Absorb L into MPS[site-1]: MPS[site-1] = MPS[site-1] @ L
-    if (site > 0) {
-        int cL_prev = chi_L(site - 1);
-        // MPS[site-1] is (cL_prev*d, m) column-major, L is (m, m)
-        // new_MPS[site-1] = MPS[site-1] @ L
-        ROCBLAS_CHECK(Traits::gemm(handles_[si],
-            rocblas_operation_none, rocblas_operation_none,
-            cL_prev * d_, m, m,
-            &one, d_mps_tensors_[site - 1], cL_prev * d_,
-            ws.d_ns_P, m,
-            &zero_val, ws.d_heff_result, cL_prev * d_));
-
-        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site - 1], ws.d_heff_result,
-                    cL_prev * d_ * m * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
-    }
-}
-
-template<typename Scalar>
-void PDMRGGPUOpt<Scalar>::canonize_segment_right(int seg_idx) {
-    int first = seg_first_[seg_idx];
-    int last = seg_last_[seg_idx];
-    int si = seg_idx;
-
-    // Right-canonize from last site to first+1
-    for (int j = last; j > first; j--) {
-        right_canonize_site(j, si);
-    }
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
-}
-
-template<typename Scalar>
-void PDMRGGPUOpt<Scalar>::canonize_segment_left(int seg_idx) {
-    int first = seg_first_[seg_idx];
-    int last = seg_last_[seg_idx];
-    int si = seg_idx;
-
-    // Left-canonize from first site to last-1
-    for (int j = first; j < last; j++) {
-        left_canonize_site(j, si);
-    }
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
 }
 
 // ============================================================================
@@ -2817,7 +2271,7 @@ double PDMRGGPUOpt<Scalar>::sweep_RL_full() {
 }
 
 // ============================================================================
-// Segment sweep methods (with Newton-Schulz pre-canonicalization)
+// Segment sweep methods
 // ============================================================================
 
 template<typename Scalar>
@@ -3300,9 +2754,7 @@ void PDMRGGPUOpt<Scalar>::batched_segment_sweep(bool even_LR) {
                 char dir = active_dirs[b];
                 auto& ws = workspaces_[si];
 
-                if (use_ns_split_) {
-                    ns_split(site, ws.d_theta, dir, si);
-                } else if (use_rsvd_) {
+                if (use_rsvd_) {
                     rsvd_split(site, ws.d_theta, dir, si);
                 } else {
                     svd_split(site, ws.d_theta, dir, si);

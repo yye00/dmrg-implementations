@@ -191,7 +191,7 @@ void build_josephson_mpo(int L, int d, int D_mpo,
 // Heisenberg test (real)
 // ============================================================================
 int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
-                    int n_local, int n_warmup, bool gpu_svd, bool ns_split,
+                    int n_local, int n_warmup, bool gpu_svd,
                     bool davidson, bool rsvd, bool quiet, bool batched_sweep,
                     bool chebyshev) {
     int d = 2;
@@ -205,7 +205,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
         printf("  segments=%d, outer=%d, local=%d, warmup=%d\n",
                n_segments, n_outer, n_local, n_warmup);
         printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
-        printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
+        printf("  Bond split: %s\n", rsvd ? "rSVD" : "SVD");
         printf("  Eigensolver: %s\n", chebyshev ? "Chebyshev" : (davidson ? "Block-Davidson" : "Lanczos"));
         printf("======================================\n\n");
     }
@@ -219,7 +219,6 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
 
     PDMRGGPUOpt<double> pdmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
     pdmrg.set_cpu_svd(!gpu_svd);
-    pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
     pdmrg.set_rsvd(rsvd);
     pdmrg.set_use_batched_sweep(batched_sweep);
@@ -253,7 +252,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
 // TFIM test (real)
 // ============================================================================
 int test_tfim(int L, int chi_max, int n_outer, int n_segments,
-              int n_local, int n_warmup, bool gpu_svd, bool ns_split,
+              int n_local, int n_warmup, bool gpu_svd,
               bool davidson, bool rsvd, double J, double h_field, bool quiet, bool batched_sweep,
               bool chebyshev) {
     int d = 2;
@@ -268,14 +267,13 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
                n_segments, n_outer, n_local, n_warmup);
         printf("  J=%.4f, h=%.4f\n", J, h_field);
         printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
-        printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
+        printf("  Bond split: %s\n", rsvd ? "rSVD" : "SVD");
         printf("  Eigensolver: %s\n", chebyshev ? "Chebyshev" : (davidson ? "Block-Davidson" : "Lanczos"));
         printf("======================================\n\n");
     }
 
     PDMRGGPUOpt<double> pdmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
     pdmrg.set_cpu_svd(!gpu_svd);
-    pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
     pdmrg.set_rsvd(rsvd);
     pdmrg.set_use_batched_sweep(batched_sweep);
@@ -300,7 +298,7 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
 // Josephson Junction test (complex128)
 // ============================================================================
 int test_josephson(int L, int chi_max, int n_outer, int n_segments,
-                   int n_local, int n_warmup, bool gpu_svd, bool ns_split,
+                   int n_local, int n_warmup, bool gpu_svd,
                    bool davidson, bool rsvd, int n_max, double E_J, double E_C, double phi_ext,
                    bool quiet, bool batched_sweep, bool chebyshev) {
     int d = 2 * n_max + 1;
@@ -316,7 +314,7 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
                n_segments, n_outer, n_local, n_warmup);
         printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/%.1f\n", E_J, E_C, M_PI / phi_ext);
         printf("  SVD: %s\n", gpu_svd ? "GPU (rocsolver)" : "CPU (LAPACK)");
-        printf("  Bond split: %s\n", ns_split ? "Newton-Schulz" : (rsvd ? "rSVD" : "SVD"));
+        printf("  Bond split: %s\n", rsvd ? "rSVD" : "SVD");
         printf("  Eigensolver: %s\n", chebyshev ? "Chebyshev" : (davidson ? "Block-Davidson" : "Lanczos"));
         printf("======================================\n\n");
     }
@@ -332,7 +330,6 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
 
     PDMRGGPUOpt<Complex> pdmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
     pdmrg.set_cpu_svd(!gpu_svd);
-    pdmrg.set_use_ns_split(ns_split);
     pdmrg.set_use_davidson(davidson);
     pdmrg.set_rsvd(rsvd);
     pdmrg.set_use_batched_sweep(batched_sweep);
@@ -373,7 +370,6 @@ int main(int argc, char** argv) {
     int n_local = 2;
     int n_warmup = 3;
     bool gpu_svd = true;
-    bool ns_split = true;  // default: use Newton-Schulz for bond split
     bool davidson = false;  // default: use Lanczos eigensolver
     bool rsvd = false;      // default: no randomized SVD
     bool quiet = false;
@@ -390,9 +386,7 @@ int main(int argc, char** argv) {
         int pos = 0;
         for (int i = 1; i < argc; i++) {
             if (std::string(argv[i]) == "--cpu-svd") { gpu_svd = false; continue; }
-            if (std::string(argv[i]) == "--ns-split") { ns_split = true; continue; }
-            if (std::string(argv[i]) == "--svd-split") { ns_split = false; continue; }
-            if (std::string(argv[i]) == "--rsvd") { rsvd = true; ns_split = false; continue; }
+            if (std::string(argv[i]) == "--rsvd") { rsvd = true; continue; }
             if (std::string(argv[i]) == "--davidson") { davidson = true; continue; }
             if (std::string(argv[i]) == "--quiet") { quiet = true; continue; }
             if (std::string(argv[i]) == "--batched-sweep") { batched_sweep = true; continue; }
@@ -419,15 +413,15 @@ int main(int argc, char** argv) {
     try {
         if (run_josephson) {
             return test_josephson(L, chi_max, n_outer, n_segments, n_local, n_warmup,
-                                  gpu_svd, ns_split, davidson, rsvd, n_max, E_J, E_C, phi_ext,
+                                  gpu_svd, davidson, rsvd, n_max, E_J, E_C, phi_ext,
                                   quiet, batched_sweep, chebyshev);
         } else if (run_tfim) {
             return test_tfim(L, chi_max, n_outer, n_segments, n_local, n_warmup,
-                             gpu_svd, ns_split, davidson, rsvd, J_tfim, h_field,
+                             gpu_svd, davidson, rsvd, J_tfim, h_field,
                              quiet, batched_sweep, chebyshev);
         } else {
             return test_heisenberg(L, chi_max, n_outer, n_segments, n_local, n_warmup,
-                                   gpu_svd, ns_split, davidson, rsvd, quiet, batched_sweep,
+                                   gpu_svd, davidson, rsvd, quiet, batched_sweep,
                                    chebyshev);
         }
     } catch (const std::exception& e) {

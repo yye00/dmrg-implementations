@@ -9,16 +9,14 @@
 #include "../../common/gpu_opts.h"
 
 /**
- * PDMRG-GPU-OPT: Stream-Parallel DMRG with Newton-Schulz + Block-Davidson
+ * PDMRG-GPU-OPT: Stream-Parallel DMRG with Block-Davidson
  *
  * Key algorithmic changes from pdmrg-gpu:
- * 1. Newton-Schulz polar decomposition replaces QR/SVD for canonicalization
- *    and bond splitting (BLAS-3 GEMM-heavy, GPU-native)
- * 2. Block-Davidson eigensolver replaces Lanczos (BLAS-3 dominant)
+ * 1. Block-Davidson eigensolver replaces Lanczos (BLAS-3 dominant)
  *
  * Templated on Scalar: double (real) or hipDoubleComplex (complex128).
- * 3. Dimension padding to MFMA-16 multiples for MI300X tile alignment
- * 4. Strided batched Step-3 GEMMs to reduce kernel launch overhead
+ * 2. Dimension padding to MFMA-16 multiples for MI300X tile alignment
+ * 3. Strided batched Step-3 GEMMs to reduce kernel launch overhead
  */
 
 // Round up to next multiple of 16 for MI300X MFMA FP64 tile alignment
@@ -44,7 +42,6 @@ public:
     double get_energy() const { return energy_; }
     void get_mps(std::vector<std::vector<Scalar>>& h_mps) const;
     void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
-    void set_use_ns_split(bool use_ns) { use_ns_split_ = use_ns; }
     void set_use_davidson(bool use_dav) { use_davidson_ = use_dav; }
     void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
     void set_use_batched_sweep(bool b) { use_batched_sweep_ = b; }
@@ -145,12 +142,6 @@ private:
         Scalar* d_const_zero;
         Scalar* d_const_neg_one;
 
-        // === Newton-Schulz workspace ===
-        Scalar* d_ns_U;        // (max_ns_m, max_ns_n) iterate
-        Scalar* d_ns_U_new;    // (max_ns_m, max_ns_n) next iterate
-        Scalar* d_ns_gram;     // (max_ns_n, max_ns_n) U^H U or Q Q^H
-        Scalar* d_ns_P;        // (max_ns_n, max_ns_n) remainder
-
         // === SVD workspace ===
         Scalar* d_svd_A;
         Scalar* d_svd_U;
@@ -162,12 +153,6 @@ private:
         std::vector<Scalar> h_svd_A, h_svd_U, h_svd_Vh, h_svd_work, h_svd_tmp;
         std::vector<RealType> h_svd_S;
         std::vector<RealType> h_svd_rwork;
-
-        // NS-split eigendecomp workspace
-        std::vector<Scalar> h_ns_PtP;
-        std::vector<RealType> h_ns_eigvals;
-        std::vector<Scalar> h_ns_syev_work;
-        std::vector<RealType> h_ns_syev_rwork;
 
         // === rSVD workspace (Halko-Martinsson-Tropp) ===
         Scalar* d_rsvd_omega;    // (n, r) random projection on GPU
@@ -185,14 +170,13 @@ private:
     GpuOpts opts_;
     PhaseTimer t_lanczos_;      // full lanczos_eigensolver call
     PhaseTimer t_apply_heff_;   // each apply_heff invocation
-    PhaseTimer t_svd_;          // NS/SVD bond splitting
+    PhaseTimer t_svd_;          // SVD bond splitting
     PhaseTimer t_absorb_;       // scale + absorb GEMM
     PhaseTimer t_env_update_;   // update_left_env / update_right_env
     void init_timers();
     void report_timers();
 
     bool use_cpu_svd_;
-    bool use_ns_split_;
     bool use_davidson_;
     bool use_rsvd_;
     bool lanczos_use_1site_;  // when true, Lanczos calls apply_heff_single_site
@@ -215,7 +199,6 @@ private:
     double block_davidson_eigensolver(int site, Scalar* d_theta, int theta_size, int si);
     double lanczos_eigensolver(int site, Scalar* d_theta, int theta_size, int si);
     double chebyshev_eigensolver(int site, Scalar* d_theta, int theta_size, int si);
-    void ns_split(int site, Scalar* d_theta, char direction, int si);
     void svd_split(int site, Scalar* d_theta, char direction, int si);
     void rsvd_split(int site, Scalar* d_theta, char direction, int si);
     double optimize_bond(int site, char direction, int si);
@@ -224,20 +207,6 @@ private:
     void apply_heff_single_site(int site, const Scalar* d_in, Scalar* d_out, int si);
     void svd_split_single_site(int site, Scalar* d_theta, char direction, int si);
     double optimize_site_single(int site, char direction, int si);
-
-    // === Newton-Schulz polar decomposition ===
-    // Left variant (tall/square, m >= n): A = U @ P, U^H U = I
-    void newton_schulz_left(Scalar* d_A, int m, int n, Scalar* d_U, Scalar* d_P,
-                            int si, double tol = 1e-10, int* out_iters = nullptr);
-    // Right variant (wide, m < n): A = L @ Q, Q Q^H = I
-    void newton_schulz_right(Scalar* d_A, int m, int n, Scalar* d_L, Scalar* d_Q,
-                             int si, double tol = 1e-10, int* out_iters = nullptr);
-
-    // === Canonicalization via Newton-Schulz ===
-    void left_canonize_site(int site, int si);
-    void right_canonize_site(int site, int si);
-    void canonize_segment_right(int seg_idx);  // right-canonize all sites in segment
-    void canonize_segment_left(int seg_idx);   // left-canonize all sites in segment
 
     // === Environment updates ===
     void update_left_env(int site, int si);
