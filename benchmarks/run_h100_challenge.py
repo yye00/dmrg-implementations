@@ -21,6 +21,8 @@ import time
 from datetime import datetime, timezone
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO_ROOT, "benchmarks", "lib"))
+from provenance import provenance_block, binary_info
 
 # ─── Challenge Size Configurations ───────────────────────────────────────────
 
@@ -137,20 +139,29 @@ def run_gpu(impl, model, L, chi, sweeps, warmup=True, timeout=600):
 
     cmd, err = _build_gpu_cmd(impl, model, L, chi, sweeps)
     if err:
-        return {"energy": None, "time": None, "success": False, "error": err}
+        return {"energy": None, "time": None, "success": False, "error": err,
+                "cmd": None}
+
+    # cmd_rel: binary path relative to REPO_ROOT so rows are portable
+    cmd_rel = list(cmd)
+    if cmd_rel and cmd_rel[0].startswith(REPO_ROOT):
+        cmd_rel[0] = os.path.relpath(cmd_rel[0], REPO_ROOT)
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
             return {"energy": None, "time": None, "success": False,
-                    "error": (result.stderr or f"rc={result.returncode}")[-500:]}
+                    "error": (result.stderr or f"rc={result.returncode}")[-500:],
+                    "cmd": cmd_rel}
         energy, wt = _parse_gpu_output(result.stdout)
         if energy is None:
             return {"energy": None, "time": None, "success": False,
-                    "error": f"No energy: {result.stdout[-300:]}"}
-        return {"energy": energy, "time": wt, "success": True}
+                    "error": f"No energy: {result.stdout[-300:]}",
+                    "cmd": cmd_rel}
+        return {"energy": energy, "time": wt, "success": True, "cmd": cmd_rel}
     except subprocess.TimeoutExpired:
-        return {"energy": None, "time": None, "success": False, "error": f"Timeout ({timeout}s)"}
+        return {"energy": None, "time": None, "success": False,
+                "error": f"Timeout ({timeout}s)", "cmd": cmd_rel}
 
 
 # ─── CPU (quimb) runner ─────────────────────────────────────────────────────
@@ -219,8 +230,10 @@ def _build_tfim_mpo(L, qtn):
 
 # ─── Main benchmark loop ────────────────────────────────────────────────────
 
-def run_all(impl_names, models, do_warmup=True):
+def run_all(impl_names, models, do_warmup=True,
+            provenance=None, run_config=None):
     results = []
+    per_impl_binary = {}  # impl -> binary_info dict (captured once per impl)
 
     # Build flat config list
     configs = []
@@ -241,6 +254,14 @@ def run_all(impl_names, models, do_warmup=True):
             print(f"\n{'='*65}")
             print(f"  {impl} — {model}")
             print(f"{'='*65}")
+
+        # Capture binary metadata once per impl for provenance
+        if impl not in per_impl_binary:
+            if impl in GPU_IMPLS:
+                per_impl_binary[impl] = binary_info(
+                    os.path.join(REPO_ROOT, GPU_IMPLS[impl]))
+            else:
+                per_impl_binary[impl] = {"path": impl, "exists": None}
 
         label = f"L={L:3d} chi={chi:3d} sw={sweeps:2d}"
         print(f"  [{i+1:3d}/{total}] {label:25s}", end="", flush=True)
@@ -267,10 +288,18 @@ def run_all(impl_names, models, do_warmup=True):
 
         results.append(r)
 
-    return results
+    return results, per_impl_binary
 
 
-def save_results(results, output_dir):
+def save_results(results, output_dir,
+                 provenance=None, run_config=None, per_impl_binary=None):
+    """Write per-impl JSONs + one combined JSON.
+
+    Embeds a `provenance` dict (git commit, host, GPU, env vars), a
+    `run_config` dict (script-level args), and `binary` metadata
+    (SHA256 / mtime of the binary) so results are reproducible to the
+    exact code + configuration that produced them.
+    """
     os.makedirs(output_dir, exist_ok=True)
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
 
@@ -280,16 +309,30 @@ def save_results(results, output_dir):
 
     for impl, impl_results in by_impl.items():
         path = os.path.join(output_dir, f"{impl}_h100_challenge_{ts}.json")
+        payload = {"implementation": impl, "architecture": "h100",
+                   "benchmark": "challenge", "timestamp": ts,
+                   "results": impl_results}
+        if provenance is not None:
+            payload["provenance"] = provenance
+        if run_config is not None:
+            payload["run_config"] = run_config
+        if per_impl_binary is not None and impl in per_impl_binary:
+            payload["binary"] = per_impl_binary[impl]
         with open(path, "w") as f:
-            json.dump({"implementation": impl, "architecture": "h100",
-                        "benchmark": "challenge", "timestamp": ts,
-                        "results": impl_results}, f, indent=2)
+            json.dump(payload, f, indent=2)
         print(f"  Saved: {path}")
 
     path = os.path.join(output_dir, f"challenge_h100_{ts}.json")
+    combined = {"architecture": "h100", "benchmark": "challenge",
+                "timestamp": ts, "results": results}
+    if provenance is not None:
+        combined["provenance"] = provenance
+    if run_config is not None:
+        combined["run_config"] = run_config
+    if per_impl_binary is not None:
+        combined["binary"] = per_impl_binary
     with open(path, "w") as f:
-        json.dump({"architecture": "h100", "benchmark": "challenge",
-                    "timestamp": ts, "results": results}, f, indent=2)
+        json.dump(combined, f, indent=2)
     print(f"  Saved: {path}")
 
 
@@ -326,12 +369,30 @@ def main():
     print(f"  Output: {args.output_dir}")
     print(f"{'#'*65}")
 
-    results = run_all(impl_names, models, do_warmup=not args.skip_warmup)
+    provenance = provenance_block(repo_root=REPO_ROOT, script_argv=sys.argv[1:])
+    run_config = {
+        "grid":            "CHALLENGE (44 configs)",
+        "impl_names":      impl_names,
+        "models":          models,
+        "skip_warmup":     args.skip_warmup,
+        "josephson_nmax":  JOSEPHSON_NMAX,
+    }
+    if provenance["git"].get("dirty"):
+        print(f"  WARNING:          git repo is dirty "
+              f"({len(provenance['git'].get('dirty_files', []))} files modified)")
+    print(f"  Git commit:       {provenance['git'].get('commit_short', '?')}"
+          f" ({provenance['git'].get('branch', '?')})")
+
+    results, per_impl_binary = run_all(
+        impl_names, models, do_warmup=not args.skip_warmup,
+        provenance=provenance, run_config=run_config)
 
     print(f"\n{'='*65}")
     print(f"  Saving results...")
     print(f"{'='*65}")
-    save_results(results, args.output_dir)
+    save_results(results, args.output_dir,
+                 provenance=provenance, run_config=run_config,
+                 per_impl_binary=per_impl_binary)
 
     ok = sum(1 for r in results if r["success"])
     fail = len(results) - ok
