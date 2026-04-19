@@ -5,6 +5,8 @@
 #include <rocblas/rocblas.h>
 #include <vector>
 #include <string>
+#include <unordered_map>
+#include <cstdint>
 #include "scalar_traits.h"
 #include "../../common/gpu_opts.h"
 
@@ -55,6 +57,7 @@ public:
 private:
     // System parameters
     int L_, d_, chi_max_, chi_max_user_, D_mpo_;
+    int D_mpo_actual_;      // user-supplied MPO bond dim; D_mpo_ may be padded (D_PAD)
     double tol_;
     double energy_;
 
@@ -120,6 +123,18 @@ private:
     std::vector<Scalar> h_dav_H_proj_;
     std::vector<RealType> h_dav_eigvals_;
     std::vector<Scalar> h_dav_eigvecs_;
+
+    // LANCZOS_GRAPH: cached HIP-graph exec per (site, cL, cR) for apply_heff.
+    // d_heff_input_ is a fixed-address bounce buffer so captured graphs can
+    // read from a constant address across Lanczos iterations. Only allocated
+    // when opts_.lanczos_graph is on.
+    Scalar* d_heff_input_ = nullptr;
+    std::unordered_map<uint64_t, hipGraphExec_t> apply_heff_graph_cache_;
+    static inline uint64_t graph_key(int site, int cL, int cR) {
+        return ((uint64_t)(uint32_t)site << 40) |
+               ((uint64_t)(uint32_t)cL   << 20) |
+                (uint64_t)(uint32_t)cR;
+    }
 
     // Ablation flags + phase timers
     GpuOpts opts_;

@@ -29,6 +29,33 @@
         } \
     } while(0)
 
+// Fused Lanczos update:  w := w + (-α)*v_i + [(-β_{im1})*v_{im1}]
+// d_neg_alpha and d_neg_beta_im1 are Scalar* on device (device-pointer mode).
+// v_im1 may be nullptr when has_prev is false (iter==0 path).
+template<typename Scalar>
+__global__ void lanczos_fused_sub_kernel(
+    Scalar* w, const Scalar* v_i, const Scalar* v_im1,
+    const Scalar* d_neg_alpha, const Scalar* d_neg_beta_im1,
+    int n, int has_prev) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+    Scalar wi = w[idx];
+    wi = scalar_add(wi, scalar_mul(*d_neg_alpha, v_i[idx]));
+    if (has_prev) {
+        wi = scalar_add(wi, scalar_mul(*d_neg_beta_im1, v_im1[idx]));
+    }
+    w[idx] = wi;
+}
+
+// Fused normalize-and-copy:  v_{i+1}[k] = w[k] * inv_beta
+template<typename Scalar, typename RealType>
+__global__ void lanczos_fused_norm_copy_kernel(
+    Scalar* v_next, const Scalar* w, const RealType* d_inv_beta, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+    v_next[idx] = ScalarTraits<Scalar>::scale_by_real(*d_inv_beta, w[idx]);
+}
+
 // Profiling counters (reset per sweep pair)
 static double prof_davidson_ms = 0, prof_svd_ms = 0, prof_env_ms = 0;
 static int prof_davidson_iters = 0, prof_site_count = 0;
@@ -41,9 +68,23 @@ static int prof_heff_calls = 0;
 template<typename Scalar>
 DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     : L_(L), d_(d), chi_max_(pad_mfma16(chi_max)), chi_max_user_(chi_max),
-      D_mpo_(D_mpo), tol_(tol), energy_(0.0) {
+      D_mpo_(D_mpo), D_mpo_actual_(D_mpo), tol_(tol), energy_(0.0) {
 
     opts_.load_from_env();
+
+    // D_PAD: round MPO bond dim up to a multiple of 8 for MFMA-friendly
+    // GEMM shapes. All allocations and internal GEMMs use the padded D;
+    // the padded rows/cols of the W matrices are zero-filled in set_mpo
+    // so they contribute nothing numerically. The R boundary still uses
+    // D_mpo_actual_-1 (see build_initial_environments).
+    if (opts_.d_pad) {
+        int padded = (D_mpo_ + 7) & ~7;
+        if (padded != D_mpo_) {
+            std::fprintf(stderr, "[D_PAD] D_mpo padded: %d -> %d\n", D_mpo_, padded);
+            D_mpo_ = padded;
+        }
+    }
+
     opts_.print(stderr);
     init_timers();
 
@@ -171,6 +212,12 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     h_dav_H_proj_.resize(davidson_max_sub_ * davidson_max_sub_);
     h_dav_eigvals_.resize(davidson_max_sub_);
     h_dav_eigvecs_.resize(davidson_max_sub_ * davidson_max_sub_);
+
+    // LANCZOS_GRAPH: bounce buffer so captured apply_heff_two_site graphs read
+    // from a fixed address regardless of which Lanczos v_i the caller passes in.
+    if (opts_.lanczos_graph) {
+        HIP_CHECK(hipMalloc(&d_heff_input_, (size_t)theta_size_max_ * sizeof(Scalar)));
+    }
 }
 
 // ============================================================================
@@ -305,31 +352,49 @@ void DMRG2GPUOpt<Scalar>::initialize_mps_neel() {
 
 template<typename Scalar>
 void DMRG2GPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
-    int D = D_mpo_, d = d_;
+    // D_use: padded bond dim used for all internal buffers (D_PAD on).
+    // D_act: user's MPO bond dim.
+    int D_use = D_mpo_;
+    int D_act = D_mpo_actual_;
+    int d = d_;
     for (int i = 0; i < L_; i++) {
-        int size = D * d * d * D;
-        HIP_CHECK(hipMalloc(&d_mpo_tensors_[i], size * sizeof(Scalar)));
-        HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_mpo_tensors[i],
-                            size * sizeof(Scalar), hipMemcpyHostToDevice));
+        int size_use = D_use * d * d * D_use;
+        HIP_CHECK(hipMalloc(&d_mpo_tensors_[i], size_use * sizeof(Scalar)));
+        HIP_CHECK(hipMemset(d_mpo_tensors_[i], 0, size_use * sizeof(Scalar)));
+
+        std::vector<Scalar> h_WL(size_use, Traits::zero());
+        std::vector<Scalar> h_WR(size_use, Traits::zero());
+
+        if (D_use == D_act) {
+            HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_mpo_tensors[i],
+                                size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+        } else {
+            std::vector<Scalar> h_pad(size_use, Traits::zero());
+            for (int wp = 0; wp < D_act; wp++)
+                for (int sp = 0; sp < d; sp++)
+                    for (int s = 0; s < d; s++)
+                        for (int w = 0; w < D_act; w++)
+                            h_pad[w + s*D_use + sp*D_use*d + wp*D_use*d*d] =
+                                h_mpo_tensors[i][w + s*D_act + sp*D_act*d + wp*D_act*d*d];
+            HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_pad.data(),
+                                size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+        }
 
         // Precompute W_left and W_right matrices (for single-site env updates)
-        int wm_size = D * d * d * D;
-        std::vector<Scalar> h_WL(wm_size, Traits::zero());
-        std::vector<Scalar> h_WR(wm_size, Traits::zero());
-        for (int w = 0; w < D; w++)
+        for (int w = 0; w < D_act; w++)
             for (int s = 0; s < d; s++)
                 for (int sp = 0; sp < d; sp++)
-                    for (int wp = 0; wp < D; wp++) {
-                        Scalar val = h_mpo_tensors[i][w + s*D + sp*D*d + wp*D*d*d];
-                        h_WL[(w*d+s) + (wp*d+sp) * D * d] = val;
-                        h_WR[(wp*d+s) + (w*d+sp) * D * d] = val;
+                    for (int wp = 0; wp < D_act; wp++) {
+                        Scalar val = h_mpo_tensors[i][w + s*D_act + sp*D_act*d + wp*D_act*d*d];
+                        h_WL[(w*d+s) + (wp*d+sp) * D_use * d] = val;
+                        h_WR[(wp*d+s) + (w*d+sp) * D_use * d] = val;
                     }
-        HIP_CHECK(hipMalloc(&d_W_left_[i], wm_size * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_W_left_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_left_[i], h_WL.data(),
-                            wm_size * sizeof(Scalar), hipMemcpyHostToDevice));
-        HIP_CHECK(hipMalloc(&d_W_right_[i], wm_size * sizeof(Scalar)));
+                            size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMalloc(&d_W_right_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_right_[i], h_WR.data(),
-                            wm_size * sizeof(Scalar), hipMemcpyHostToDevice));
+                            size_use * sizeof(Scalar), hipMemcpyHostToDevice));
     }
 
     // Precompute fused two-site MPO
@@ -338,26 +403,31 @@ void DMRG2GPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
 
 template<typename Scalar>
 void DMRG2GPUOpt<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
-    int D = D_mpo_, d = d_;
+    // D_use/D_act: see set_mpo. User's h_mpo_tensors are indexed with
+    // stride D_act; WW is allocated at padded size D_use*dd x dd*D_use
+    // with padded (w,n) rows/cols zero.
+    int D_use = D_mpo_;
+    int D_act = D_mpo_actual_;
+    int d = d_;
     int dd = d * d;
 
     for (int bond = 0; bond < L_ - 1; bond++) {
-        int ww_size = D * dd * dd * D;
+        int ww_size = D_use * dd * dd * D_use;
         std::vector<Scalar> h_WW(ww_size, Traits::zero());
 
         const Scalar* WL = h_mpo_tensors[bond];
         const Scalar* WR = h_mpo_tensors[bond + 1];
 
-        for (int w = 0; w < D; w++)
-            for (int n = 0; n < D; n++)
+        for (int w = 0; w < D_act; w++)
+            for (int n = 0; n < D_act; n++)
                 for (int s1 = 0; s1 < d; s1++)
                     for (int s2 = 0; s2 < d; s2++)
                         for (int s1p = 0; s1p < d; s1p++)
                             for (int s2p = 0; s2p < d; s2p++) {
                                 Scalar val = Traits::zero();
-                                for (int m = 0; m < D; m++) {
-                                    Scalar wl = WL[w + s1*D + s1p*D*d + m*D*d*d];
-                                    Scalar wr = WR[m + s2*D + s2p*D*d + n*D*d*d];
+                                for (int m = 0; m < D_act; m++) {
+                                    Scalar wl = WL[w + s1*D_act + s1p*D_act*d + m*D_act*d*d];
+                                    Scalar wr = WR[m + s2*D_act + s2p*D_act*d + n*D_act*d*d];
                                     if constexpr (Traits::is_complex) {
                                         val = hipCadd(val, hipCmul(wl, wr));
                                     } else {
@@ -366,7 +436,7 @@ void DMRG2GPUOpt<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo
                                 }
                                 int row = w * dd + s1 * d + s2;
                                 int col = n * dd + s1p * d + s2p;
-                                h_WW[row + col * D * dd] = val;
+                                h_WW[row + col * D_use * dd] = val;
                             }
 
         HIP_CHECK(hipMalloc(&d_WW_[bond], ww_size * sizeof(Scalar)));
@@ -650,8 +720,11 @@ void DMRG2GPUOpt<Scalar>::build_initial_environments() {
 
     // R[L] = trivial right boundary
     {
+        // With D_PAD, D_mpo_ > D_mpo_actual_; the identity slot must be at
+        // the unpadded index D_mpo_actual_ - 1 because the padded W rows past
+        // that index are zero.
         std::vector<Scalar> h_R(D_mpo_, Traits::zero());
-        h_R[D_mpo_ - 1] = Traits::one();
+        h_R[D_mpo_actual_ - 1] = Traits::one();
         HIP_CHECK(hipMemcpy(d_R_envs_[L_], h_R.data(),
                             D_mpo_ * sizeof(Scalar), hipMemcpyHostToDevice));
     }
@@ -677,6 +750,17 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
 
     std::vector<double> h_alpha(max_iter);
     std::vector<double> h_beta(max_iter);
+
+    // FUSE_LANCZOS: small device scratches to stage host scalars
+    // for the fused kernels (which expect device-pointer operands).
+    Scalar*   d_neg_alpha_scr = nullptr;
+    Scalar*   d_neg_beta_scr  = nullptr;
+    RealType* d_inv_beta_scr  = nullptr;
+    if (opts_.fuse_lanczos) {
+        HIP_CHECK(hipMalloc(&d_neg_alpha_scr, sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_neg_beta_scr,  sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_inv_beta_scr,  sizeof(RealType)));
+    }
 
     // v[0] = theta / ||theta||
     double norm;
@@ -708,15 +792,38 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
         double alpha_i = Traits::real_part(alpha_result);
         h_alpha[iter] = alpha_i;
 
-        // w = w - alpha_i * v_i
+        // w = w - alpha_i * v_i  [and - beta_{i-1} * v_{i-1}]
         Scalar neg_alpha = Traits::make_scalar(-alpha_i);
-        ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, &neg_alpha, d_vi, 1, d_heff_result_, 1));
+        if (opts_.fuse_lanczos) {
+            // Fused: w += (-α)·v_i + (-β_{i-1})·v_{i-1} in one kernel pass.
+            // Stage host scalars to tiny device scratches.
+            HIP_CHECK(hipMemcpyAsync(d_neg_alpha_scr, &neg_alpha, sizeof(Scalar),
+                                     hipMemcpyHostToDevice, stream_));
+            const Scalar* v_im1 = nullptr;
+            const Scalar* nb_im1 = d_neg_alpha_scr;  // unused when has_prev==0
+            if (iter > 0) {
+                Scalar neg_beta = Traits::make_scalar(-h_beta[iter - 1]);
+                HIP_CHECK(hipMemcpyAsync(d_neg_beta_scr, &neg_beta, sizeof(Scalar),
+                                         hipMemcpyHostToDevice, stream_));
+                v_im1 = d_lanczos_v + (size_t)(iter - 1) * n;
+                nb_im1 = d_neg_beta_scr;
+            }
+            int block = 256;
+            int grid = (n + block - 1) / block;
+            hipLaunchKernelGGL((lanczos_fused_sub_kernel<Scalar>),
+                               dim3(grid), dim3(block), 0, stream_,
+                               d_heff_result_, d_vi, v_im1,
+                               d_neg_alpha_scr, nb_im1,
+                               n, iter > 0 ? 1 : 0);
+        } else {
+            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, &neg_alpha, d_vi, 1, d_heff_result_, 1));
 
-        // w = w - beta_{i-1} * v_{i-1}
-        if (iter > 0) {
-            Scalar neg_beta = Traits::make_scalar(-h_beta[iter - 1]);
-            Scalar* d_vim1 = d_lanczos_v + (size_t)(iter - 1) * n;
-            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, &neg_beta, d_vim1, 1, d_heff_result_, 1));
+            // w = w - beta_{i-1} * v_{i-1}
+            if (iter > 0) {
+                Scalar neg_beta = Traits::make_scalar(-h_beta[iter - 1]);
+                Scalar* d_vim1 = d_lanczos_v + (size_t)(iter - 1) * n;
+                ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, &neg_beta, d_vim1, 1, d_heff_result_, 1));
+            }
         }
 
         // Full reorthogonalization via gemv
@@ -776,9 +883,28 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
         if (iter + 1 < max_iter) {
             Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
             double scale = 1.0 / beta_i;
-            HIP_CHECK(hipMemcpy(d_vip1, d_heff_result_, n * sizeof(Scalar), hipMemcpyDeviceToDevice));
-            ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, &scale, d_vip1, 1));
+            if (opts_.fuse_lanczos) {
+                // Fused normalize+copy: v_{i+1}[k] = w[k] * (1/β_i)
+                RealType inv_beta_rt = (RealType)scale;
+                HIP_CHECK(hipMemcpyAsync(d_inv_beta_scr, &inv_beta_rt, sizeof(RealType),
+                                         hipMemcpyHostToDevice, stream_));
+                int block = 256;
+                int grid = (n + block - 1) / block;
+                hipLaunchKernelGGL((lanczos_fused_norm_copy_kernel<Scalar, RealType>),
+                                   dim3(grid), dim3(block), 0, stream_,
+                                   d_vip1, d_heff_result_, d_inv_beta_scr, n);
+            } else {
+                HIP_CHECK(hipMemcpy(d_vip1, d_heff_result_, n * sizeof(Scalar), hipMemcpyDeviceToDevice));
+                ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, &scale, d_vip1, 1));
+            }
         }
+    }
+
+    // Free FUSE_LANCZOS scratches
+    if (opts_.fuse_lanczos) {
+        if (d_neg_alpha_scr) hipFree(d_neg_alpha_scr);
+        if (d_neg_beta_scr)  hipFree(d_neg_beta_scr);
+        if (d_inv_beta_scr)  hipFree(d_inv_beta_scr);
     }
 
     int niter = iter;

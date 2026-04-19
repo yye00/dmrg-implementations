@@ -168,10 +168,25 @@ static __global__ void promote_double_to_complex(const double* src, hipDoubleCom
 
 template<typename Scalar>
 PDMRGGPU<Scalar>::PDMRGGPU(int L, int d, int chi_max, int D_mpo, int n_segments, double tol)
-    : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), tol_(tol), energy_(0.0),
+    : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), D_mpo_actual_(D_mpo),
+      tol_(tol), energy_(0.0),
       n_segments_(n_segments) {
 
     opts_.load_from_env();
+
+    // D_PAD: round MPO bond dim up to a multiple of 8 for MFMA-friendly
+    // GEMM shapes. All allocations and internal GEMMs use the padded D;
+    // the padded rows/cols of the W matrices are zero-filled in set_mpo
+    // so they contribute nothing numerically. The R boundary still uses
+    // D_mpo_actual_-1 (see build_initial_environments).
+    if (opts_.d_pad) {
+        int padded = (D_mpo_ + 7) & ~7;
+        if (padded != D_mpo_) {
+            std::fprintf(stderr, "[D_PAD] D_mpo padded: %d -> %d\n", D_mpo_, padded);
+            D_mpo_ = padded;
+        }
+    }
+
     opts_.print(stderr);
     init_timers();
 
@@ -579,30 +594,50 @@ void PDMRGGPU<Scalar>::initialize_mps_random(double scale) {
 
 template<typename Scalar>
 void PDMRGGPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
-    int D = D_mpo_, d = d_;
+    // D_use: padded bond dim used for all internal buffers (D_PAD on).
+    // D_act: user's MPO bond dim. User's h_mpo_tensors[i] is indexed with
+    // stride D_act; we re-index into the D_use layout on the host side,
+    // zero-padding any w/wp slot with index >= D_act.
+    int D_use = D_mpo_;
+    int D_act = D_mpo_actual_;
+    int d = d_;
     for (int i = 0; i < L_; i++) {
-        int size = D * d * d * D;
-        HIP_CHECK(hipMalloc(&d_mpo_tensors_[i], size * sizeof(Scalar)));
-        HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_mpo_tensors[i],
-                            size * sizeof(Scalar), hipMemcpyHostToDevice));
+        int size_use = D_use * d * d * D_use;
+        HIP_CHECK(hipMalloc(&d_mpo_tensors_[i], size_use * sizeof(Scalar)));
+        HIP_CHECK(hipMemset(d_mpo_tensors_[i], 0, size_use * sizeof(Scalar)));
 
-        int wm_size = D * d * d * D;
-        std::vector<Scalar> h_WL(wm_size, Traits::zero());
-        std::vector<Scalar> h_WR(wm_size, Traits::zero());
-        for (int w = 0; w < D; w++)
+        std::vector<Scalar> h_WL(size_use, Traits::zero());
+        std::vector<Scalar> h_WR(size_use, Traits::zero());
+
+        if (D_use == D_act) {
+            HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_mpo_tensors[i],
+                                size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+        } else {
+            std::vector<Scalar> h_pad(size_use, Traits::zero());
+            for (int wp = 0; wp < D_act; wp++)
+                for (int sp = 0; sp < d; sp++)
+                    for (int s = 0; s < d; s++)
+                        for (int w = 0; w < D_act; w++)
+                            h_pad[w + s*D_use + sp*D_use*d + wp*D_use*d*d] =
+                                h_mpo_tensors[i][w + s*D_act + sp*D_act*d + wp*D_act*d*d];
+            HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_pad.data(),
+                                size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+        }
+
+        for (int w = 0; w < D_act; w++)
             for (int s = 0; s < d; s++)
                 for (int sp = 0; sp < d; sp++)
-                    for (int wp = 0; wp < D; wp++) {
-                        Scalar val = h_mpo_tensors[i][w + s*D + sp*D*d + wp*D*d*d];
-                        h_WL[(w*d+s) + (wp*d+sp) * D * d] = val;
-                        h_WR[(wp*d+s) + (w*d+sp) * D * d] = val;
+                    for (int wp = 0; wp < D_act; wp++) {
+                        Scalar val = h_mpo_tensors[i][w + s*D_act + sp*D_act*d + wp*D_act*d*d];
+                        h_WL[(w*d+s) + (wp*d+sp) * D_use * d] = val;
+                        h_WR[(wp*d+s) + (w*d+sp) * D_use * d] = val;
                     }
-        HIP_CHECK(hipMalloc(&d_W_left_[i], wm_size * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_W_left_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_left_[i], h_WL.data(),
-                            wm_size * sizeof(Scalar), hipMemcpyHostToDevice));
-        HIP_CHECK(hipMalloc(&d_W_right_[i], wm_size * sizeof(Scalar)));
+                            size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMalloc(&d_W_right_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_right_[i], h_WR.data(),
-                            wm_size * sizeof(Scalar), hipMemcpyHostToDevice));
+                            size_use * sizeof(Scalar), hipMemcpyHostToDevice));
     }
 
     precompute_fused_mpo(h_mpo_tensors);
@@ -610,26 +645,31 @@ void PDMRGGPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
 
 template<typename Scalar>
 void PDMRGGPU<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
-    int D = D_mpo_, d = d_;
+    // D_use/D_act: see set_mpo. User's h_mpo_tensors are indexed with
+    // stride D_act; WW is allocated at padded size D_use*dd x dd*D_use
+    // with padded (w,n) rows/cols zero.
+    int D_use = D_mpo_;
+    int D_act = D_mpo_actual_;
+    int d = d_;
     int dd = d * d;
 
     for (int bond = 0; bond < L_ - 1; bond++) {
-        int ww_size = D * dd * dd * D;
+        int ww_size = D_use * dd * dd * D_use;
         std::vector<Scalar> h_WW(ww_size, Traits::zero());
 
         const Scalar* WL = h_mpo_tensors[bond];
         const Scalar* WR = h_mpo_tensors[bond + 1];
 
-        for (int w = 0; w < D; w++)
-            for (int n = 0; n < D; n++)
+        for (int w = 0; w < D_act; w++)
+            for (int n = 0; n < D_act; n++)
                 for (int s1 = 0; s1 < d; s1++)
                     for (int s2 = 0; s2 < d; s2++)
                         for (int s1p = 0; s1p < d; s1p++)
                             for (int s2p = 0; s2p < d; s2p++) {
                                 Scalar val = Traits::zero();
-                                for (int m = 0; m < D; m++) {
-                                    Scalar wl = WL[w + s1*D + s1p*D*d + m*D*d*d];
-                                    Scalar wr = WR[m + s2*D + s2p*D*d + n*D*d*d];
+                                for (int m = 0; m < D_act; m++) {
+                                    Scalar wl = WL[w + s1*D_act + s1p*D_act*d + m*D_act*d*d];
+                                    Scalar wr = WR[m + s2*D_act + s2p*D_act*d + n*D_act*d*d];
                                     if constexpr (Traits::is_complex) {
                                         val = hipCadd(val, hipCmul(wl, wr));
                                     } else {
@@ -638,7 +678,7 @@ void PDMRGGPU<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo_te
                                 }
                                 int row = w * dd + s1 * d + s2;
                                 int col = n * dd + s1p * d + s2p;
-                                h_WW[row + col * D * dd] = val;
+                                h_WW[row + col * D_use * dd] = val;
                             }
 
         HIP_CHECK(hipMalloc(&d_WW_[bond], ww_size * sizeof(Scalar)));
@@ -929,8 +969,11 @@ void PDMRGGPU<Scalar>::build_initial_environments() {
 
     // R[L] = trivial right boundary
     {
+        // With D_PAD, D_mpo_ > D_mpo_actual_; the identity slot must be at
+        // the unpadded index D_mpo_actual_ - 1 because the padded W rows past
+        // that index are zero.
         std::vector<Scalar> h_R(D_mpo_, Traits::zero());
-        h_R[D_mpo_ - 1] = Traits::one();
+        h_R[D_mpo_actual_ - 1] = Traits::one();
         HIP_CHECK(hipMemcpy(d_R_envs_[L_], h_R.data(),
                             D_mpo_ * sizeof(Scalar), hipMemcpyHostToDevice));
     }
