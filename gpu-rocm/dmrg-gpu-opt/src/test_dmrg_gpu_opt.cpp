@@ -186,7 +186,7 @@ int test_heisenberg(int L, int chi_max, int n_sweeps) {
 
     printf("======================================\n");
     printf("Heisenberg DMRG-GPU-OPT Test (float64)\n");
-    printf("Newton-Schulz + Block-Davidson\n");
+    printf("Block-Davidson\n");
     printf("======================================\n");
     printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
     printf("======================================\n\n");
@@ -231,7 +231,7 @@ int test_tfim(int L, int chi_max, int n_sweeps, double J, double h_field) {
 
     printf("======================================\n");
     printf("TFIM DMRG-GPU-OPT Test (float64)\n");
-    printf("Newton-Schulz + Block-Davidson\n");
+    printf("Block-Davidson\n");
     printf("======================================\n");
     printf("  L=%d, d=%d, chi_max=%d, D_mpo=%d, sweeps=%d\n", L, d, chi_max, D_mpo, n_sweeps);
     printf("  J=%.4f, h=%.4f\n", J, h_field);
@@ -264,7 +264,7 @@ int test_josephson(int L, int chi_max, int n_sweeps,
 
     printf("======================================\n");
     printf("Josephson Junction DMRG-GPU-OPT Test (complex128)\n");
-    printf("Newton-Schulz + Block-Davidson\n");
+    printf("Block-Davidson\n");
     printf("======================================\n");
     printf("  L=%d, d=%d (n_max=%d), chi_max=%d, D_mpo=%d, sweeps=%d\n",
            L, d, n_max, chi_max, D_mpo, n_sweeps);
