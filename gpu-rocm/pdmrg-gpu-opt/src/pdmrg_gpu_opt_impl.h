@@ -310,6 +310,12 @@ void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
             ws.h_rsvd_B.resize((size_t)rsvd_r * rsvd_n);
             ws.h_rsvd_U_small.resize((size_t)rsvd_r * rsvd_r);
         }
+
+        // LANCZOS_GRAPH: per-segment bounce buffer for captured apply_heff graphs.
+        ws.d_heff_input = nullptr;
+        if (opts_.lanczos_graph) {
+            HIP_CHECK(hipMalloc(&ws.d_heff_input, (size_t)theta_size_max_ * sizeof(Scalar)));
+        }
     }
 
     // Cross-segment batched pointer arrays
@@ -381,6 +387,13 @@ void PDMRGGPUOpt<Scalar>::free_gpu_resources() {
         if (ws.d_rsvd_B) hipFree(ws.d_rsvd_B);
         if (ws.d_rsvd_ipiv) hipFree(ws.d_rsvd_ipiv);
         if (ws.d_rsvd_U_full) hipFree(ws.d_rsvd_U_full);
+
+        // LANCZOS_GRAPH: destroy cached graph execs and bounce buffer
+        for (auto& kv : ws.apply_heff_graph_cache) {
+            hipGraphExecDestroy(kv.second);
+        }
+        ws.apply_heff_graph_cache.clear();
+        if (ws.d_heff_input) hipFree(ws.d_heff_input);
     }
 
     for (auto& wh : worker_handles_)
@@ -624,6 +637,29 @@ void PDMRGGPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& ws = workspaces_[si];
 
+    // LANCZOS_GRAPH: stage caller's theta into the per-segment fixed-address
+    // bounce buffer BEFORE any capture window, then either replay the cached
+    // graph or capture a new one for this (site, cL, cR) shape. Two-site
+    // theta has shape (cL, d, d, cR). See dmrg_gpu_impl.h for full rationale.
+    const Scalar* theta_src = d_theta_in;
+    bool graph_capture_miss = false;
+    if (opts_.lanczos_graph) {
+        int n_theta = cL * dd * cR;
+        HIP_CHECK(hipMemcpyAsync(ws.d_heff_input, d_theta_in,
+                                 (size_t)n_theta * sizeof(Scalar),
+                                 hipMemcpyDeviceToDevice, streams_[si]));
+        theta_src = ws.d_heff_input;
+
+        uint64_t key = graph_key(site, cL, cR);
+        auto it = ws.apply_heff_graph_cache.find(key);
+        if (it != ws.apply_heff_graph_cache.end()) {
+            HIP_CHECK(hipGraphLaunch(it->second, streams_[si]));
+            return;
+        }
+        graph_capture_miss = true;
+        HIP_CHECK(hipStreamBeginCapture(streams_[si], hipStreamCaptureModeGlobal));
+    }
+
     Scalar* L_env = d_L_envs_[site];
     Scalar* R_env = d_R_envs_[site + 2];
     Scalar* WW = d_WW_[site];
@@ -643,7 +679,7 @@ void PDMRGGPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
         }
 
         hipLaunchKernelGGL(setup_heff_B_ptrs<Scalar>, dim3(1), dim3(batch_count), 0, streams_[si],
-                           ws.d_batch_B, const_cast<Scalar*>(d_theta_in), cL, d, dd, batch_count);
+                           ws.d_batch_B, const_cast<Scalar*>(theta_src), cL, d, dd, batch_count);
 
         ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
             Traits::op_t, rocblas_operation_none,
