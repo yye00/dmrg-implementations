@@ -252,10 +252,25 @@ def print_markdown(payload: dict):
             print(f"| {name} | {d['ms']:.2f} | {d['calls']} | {per:.3f} |")
 
 
+# ─── Multi-variant support ────────────────────────────────────────────────────
+
+IMPL_BINARIES = {
+    "dmrg-gpu":     "gpu-rocm/dmrg-gpu/build/dmrg_gpu",
+    "dmrg2-gpu":    "gpu-rocm/dmrg2-gpu/build/dmrg2_gpu",
+    "pdmrg-gpu":    "gpu-rocm/pdmrg-gpu/build/pdmrg_gpu",
+    "dmrg-gpu-opt": "gpu-rocm/dmrg-gpu-opt/build/dmrg_gpu_opt",
+    "dmrg2-gpu-opt":"gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+    "pdmrg-gpu-opt":"gpu-rocm/pdmrg-gpu-opt/build/pdmrg_gpu_opt",
+}
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--binary", default="gpu-rocm/dmrg-gpu/build/dmrg_gpu",
-                    help="path to the dmrg_gpu executable")
+    ap.add_argument("--binary", default=None,
+                    help="path to a single executable (overrides --impl)")
+    ap.add_argument("--impl", nargs="*", default=["dmrg-gpu"],
+                    choices=list(IMPL_BINARIES.keys()),
+                    help="variant names to benchmark (default: dmrg-gpu)")
     ap.add_argument("--reps", type=int, default=3)
     ap.add_argument("--out",  default="benchmarks/data/gpu_ablation",
                     help="output directory root")
@@ -263,18 +278,29 @@ def main():
                     help="skip the correctness gate (NOT recommended)")
     args = ap.parse_args()
 
-    binary = Path(args.binary).resolve()
-    if not binary.exists():
-        print(f"Binary not found: {binary}")
-        sys.exit(2)
-    if not args.skip_correctness:
-        correctness_gate(str(binary))
-
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-    out_dir = Path(args.out) / stamp
-    payload = run_bench(str(binary), args.reps, out_dir)
-    print_markdown(payload)
-    print(f"\nresults → {out_dir / 'results.json'}")
+
+    if args.binary:
+        binaries = [("custom", Path(args.binary).resolve())]
+    else:
+        binaries = []
+        for name in args.impl:
+            p = Path(IMPL_BINARIES[name]).resolve()
+            if not p.exists():
+                print(f"Binary not found for {name}: {p}")
+                sys.exit(2)
+            binaries.append((name, p))
+
+    for impl_name, binary in binaries:
+        print(f"\n{'='*60}")
+        print(f"  Variant: {impl_name}  ({binary})")
+        print(f"{'='*60}\n")
+        if not args.skip_correctness:
+            correctness_gate(str(binary))
+        out_dir = Path(args.out) / stamp / impl_name
+        payload = run_bench(str(binary), args.reps, out_dir)
+        print_markdown(payload)
+        print(f"\nresults → {out_dir / 'results.json'}")
 
 
 if __name__ == "__main__":
