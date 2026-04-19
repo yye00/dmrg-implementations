@@ -125,7 +125,21 @@ static __global__ void promote_double_to_complex(const double* src, hipDoubleCom
 
 template<typename Scalar>
 DMRG2GPU<Scalar>::DMRG2GPU(int L, int d, int chi_max, int D_mpo, double tol)
-    : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), tol_(tol), energy_(0.0) {
+    : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), D_mpo_actual_(D_mpo),
+      tol_(tol), energy_(0.0) {
+
+    opts_.load_from_env();
+
+    if (opts_.d_pad) {
+        int padded = (D_mpo_ + 7) & ~7;
+        if (padded != D_mpo_) {
+            std::fprintf(stderr, "[D_PAD] D_mpo padded: %d -> %d\n", D_mpo_, padded);
+            D_mpo_ = padded;
+        }
+    }
+
+    opts_.print(stderr);
+    init_timers();
 
     // Bond dimensions (same as single-site: min-cut formula capped at chi_max)
     bond_dims_.resize(L + 1);
@@ -136,10 +150,15 @@ DMRG2GPU<Scalar>::DMRG2GPU(int L, int d, int chi_max, int D_mpo, double tol)
         bond_dims_[i] = (exact_dim > chi_max_) ? chi_max_ : (int)exact_dim;
     }
 
-    // GPU handles
+    // GPU handles — dual-stream
     HIP_CHECK(hipStreamCreate(&stream_));
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
     ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
+    HIP_CHECK(hipStreamCreate(&stream_env_));
+    ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_env_));
+    ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_env_, stream_env_));
+    HIP_CHECK(hipEventCreateWithFlags(&event_canon_ready_, hipEventDisableTiming));
+    HIP_CHECK(hipEventCreateWithFlags(&event_env_done_, hipEventDisableTiming));
 
     int dd = d_ * d_;  // d^2 for two-site
 
@@ -147,6 +166,14 @@ DMRG2GPU<Scalar>::DMRG2GPU(int L, int d, int chi_max, int D_mpo, double tol)
     int t_max = D_mpo_ * dd * chi_max_ * chi_max_;
     HIP_CHECK(hipMalloc(&d_T1_, t_max * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_T2_, t_max * sizeof(Scalar)));
+
+    // Env-stream scratch (independent of stream_'s T1/T2)
+    HIP_CHECK(hipMalloc(&d_T1_env_, t_max * sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_T2_env_, t_max * sizeof(Scalar)));
+    int batch_max_env = D_mpo_ * d_;
+    HIP_CHECK(hipMalloc(&d_batch_A_env_, batch_max_env * sizeof(Scalar*)));
+    HIP_CHECK(hipMalloc(&d_batch_B_env_, batch_max_env * sizeof(Scalar*)));
+    HIP_CHECK(hipMalloc(&d_batch_C_env_, batch_max_env * sizeof(Scalar*)));
 
     // MPS tensors
     d_mps_tensors_.resize(L, nullptr);
@@ -250,6 +277,66 @@ DMRG2GPU<Scalar>::DMRG2GPU(int L, int d, int chi_max, int D_mpo, double tol)
     h_svd_S_.resize(svd_max_k);
     h_svd_Vh_.resize((size_t)svd_max_k * svd_max_n);
     h_svd_tmp_.resize(std::max((size_t)svd_max_m * svd_max_k, (size_t)svd_max_k * svd_max_n));
+
+    // SPARSE_MPO nnz lists (populated in precompute_fused_mpo)
+    d_WW_nnz_rows_.resize(L - 1, nullptr);
+    d_WW_nnz_cols_.resize(L - 1, nullptr);
+    ww_nnz_rows_count_.assign(L - 1, 0);
+    ww_nnz_cols_count_.assign(L - 1, 0);
+
+    if (opts_.lanczos_graph) {
+        HIP_CHECK(hipMalloc(&d_heff_input_, (size_t)theta_size_max_ * sizeof(Scalar)));
+    }
+
+    if (opts_.rsvd) {
+        int r_max = chi_max_ + RSVD_OVERSAMPLE_;
+        HIP_CHECK(hipFree(d_svd_S_));
+        HIP_CHECK(hipFree(d_svd_E_));
+        HIP_CHECK(hipFree(d_svd_U_));
+        HIP_CHECK(hipFree(d_svd_Vh_));
+        HIP_CHECK(hipMalloc(&d_svd_S_,  r_max * sizeof(RealType)));
+        HIP_CHECK(hipMalloc(&d_svd_E_,  r_max * sizeof(RealType)));
+        HIP_CHECK(hipMalloc(&d_svd_U_,  (size_t)svd_max_m * r_max * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_svd_Vh_, (size_t)r_max * svd_max_n * sizeof(Scalar)));
+
+        rsvd_r_max_ = r_max;
+        HIP_CHECK(hipMalloc(&d_rsvd_omega_,   (size_t)svd_max_n * rsvd_r_max_ * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_Y_,       (size_t)svd_max_m * rsvd_r_max_ * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_tau_,     (size_t)rsvd_r_max_ * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_B_,       (size_t)rsvd_r_max_ * svd_max_n * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_U_small_, (size_t)rsvd_r_max_ * rsvd_r_max_ * sizeof(Scalar)));
+    }
+}
+
+// ============================================================================
+// Phase timers
+// ============================================================================
+
+template<typename Scalar>
+void DMRG2GPU<Scalar>::init_timers() {
+    t_lanczos_.init("lanczos", opts_.profile);
+    t_apply_heff_.init("apply_heff", opts_.profile);
+    t_svd_.init("svd", opts_.profile);
+    t_absorb_.init("absorb", opts_.profile);
+    t_env_update_.init("env_update", opts_.profile);
+}
+
+template<typename Scalar>
+void DMRG2GPU<Scalar>::report_timers() {
+    if (!opts_.profile) return;
+    auto row = [](PhaseTimer& t) {
+        double ms = t.total_ms();
+        int c = t.calls();
+        double per = c > 0 ? ms / c : 0.0;
+        std::fprintf(stderr, "  %-12s: %10.2f ms   (%6d calls, %8.3f ms/call)\n",
+                     t.name, ms, c, per);
+    };
+    std::fprintf(stderr, "== Phase timings ==\n");
+    row(t_lanczos_);
+    row(t_apply_heff_);
+    row(t_svd_);
+    row(t_absorb_);
+    row(t_env_update_);
 }
 
 // ============================================================================
@@ -306,8 +393,35 @@ void DMRG2GPU<Scalar>::free_gpu_resources() {
     if (d_svdj_residual_) hipFree(d_svdj_residual_);
     if (d_svdj_n_sweeps_) hipFree(d_svdj_n_sweeps_);
 
+    // Dual-stream env resources
+    if (d_T1_env_) hipFree(d_T1_env_);
+    if (d_T2_env_) hipFree(d_T2_env_);
+    if (d_batch_A_env_) hipFree(d_batch_A_env_);
+    if (d_batch_B_env_) hipFree(d_batch_B_env_);
+    if (d_batch_C_env_) hipFree(d_batch_C_env_);
+
+    // SPARSE_MPO nnz lists
+    for (auto ptr : d_WW_nnz_rows_) if (ptr) hipFree(ptr);
+    for (auto ptr : d_WW_nnz_cols_) if (ptr) hipFree(ptr);
+
+    // RSVD workspace
+    if (d_rsvd_omega_)   hipFree(d_rsvd_omega_);
+    if (d_rsvd_Y_)       hipFree(d_rsvd_Y_);
+    if (d_rsvd_tau_)     hipFree(d_rsvd_tau_);
+    if (d_rsvd_B_)       hipFree(d_rsvd_B_);
+    if (d_rsvd_U_small_) hipFree(d_rsvd_U_small_);
+
+    // LANCZOS_GRAPH
+    for (auto& kv : apply_heff_graph_cache_) hipGraphExecDestroy(kv.second);
+    apply_heff_graph_cache_.clear();
+    if (d_heff_input_) hipFree(d_heff_input_);
+
     rocblas_destroy_handle(rocblas_h_);
     hipStreamDestroy(stream_);
+    rocblas_destroy_handle(rocblas_h_env_);
+    hipStreamDestroy(stream_env_);
+    hipEventDestroy(event_canon_ready_);
+    hipEventDestroy(event_env_done_);
 }
 
 // ============================================================================
@@ -402,31 +516,46 @@ void DMRG2GPU<Scalar>::initialize_mps_neel() {
 
 template<typename Scalar>
 void DMRG2GPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
-    int D = D_mpo_, d = d_;
+    int D_use = D_mpo_;
+    int D_act = D_mpo_actual_;
+    int d = d_;
     for (int i = 0; i < L_; i++) {
-        int size = D * d * d * D;
-        HIP_CHECK(hipMalloc(&d_mpo_tensors_[i], size * sizeof(Scalar)));
-        HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_mpo_tensors[i],
-                            size * sizeof(Scalar), hipMemcpyHostToDevice));
+        int size_use = D_use * d * d * D_use;
+        HIP_CHECK(hipMalloc(&d_mpo_tensors_[i], size_use * sizeof(Scalar)));
+        HIP_CHECK(hipMemset(d_mpo_tensors_[i], 0, size_use * sizeof(Scalar)));
 
-        // Precompute W_left and W_right matrices (for single-site env updates)
-        int wm_size = D * d * d * D;
-        std::vector<Scalar> h_WL(wm_size, Traits::zero());
-        std::vector<Scalar> h_WR(wm_size, Traits::zero());
-        for (int w = 0; w < D; w++)
+        std::vector<Scalar> h_WL(size_use, Traits::zero());
+        std::vector<Scalar> h_WR(size_use, Traits::zero());
+
+        if (D_use == D_act) {
+            HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_mpo_tensors[i],
+                                size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+        } else {
+            std::vector<Scalar> h_pad(size_use, Traits::zero());
+            for (int wp = 0; wp < D_act; wp++)
+                for (int sp = 0; sp < d; sp++)
+                    for (int s = 0; s < d; s++)
+                        for (int w = 0; w < D_act; w++)
+                            h_pad[w + s*D_use + sp*D_use*d + wp*D_use*d*d] =
+                                h_mpo_tensors[i][w + s*D_act + sp*D_act*d + wp*D_act*d*d];
+            HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_pad.data(),
+                                size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+        }
+
+        for (int w = 0; w < D_act; w++)
             for (int s = 0; s < d; s++)
                 for (int sp = 0; sp < d; sp++)
-                    for (int wp = 0; wp < D; wp++) {
-                        Scalar val = h_mpo_tensors[i][w + s*D + sp*D*d + wp*D*d*d];
-                        h_WL[(w*d+s) + (wp*d+sp) * D * d] = val;
-                        h_WR[(wp*d+s) + (w*d+sp) * D * d] = val;
+                    for (int wp = 0; wp < D_act; wp++) {
+                        Scalar val = h_mpo_tensors[i][w + s*D_act + sp*D_act*d + wp*D_act*d*d];
+                        h_WL[(w*d+s) + (wp*d+sp) * D_use * d] = val;
+                        h_WR[(wp*d+s) + (w*d+sp) * D_use * d] = val;
                     }
-        HIP_CHECK(hipMalloc(&d_W_left_[i], wm_size * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_W_left_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_left_[i], h_WL.data(),
-                            wm_size * sizeof(Scalar), hipMemcpyHostToDevice));
-        HIP_CHECK(hipMalloc(&d_W_right_[i], wm_size * sizeof(Scalar)));
+                            size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMalloc(&d_W_right_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_right_[i], h_WR.data(),
-                            wm_size * sizeof(Scalar), hipMemcpyHostToDevice));
+                            size_use * sizeof(Scalar), hipMemcpyHostToDevice));
     }
 
     // Precompute fused two-site MPO
@@ -768,7 +897,7 @@ void DMRG2GPU<Scalar>::build_initial_environments() {
     // R[L] = trivial right boundary: (1, D_mpo, 1), R[L][0,D-1,0] = 1
     {
         std::vector<Scalar> h_R(D_mpo_, Traits::zero());
-        h_R[D_mpo_ - 1] = Traits::one();
+        h_R[D_mpo_actual_ - 1] = Traits::one();
         HIP_CHECK(hipMemcpy(d_R_envs_[L_], h_R.data(),
                             D_mpo_ * sizeof(Scalar), hipMemcpyHostToDevice));
     }
@@ -825,15 +954,22 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
                            d_dot_result_, d_neg_alpha_, d_alpha_dev_, iter);
 
-        // w -= alpha_i * v_i (device pointer)
-        ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, d_neg_alpha_, d_vi, 1, d_heff_result_, 1));
-
-        // w -= beta_{i-1} * v_{i-1} (device pointer)
-        if (iter > 0) {
-            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n,
-                d_neg_beta_scalars_ + (iter - 1),
-                d_lanczos_v + (size_t)(iter - 1) * n, 1,
-                d_heff_result_, 1));
+        if (opts_.fuse_lanczos) {
+            const Scalar* v_im1 = (iter > 0) ? (d_lanczos_v + (size_t)(iter - 1) * n) : nullptr;
+            const Scalar* nb_im1 = (iter > 0) ? (d_neg_beta_scalars_ + (iter - 1)) : d_neg_alpha_;
+            int block = 256, grid = (n + block - 1) / block;
+            hipLaunchKernelGGL((lanczos_fused_sub_kernel<Scalar>),
+                               dim3(grid), dim3(block), 0, stream_,
+                               d_heff_result_, d_vi, v_im1,
+                               d_neg_alpha_, nb_im1, n, iter > 0 ? 1 : 0);
+        } else {
+            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, d_neg_alpha_, d_vi, 1, d_heff_result_, 1));
+            if (iter > 0) {
+                ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n,
+                    d_neg_beta_scalars_ + (iter - 1),
+                    d_lanczos_v + (size_t)(iter - 1) * n, 1,
+                    d_heff_result_, 1));
+            }
         }
 
         // Full reorthogonalization (device pointer mode)
@@ -861,18 +997,26 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         hipLaunchKernelGGL(lanczos_process_beta_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
                            d_nrm2_result_, d_inv_nrm_, d_beta_dev_, d_neg_beta_scalars_, iter);
 
-        // v_{i+1} = w / beta_i (device pointer)
+        // v_{i+1} = w / beta_i
         if (iter + 1 < max_iter) {
             Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
-            HIP_CHECK(hipMemcpy(d_vip1, d_heff_result_, n * sizeof(Scalar), hipMemcpyDeviceToDevice));
-            ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_vip1, 1));
+            if (opts_.fuse_lanczos) {
+                int block = 256, grid = (n + block - 1) / block;
+                hipLaunchKernelGGL((lanczos_fused_norm_copy_kernel<Scalar, RealType>),
+                                   dim3(grid), dim3(block), 0, stream_,
+                                   d_vip1, d_heff_result_, d_inv_nrm_, n);
+            } else {
+                HIP_CHECK(hipMemcpyAsync(d_vip1, d_heff_result_, n * sizeof(Scalar),
+                                         hipMemcpyDeviceToDevice, stream_));
+                ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_vip1, 1));
+            }
         }
 
         // Switch back to host pointer mode
         ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
 
         // Convergence check every 3 iterations after iter >= 4
-        if (iter >= 4 && iter % 3 == 0) {
+        if (!opts_.lanczos_fixed && iter >= 4 && iter % 3 == 0) {
             HIP_CHECK(hipStreamSynchronize(stream_));
 
             int ncheck = iter + 1;
@@ -981,11 +1125,15 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
         d_svdj_residual_, d_svdj_n_sweeps_,
         d_svd_info_);
 
-    // Truncation: find new_k on GPU, copy just 1 int back
-    hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
-                       d_svd_S_, k, 1e-14, d_svd_info_);
+    // Truncation
     int new_k;
-    HIP_CHECK(hipMemcpy(&new_k, d_svd_info_, sizeof(int), hipMemcpyDeviceToHost));
+    if (opts_.device_k) {
+        new_k = k;
+    } else {
+        hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
+                           d_svd_S_, k, 1e-14, d_svd_info_);
+        HIP_CHECK(hipMemcpy(&new_k, d_svd_info_, sizeof(int), hipMemcpyDeviceToHost));
+    }
 
     int threads = 256;
 
@@ -1106,6 +1254,7 @@ double DMRG2GPU<Scalar>::run(int n_sweeps) {
     double total_time = std::chrono::duration<double>(t_end - t_start).count();
     printf("Final energy: %.12f\n", energy_);
     printf("Total wall time: %.3f s\n", total_time);
+    report_timers();
 
     return energy_;
 }

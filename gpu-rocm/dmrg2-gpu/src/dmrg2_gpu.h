@@ -4,8 +4,10 @@
 #include <hip/hip_runtime.h>
 #include <rocblas/rocblas.h>
 #include <vector>
-#include <string>
+#include <unordered_map>
+#include <cstdint>
 #include "scalar_traits.h"
+#include "../../common/gpu_opts.h"
 
 /**
  * GPU-native DMRG - Two-site optimization
@@ -41,9 +43,13 @@ public:
     int chi_R(int site) const { return bond_dims_[site + 1]; }
     void set_quiet(bool) {}  // no-op
 
+    GpuOpts& opts() { return opts_; }
+    const GpuOpts& opts() const { return opts_; }
+
 private:
     // System parameters
     int L_, d_, chi_max_, D_mpo_;
+    int D_mpo_actual_;
     double tol_;
     double energy_;
 
@@ -64,12 +70,29 @@ private:
     // Fused two-site MPO: WW[bond] is (D*d*d, d*d*D) for bond (site, site+1)
     std::vector<Scalar*> d_WW_;
 
+    // SPARSE_MPO: per-site nnz row/col lists for WW (two-site fused MPO)
+    std::vector<int*> d_WW_nnz_rows_;
+    std::vector<int*> d_WW_nnz_cols_;
+    std::vector<int>  ww_nnz_rows_count_;
+    std::vector<int>  ww_nnz_cols_count_;
+
     std::vector<int> L_env_alloc_chi_;
     std::vector<int> R_env_alloc_chi_;
 
-    // GPU handles
+    // GPU handles — dual-stream pipeline (env update ∥ absorb)
     hipStream_t stream_;
+    hipStream_t stream_env_;
     rocblas_handle rocblas_h_;
+    rocblas_handle rocblas_h_env_;
+    hipEvent_t event_canon_ready_;
+    hipEvent_t event_env_done_;
+
+    // Env-stream scratch (independent of stream_'s d_T1_/d_T2_)
+    Scalar* d_T1_env_;
+    Scalar* d_T2_env_;
+    Scalar** d_batch_A_env_;
+    Scalar** d_batch_B_env_;
+    Scalar** d_batch_C_env_;
 
     // Contraction intermediates
     Scalar* d_T1_;
@@ -127,6 +150,34 @@ private:
     // CPU workspace (for receiving GPU SVD results and truncation/scaling)
     std::vector<Scalar> h_svd_U_, h_svd_Vh_, h_svd_tmp_;
     std::vector<RealType> h_svd_S_;
+
+    // RSVD workspace (allocated only when opts_.rsvd is on)
+    static constexpr int RSVD_OVERSAMPLE_ = 10;
+    Scalar* d_rsvd_omega_   = nullptr;
+    Scalar* d_rsvd_Y_       = nullptr;
+    Scalar* d_rsvd_tau_     = nullptr;
+    Scalar* d_rsvd_B_       = nullptr;
+    Scalar* d_rsvd_U_small_ = nullptr;
+    int     rsvd_r_max_     = 0;
+
+    // LANCZOS_GRAPH: cached HIP-graph exec per (site, cL, cR) for apply_heff
+    Scalar* d_heff_input_ = nullptr;
+    std::unordered_map<uint64_t, hipGraphExec_t> apply_heff_graph_cache_;
+    static inline uint64_t graph_key(int site, int cL, int cR) {
+        return ((uint64_t)(uint32_t)site << 40) |
+               ((uint64_t)(uint32_t)cL   << 20) |
+                (uint64_t)(uint32_t)cR;
+    }
+
+    // Ablation flags + phase timers
+    GpuOpts opts_;
+    PhaseTimer t_lanczos_;
+    PhaseTimer t_apply_heff_;
+    PhaseTimer t_svd_;
+    PhaseTimer t_absorb_;
+    PhaseTimer t_env_update_;
+    void init_timers();
+    void report_timers();
 
     // Core algorithm
     void build_initial_environments();
