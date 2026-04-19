@@ -167,6 +167,13 @@ private:
     };
     std::vector<StreamWorkspace> workspaces_;
 
+    // LANCZOS_GRAPH: packed (site, cL, cR) key for per-(shape) graph caching.
+    static inline uint64_t graph_key(int site, int cL, int cR) {
+        return ((uint64_t)(uint32_t)site << 40) |
+               ((uint64_t)(uint32_t)cL   << 20) |
+                (uint64_t)(uint32_t)cR;
+    }
+
     // Ablation flags + phase timers
     GpuOpts opts_;
     PhaseTimer t_lanczos_;      // full lanczos_eigensolver call
