@@ -21,6 +21,8 @@ import time
 from datetime import datetime, timezone
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO_ROOT, "benchmarks", "lib"))
+from provenance import provenance_block, binary_info
 
 # ─── Challenge Size Configurations ───────────────────────────────────────────
 
@@ -193,20 +195,29 @@ def run_gpu(impl, model, L, chi, sweeps, warmup=True, timeout=None,
                                pdmrg_local=pdmrg_local,
                                pdmrg_recal=pdmrg_recal)
     if err:
-        return {"energy": None, "time": None, "success": False, "error": err}
+        return {"energy": None, "time": None, "success": False, "error": err,
+                "cmd": None}
+
+    # cmd_rel: binary path relative to REPO_ROOT so rows are portable
+    cmd_rel = list(cmd)
+    if cmd_rel and cmd_rel[0].startswith(REPO_ROOT):
+        cmd_rel[0] = os.path.relpath(cmd_rel[0], REPO_ROOT)
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if result.returncode != 0:
             return {"energy": None, "time": None, "success": False,
-                    "error": (result.stderr or f"rc={result.returncode}")[-500:]}
+                    "error": (result.stderr or f"rc={result.returncode}")[-500:],
+                    "cmd": cmd_rel}
         energy, wt = _parse_gpu_output(result.stdout)
         if energy is None:
             return {"energy": None, "time": None, "success": False,
-                    "error": f"No energy: {result.stdout[-300:]}"}
-        return {"energy": energy, "time": wt, "success": True}
+                    "error": f"No energy: {result.stdout[-300:]}",
+                    "cmd": cmd_rel}
+        return {"energy": energy, "time": wt, "success": True, "cmd": cmd_rel}
     except subprocess.TimeoutExpired:
-        return {"energy": None, "time": None, "success": False, "error": f"Timeout ({timeout}s)"}
+        return {"energy": None, "time": None, "success": False,
+                "error": f"Timeout ({timeout}s)", "cmd": cmd_rel}
 
 
 # ─── CPU (quimb) runner ─────────────────────────────────────────────────────
@@ -275,24 +286,40 @@ def _build_tfim_mpo(L, qtn):
 
 # ─── Main benchmark loop ────────────────────────────────────────────────────
 
-def _flush_impl_results(output_path, impl, arch, benchmark, ts, impl_results):
-    """Atomic-ish incremental write: per-impl JSON file, overwrite-in-place."""
+def _flush_impl_results(output_path, impl, arch, benchmark, ts, impl_results,
+                        provenance=None, run_config=None, binary_meta=None):
+    """Atomic-ish incremental write: per-impl JSON file, overwrite-in-place.
+
+    Embeds a `provenance` dict (git commit, host, GPU, env vars) and a
+    `run_config` dict (script-level args + PDMRG overrides) so results
+    are reproducible to the exact code + configuration that produced them.
+    `binary_meta` captures the binary's SHA256 / mtime so stale builds are
+    detectable.
+    """
     tmp = output_path + ".tmp"
+    payload = {
+        "implementation": impl,
+        "architecture": arch,
+        "benchmark": benchmark,
+        "timestamp": ts,
+        "results": impl_results,
+    }
+    if provenance is not None:
+        payload["provenance"] = provenance
+    if run_config is not None:
+        payload["run_config"] = run_config
+    if binary_meta is not None:
+        payload["binary"] = binary_meta
     with open(tmp, "w") as f:
-        json.dump({
-            "implementation": impl,
-            "architecture": arch,
-            "benchmark": benchmark,
-            "timestamp": ts,
-            "results": impl_results,
-        }, f, indent=2)
+        json.dump(payload, f, indent=2)
     os.replace(tmp, output_path)
 
 
 def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
             output_dir=None, timestamp=None,
             pdmrg_warmup=None, pdmrg_polish=None, pdmrg_local=None,
-            pdmrg_recal=None):
+            pdmrg_recal=None,
+            provenance=None, run_config=None):
     """Run (impl × model × config) × repeats, flushing per-impl JSON after each config.
 
     Each result row stores a list `times` with all successful repeat timings plus
@@ -313,6 +340,7 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
     current_group = None
     by_impl = {}  # impl -> list of result dicts
     per_impl_path = {}  # impl -> output JSON path
+    per_impl_binary = {}  # impl -> binary_info dict (captured once per impl)
 
     for i, (impl, model, L, chi, sweeps) in enumerate(configs):
         group = (impl, model)
@@ -326,6 +354,12 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
             per_impl_path[impl] = os.path.join(
                 output_dir, f"{impl}_mi300x_challenge_{timestamp}.json")
             by_impl[impl] = []
+            # Capture binary metadata once per impl for provenance
+            if impl in GPU_IMPLS:
+                per_impl_binary[impl] = binary_info(
+                    os.path.join(REPO_ROOT, GPU_IMPLS[impl]))
+            else:
+                per_impl_binary[impl] = {"path": impl, "exists": None}
 
         label = f"L={L:3d} chi={chi:3d} sw={sweeps:2d}"
         print(f"  [{i+1:3d}/{total}] {label:25s}", flush=True)
@@ -334,6 +368,7 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
         times = []
         energies = []
         last_err = None
+        last_cmd = None
         for rep in range(repeats):
             if is_gpu:
                 # Warmup on the first rep of each config only (saves time)
@@ -345,6 +380,8 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
                             pdmrg_recal=pdmrg_recal)
             else:
                 r = run_quimb(impl, model, L, chi, sweeps, threads=1)
+            if r.get("cmd") is not None:
+                last_cmd = r["cmd"]
             if r.get("success"):
                 times.append(r["time"])
                 energies.append(r["energy"])
@@ -372,6 +409,7 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
                 "energies": energies,
                 "repeats": repeats,
                 "successful_reps": len(times),
+                "cmd": last_cmd,        # exact argv that produced this row
             }
         else:
             row = {
@@ -383,6 +421,7 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
                 "times": [], "energy": None, "energies": [],
                 "repeats": repeats, "successful_reps": 0,
                 "error": last_err,
+                "cmd": last_cmd,
             }
         if model == "josephson":
             row["nmax"] = JOSEPHSON_NMAX
@@ -391,7 +430,10 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
 
         # Flush immediately so a crash loses at most the current config
         _flush_impl_results(per_impl_path[impl], impl, "mi300x", "challenge",
-                            timestamp, by_impl[impl])
+                            timestamp, by_impl[impl],
+                            provenance=provenance,
+                            run_config=run_config,
+                            binary_meta=per_impl_binary.get(impl))
 
     return by_impl, per_impl_path
 
@@ -458,12 +500,34 @@ def main():
     print(f"  Output:           {args.output_dir}")
     print(f"{'#'*65}")
 
+    provenance = provenance_block(repo_root=REPO_ROOT, script_argv=sys.argv[1:])
+    run_config = {
+        "grid":            grid_label,
+        "impl_names":      impl_names,
+        "models":          models,
+        "repeats":         args.repeats,
+        "skip_warmup":     args.skip_warmup,
+        "trim":            args.trim,
+        "tag":             args.tag,
+        "pdmrg_warmup":    pdmrg_warmup,
+        "pdmrg_polish":    pdmrg_polish,
+        "pdmrg_local":     pdmrg_local,
+        "pdmrg_recal":     pdmrg_recal,
+        "josephson_nmax":  JOSEPHSON_NMAX,
+    }
+    if provenance["git"].get("dirty"):
+        print(f"  WARNING:          git repo is dirty "
+              f"({len(provenance['git'].get('dirty_files', []))} files modified)")
+    print(f"  Git commit:       {provenance['git'].get('commit_short', '?')}"
+          f" ({provenance['git'].get('branch', '?')})")
+
     by_impl, per_impl_path = run_all(
         impl_names, models, sizes_dict,
         do_warmup=not args.skip_warmup, repeats=args.repeats,
         output_dir=args.output_dir, timestamp=ts,
         pdmrg_warmup=pdmrg_warmup, pdmrg_polish=pdmrg_polish,
-        pdmrg_local=pdmrg_local, pdmrg_recal=pdmrg_recal)
+        pdmrg_local=pdmrg_local, pdmrg_recal=pdmrg_recal,
+        provenance=provenance, run_config=run_config)
 
     print(f"\n{'='*65}")
     print(f"  Final per-impl files:")

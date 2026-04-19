@@ -43,6 +43,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+_BENCH_LIB = Path(__file__).resolve().parent / "lib"
+sys.path.insert(0, str(_BENCH_LIB))
+from provenance import provenance_block, binary_info
+
 # ─── Optimization flags (mirrors GpuOpts in dmrg_gpu.h) ───────────────────────
 OPT_FLAGS = [
     "DEVICE_K",
@@ -198,6 +202,8 @@ def run_bench(binary: str, reps: int, out_dir: Path):
     payload = {
         "timestamp": datetime.utcnow().isoformat(),
         "binary": str(binary),
+        "binary_info": binary_info(str(binary)),
+        "provenance": provenance_block(script_argv=sys.argv[1:]),
         "problems": BENCH_CONFIGS,
         "opt_flags": OPT_FLAGS,
         "reps": reps,
