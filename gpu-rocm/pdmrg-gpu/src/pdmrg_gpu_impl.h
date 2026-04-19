@@ -255,7 +255,9 @@ PDMRGGPU<Scalar>::PDMRGGPU(int L, int d, int chi_max, int D_mpo, int n_segments,
     theta_size_max_ = chi_max_ * dd * chi_max_;
     max_lanczos_iter_ = std::min(100, theta_size_max_);
     use_cpu_svd_ = false;
-    use_rsvd_ = false;
+    // RSVD: the DMRG_GPU_OPT_RSVD env var controls this (use_rsvd_ can still
+    // be overridden at runtime via set_rsvd() if the caller prefers).
+    use_rsvd_ = opts_.rsvd;
     lanczos_use_1site_ = false;
     rsvd_oversampling_ = 20;
 
