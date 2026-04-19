@@ -27,6 +27,8 @@ from pathlib import Path
 # ============================================================================
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO, "benchmarks", "lib"))
+from provenance import provenance_block, binary_info
 RESULTS_DIR = os.path.join(REPO, 'benchmarks', 'paper_results')
 
 # GPU binary paths
@@ -159,11 +161,34 @@ def is_oom(output):
     return any(pat.lower() in lower for pat in OOM_PATTERNS)
 
 
+_PROVENANCE_CACHE = None
+
+def _get_provenance():
+    """Lazy-capture provenance once per process run."""
+    global _PROVENANCE_CACHE
+    if _PROVENANCE_CACHE is None:
+        _PROVENANCE_CACHE = {
+            "provenance": provenance_block(repo_root=REPO, script_argv=sys.argv[1:]),
+            "binaries":   {
+                "dmrg-gpu":       binary_info(DG_BIN),
+                "dmrg2-gpu":      binary_info(D2G_BIN),
+                "pdmrg-gpu":      binary_info(PG_BIN),
+                "pdmrg-gpu-opt":  binary_info(P2G_BIN),
+            },
+        }
+    return _PROVENANCE_CACHE
+
+
 def save_results(results, filename='results.json'):
-    """Save results to JSON file."""
+    """Save results to JSON file (wrapped in a provenance envelope)."""
     path = os.path.join(RESULTS_DIR, filename)
+    envelope = {
+        "provenance":  _get_provenance()["provenance"],
+        "binaries":    _get_provenance()["binaries"],
+        "results":     results,
+    }
     with open(path, 'w') as f:
-        json.dump(results, f, indent=2, default=str)
+        json.dump(envelope, f, indent=2, default=str)
     print(f"  [saved {len(results)} results to {path}]")
 
 
