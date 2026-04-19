@@ -2874,7 +2874,6 @@ double PDMRGGPUOpt<Scalar>::merge_and_optimize_boundaries(int parity) {
         }
 
         // Step 3: SVD split → direction 'R': MPS[bsite]=U, MPS[bsite+1]=S·Vh
-        // Always use SVD at boundaries (not NS-split) for accurate V = 1/S
         if (use_rsvd_)
             rsvd_split(bsite, ws.d_theta, 'R', si);
         else

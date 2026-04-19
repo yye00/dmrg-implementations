@@ -7,7 +7,7 @@ set(CMAKE_CXX_COMPILER /opt/rocm/llvm/bin/clang++)
 project(DMRG2_GPU_OPT LANGUAGES CXX HIP)
 
 # ==========================================
-# GPU-Native Two-Site DMRG-OPT (NS + Davidson)
+# GPU-Native Two-Site DMRG-OPT (Block-Davidson)
 # ==========================================
 
 set(CMAKE_CXX_STANDARD 17)
@@ -82,5 +82,5 @@ message(STATUS "==============================================")
 message(STATUS "GPU-Native Two-Site DMRG-OPT Build Configuration")
 message(STATUS "==============================================")
 message(STATUS "GPU targets: ${GPU_TARGETS}")
-message(STATUS "Backend: rocBLAS GEMM (Newton-Schulz + Block-Davidson)")
+message(STATUS "Backend: rocBLAS GEMM (Block-Davidson)")
 message(STATUS "==============================================")

@@ -7,10 +7,9 @@ set(CMAKE_CXX_COMPILER /opt/rocm/llvm/bin/clang++)
 project(DMRG_GPU_OPT LANGUAGES CXX HIP)
 
 # ==========================================
-# GPU-Native DMRG-OPT (Newton-Schulz + Block-Davidson)
+# GPU-Native DMRG-OPT (Block-Davidson)
 # ==========================================
-# Single-site optimization with NS polar decomposition
-# and Block-Davidson eigensolver (BLAS-3 dominant)
+# Single-site optimization with Block-Davidson eigensolver (BLAS-3 dominant)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -84,5 +83,5 @@ message(STATUS "==============================================")
 message(STATUS "GPU-Native DMRG-OPT Build Configuration")
 message(STATUS "==============================================")
 message(STATUS "GPU targets: ${GPU_TARGETS}")
-message(STATUS "Backend: rocBLAS GEMM + Newton-Schulz + Block-Davidson")
+message(STATUS "Backend: rocBLAS GEMM + Block-Davidson")
 message(STATUS "==============================================")
