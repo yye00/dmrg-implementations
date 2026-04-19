@@ -29,8 +29,8 @@
     } while(0)
 
 // Profiling counters (reset per sweep pair)
-static double prof_davidson_ms = 0, prof_ns_ms = 0, prof_env_ms = 0;
-static int prof_davidson_iters = 0, prof_ns_iters = 0, prof_site_count = 0;
+static double prof_davidson_ms = 0, prof_svd_ms = 0, prof_env_ms = 0;
+static int prof_davidson_iters = 0, prof_site_count = 0;
 static int prof_heff_calls = 0;
 
 // ============================================================================
@@ -118,7 +118,7 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_batch3_B_, batch_max * sizeof(Scalar*)));
     HIP_CHECK(hipMalloc(&d_batch3_C_, batch_max * sizeof(Scalar*)));
 
-    // SVD workspace (reused as NS scratch)
+    // SVD workspace
     int svd_max_dim = chi_max_ * d_;
     HIP_CHECK(hipMalloc(&d_svd_A_,    theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_svd_U_,    (size_t)svd_max_dim * chi_max_ * sizeof(Scalar)));
@@ -160,29 +160,6 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
             if (opt_size > max_lwork) max_lwork = opt_size;
         }
         h_svd_work_.resize(max_lwork);
-    }
-
-    // Newton-Schulz workspace
-    // Single-site: theta is at most (chi_max*d, chi_max), so NS matrices are at most (chi_max, chi_max)
-    int ns_max_m = chi_max_ * d_;   // max tall dim
-    int ns_max_n = chi_max_;        // max short dim
-    HIP_CHECK(hipMalloc(&d_ns_U_,     (size_t)ns_max_m * ns_max_n * sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_ns_U_new_, (size_t)ns_max_m * ns_max_n * sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_ns_gram_,  (size_t)ns_max_n * ns_max_n * sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_ns_P_,     (size_t)ns_max_n * ns_max_n * sizeof(Scalar)));
-    h_ns_PtP_.resize(ns_max_n * ns_max_n);
-    h_ns_eigvals_.resize(ns_max_n);
-    h_ns_syev_rwork_.resize(Traits::syev_rwork_size(ns_max_n));
-    {
-        int lwork_q = -1; Scalar work_opt; int info_q;
-        const char jobz_q = 'V', uplo_q = 'U';
-        Traits::lapack_syev(&jobz_q, &uplo_q, &ns_max_n, h_ns_PtP_.data(), &ns_max_n,
-                            h_ns_eigvals_.data(), &work_opt, &lwork_q,
-                            h_ns_syev_rwork_.empty() ? nullptr : h_ns_syev_rwork_.data(), &info_q);
-        int opt_lwork;
-        if constexpr (Traits::is_complex) opt_lwork = (int)Traits::real_part(work_opt) + 1;
-        else opt_lwork = (int)work_opt + 1;
-        h_ns_syev_work_.resize(opt_lwork);
     }
 
     // Block-Davidson workspace
@@ -235,12 +212,6 @@ void DMRGGPUOpt<Scalar>::free_gpu_resources() {
     if (d_svd_U_) hipFree(d_svd_U_);
     if (d_svd_S_) hipFree(d_svd_S_);
     if (d_svd_Vh_) hipFree(d_svd_Vh_);
-
-    // Newton-Schulz workspace
-    if (d_ns_U_) hipFree(d_ns_U_);
-    if (d_ns_U_new_) hipFree(d_ns_U_new_);
-    if (d_ns_gram_) hipFree(d_ns_gram_);
-    if (d_ns_P_) hipFree(d_ns_P_);
 
     // Block-Davidson workspace
     if (d_dav_V_) hipFree(d_dav_V_);

@@ -602,6 +602,50 @@ void DMRG2GPU<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo_te
         HIP_CHECK(hipMalloc(&d_WW_[bond], ww_size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_WW_[bond], h_WW.data(),
                             ww_size * sizeof(Scalar), hipMemcpyHostToDevice));
+
+        // SPARSE_MPO: build nnz row/col index lists for WW[bond].
+        // WW is (D*dd, dd*D) column-major. Row r = w*dd + s1*d + s2 is nonzero
+        // if any col has |val| > 0. Col c = n*dd + s1p*d + s2p analogously.
+        if (opts_.sparse_mpo) {
+            int rows = D * dd;
+            int cols = dd * D;
+            std::vector<int> nnz_rows, nnz_cols;
+            nnz_rows.reserve(rows);
+            nnz_cols.reserve(cols);
+            const double eps = 1e-14;
+            for (int r = 0; r < rows; r++) {
+                bool nz = false;
+                for (int c = 0; c < cols && !nz; c++) {
+                    if (scalar_abs(h_WW[r + (size_t)c * rows]) > eps) nz = true;
+                }
+                if (nz) nnz_rows.push_back(r);
+            }
+            for (int c = 0; c < cols; c++) {
+                bool nz = false;
+                for (int r = 0; r < rows && !nz; r++) {
+                    if (scalar_abs(h_WW[r + (size_t)c * rows]) > eps) nz = true;
+                }
+                if (nz) nnz_cols.push_back(c);
+            }
+            ww_nnz_rows_count_[bond] = (int)nnz_rows.size();
+            ww_nnz_cols_count_[bond] = (int)nnz_cols.size();
+            if (!nnz_rows.empty()) {
+                HIP_CHECK(hipMalloc(&d_WW_nnz_rows_[bond], nnz_rows.size() * sizeof(int)));
+                HIP_CHECK(hipMemcpy(d_WW_nnz_rows_[bond], nnz_rows.data(),
+                                    nnz_rows.size() * sizeof(int), hipMemcpyHostToDevice));
+            }
+            if (!nnz_cols.empty()) {
+                HIP_CHECK(hipMalloc(&d_WW_nnz_cols_[bond], nnz_cols.size() * sizeof(int)));
+                HIP_CHECK(hipMemcpy(d_WW_nnz_cols_[bond], nnz_cols.data(),
+                                    nnz_cols.size() * sizeof(int), hipMemcpyHostToDevice));
+            }
+            if (bond == 0) {
+                std::fprintf(stderr,
+                    "[SPARSE_MPO] bond 0: WW shape (%d x %d), nnz rows=%d, nnz cols=%d (%.0f%% sparse)\n",
+                    rows, cols, ww_nnz_rows_count_[bond], ww_nnz_cols_count_[bond],
+                    100.0 * (1.0 - (double)(ww_nnz_rows_count_[bond] * ww_nnz_cols_count_[bond]) / (rows * cols)));
+            }
+        }
     }
 }
 
@@ -635,11 +679,36 @@ void DMRG2GPU<Scalar>::form_theta_two_site(int site) {
 
 template<typename Scalar>
 void DMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in, Scalar* d_result) {
+    t_apply_heff_.begin(stream_);
     int cL = chi_L(site);
     int cR = chi_R(site + 1);
     int D = D_mpo_, d = d_;
     int dd = d * d;
     Scalar one = Traits::one(), zero_val = Traits::zero();
+
+    // LANCZOS_GRAPH: stage theta into a fixed-address bounce buffer so every
+    // graph replay reads from the same address regardless of which Lanczos v_i
+    // the caller passes. On cache hit replay immediately; on miss run the body
+    // under hipStreamBeginCapture, instantiate, cache, then launch.
+    const Scalar* theta_src = d_theta_in;
+    bool graph_capture_miss = false;
+    if (opts_.lanczos_graph) {
+        int n_theta = cL * dd * cR;
+        HIP_CHECK(hipMemcpyAsync(d_heff_input_, d_theta_in,
+                                 (size_t)n_theta * sizeof(Scalar),
+                                 hipMemcpyDeviceToDevice, stream_));
+        theta_src = d_heff_input_;
+
+        uint64_t key = graph_key(site, cL, cR);
+        auto it = apply_heff_graph_cache_.find(key);
+        if (it != apply_heff_graph_cache_.end()) {
+            HIP_CHECK(hipGraphLaunch(it->second, stream_));
+            t_apply_heff_.end(stream_);
+            return;
+        }
+        graph_capture_miss = true;
+        HIP_CHECK(hipStreamBeginCapture(stream_, hipStreamCaptureModeGlobal));
+    }
 
     Scalar* L_env = d_L_envs_[site];
     Scalar* R_env = d_R_envs_[site + 2];
@@ -660,7 +729,7 @@ void DMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in, S
         int batch_count = D * dd;
         hipLaunchKernelGGL(setup_batch_ptrs_wd_twosite<Scalar>, dim3(1), dim3(batch_count), 0, stream_,
                            d_batch_A_, d_batch_B_, d_batch_C_,
-                           L_env, const_cast<Scalar*>(d_theta_in), T1,
+                           L_env, const_cast<Scalar*>(theta_src), T1,
                            d, dd, cL, cL, cL * cR);
         ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
             Traits::op_t, rocblas_operation_none,
@@ -722,8 +791,6 @@ void DMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in, S
             batch_count));
 
         // Reduce: d_result[slice_stride] = T1[slice_stride x D] * ones_D
-        // T1 is treated as a column-major matrix of shape (slice_stride, D)
-        // with lda = slice_stride (slices are contiguous with no gaps).
         ROCBLAS_CHECK(Traits::gemv(rocblas_h_,
             rocblas_operation_none,
             slice_stride, D,
@@ -733,6 +800,18 @@ void DMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in, S
             &zero_val,
             d_result, 1));
     }
+
+    if (graph_capture_miss) {
+        hipGraph_t graph;
+        HIP_CHECK(hipStreamEndCapture(stream_, &graph));
+        hipGraphExec_t exec;
+        HIP_CHECK(hipGraphInstantiate(&exec, graph, nullptr, nullptr, 0));
+        HIP_CHECK(hipGraphDestroy(graph));
+        apply_heff_graph_cache_[graph_key(site, cL, cR)] = exec;
+        HIP_CHECK(hipGraphLaunch(exec, stream_));
+    }
+
+    t_apply_heff_.end(stream_);
 }
 
 // ============================================================================
@@ -741,6 +820,7 @@ void DMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in, S
 
 template<typename Scalar>
 void DMRG2GPU<Scalar>::update_left_env(int site) {
+    t_env_update_.begin(stream_);
     int chi_in = bond_dims_[site];
     int chi_out = bond_dims_[site + 1];
     int D = D_mpo_, d = d_;
@@ -807,6 +887,7 @@ void DMRG2GPU<Scalar>::update_left_env(int site) {
     if constexpr (Traits::is_complex) {
         conjugate_inplace(L_new, chi_out * D * chi_out, stream_);
     }
+    t_env_update_.end(stream_);
 }
 
 // ============================================================================
@@ -815,6 +896,7 @@ void DMRG2GPU<Scalar>::update_left_env(int site) {
 
 template<typename Scalar>
 void DMRG2GPU<Scalar>::update_right_env(int site) {
+    t_env_update_.begin(stream_);
     int chi_in = bond_dims_[site + 1];
     int chi_out = bond_dims_[site];
     int D = D_mpo_, d = d_;
@@ -878,6 +960,7 @@ void DMRG2GPU<Scalar>::update_right_env(int site) {
                 D));
         }
     }
+    t_env_update_.end(stream_);
 }
 
 // ============================================================================
@@ -914,6 +997,7 @@ void DMRG2GPU<Scalar>::build_initial_environments() {
 
 template<typename Scalar>
 double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int theta_size) {
+    t_lanczos_.begin(stream_);
     int n = theta_size;
     int max_iter = std::min(max_lanczos_iter_, n);
     double tol_lanczos = 1e-12;
@@ -1090,6 +1174,7 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
     ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
     ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
 
+    t_lanczos_.end(stream_);
     return energy;
 }
 
@@ -1099,6 +1184,7 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
 
 template<typename Scalar>
 void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
+    t_svd_.begin(stream_);
     int cL = chi_L(site);
     int cR = chi_R(site + 1);
 
@@ -1183,6 +1269,7 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
     }
 
     bond_dims_[site + 1] = new_k;
+    t_svd_.end(stream_);
 }
 
 // ============================================================================

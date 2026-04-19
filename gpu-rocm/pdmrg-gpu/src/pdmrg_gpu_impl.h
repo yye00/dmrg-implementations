@@ -129,6 +129,33 @@ static __global__ void lanczos_check_beta(const double* beta, int n, double tol,
     }
 }
 
+// Fused Lanczos update:  w := w + (-α)*v_i + [(-β_{im1})*v_{im1}]
+// d_neg_alpha and d_neg_beta_im1 are Scalar* on device (device-pointer mode).
+// v_im1 may be nullptr when has_prev is false (iter==0 path).
+template<typename Scalar>
+__global__ void lanczos_fused_sub_kernel(
+    Scalar* w, const Scalar* v_i, const Scalar* v_im1,
+    const Scalar* d_neg_alpha, const Scalar* d_neg_beta_im1,
+    int n, int has_prev) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+    Scalar wi = w[idx];
+    wi = scalar_add(wi, scalar_mul(*d_neg_alpha, v_i[idx]));
+    if (has_prev) {
+        wi = scalar_add(wi, scalar_mul(*d_neg_beta_im1, v_im1[idx]));
+    }
+    w[idx] = wi;
+}
+
+// Fused normalize-and-copy:  v_{i+1}[k] = w[k] * inv_beta
+template<typename Scalar, typename RealType>
+__global__ void lanczos_fused_norm_copy_kernel(
+    Scalar* v_next, const Scalar* w, const RealType* d_inv_beta, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+    v_next[idx] = ScalarTraits<Scalar>::scale_by_real(*d_inv_beta, w[idx]);
+}
+
 // Promote double eigenvector to hipDoubleComplex (for Josephson Ritz coefficients)
 static __global__ void promote_double_to_complex(const double* src, hipDoubleComplex* dst, int n) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
@@ -981,15 +1008,28 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
                            ws.d_dot_result, ws.d_neg_alpha, ws.d_alpha_dev, iter);
 
-        // w -= alpha_i * v_i (device pointer)
-        ROCBLAS_CHECK(Traits::axpy(handles_[si], n, ws.d_neg_alpha, d_vi, 1, ws.d_heff_result, 1));
+        if (opts_.fuse_lanczos) {
+            // Fused: w += (-α)·v_i + (-β_{i-1})·v_{i-1} in one kernel pass
+            const Scalar* v_im1 = (iter > 0) ? (d_lanczos_v + (size_t)(iter - 1) * n) : nullptr;
+            const Scalar* nb_im1 = (iter > 0) ? (ws.d_neg_beta_scalars + (iter - 1)) : ws.d_neg_alpha;
+            int block = 256;
+            int grid = (n + block - 1) / block;
+            hipLaunchKernelGGL((lanczos_fused_sub_kernel<Scalar>),
+                               dim3(grid), dim3(block), 0, streams_[si],
+                               ws.d_heff_result, d_vi, v_im1,
+                               ws.d_neg_alpha, nb_im1,
+                               n, iter > 0 ? 1 : 0);
+        } else {
+            // w -= alpha_i * v_i (device pointer)
+            ROCBLAS_CHECK(Traits::axpy(handles_[si], n, ws.d_neg_alpha, d_vi, 1, ws.d_heff_result, 1));
 
-        // w -= beta_{i-1} * v_{i-1} (device pointer: pre-stored by previous iter)
-        if (iter > 0) {
-            ROCBLAS_CHECK(Traits::axpy(handles_[si], n,
-                ws.d_neg_beta_scalars + (iter - 1),
-                d_lanczos_v + (size_t)(iter - 1) * n, 1,
-                ws.d_heff_result, 1));
+            // w -= beta_{i-1} * v_{i-1} (device pointer: pre-stored by previous iter)
+            if (iter > 0) {
+                ROCBLAS_CHECK(Traits::axpy(handles_[si], n,
+                    ws.d_neg_beta_scalars + (iter - 1),
+                    d_lanczos_v + (size_t)(iter - 1) * n, 1,
+                    ws.d_heff_result, 1));
+            }
         }
 
         // Full reorthogonalization — "twice is enough" double CGS
@@ -1036,8 +1076,17 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         // v_{i+1} = w / beta_i (device pointer for scal)
         if (iter + 1 < max_iter) {
             Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
-            HIP_CHECK(hipMemcpyAsync(d_vip1, ws.d_heff_result, n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
-            ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_vip1, 1));
+            if (opts_.fuse_lanczos) {
+                // Fused normalize+copy: v_{i+1}[k] = w[k] * (1/β_i)
+                int block = 256;
+                int grid = (n + block - 1) / block;
+                hipLaunchKernelGGL((lanczos_fused_norm_copy_kernel<Scalar, RealType>),
+                                   dim3(grid), dim3(block), 0, streams_[si],
+                                   d_vip1, ws.d_heff_result, ws.d_inv_nrm, n);
+            } else {
+                HIP_CHECK(hipMemcpyAsync(d_vip1, ws.d_heff_result, n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
+                ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_vip1, 1));
+            }
         }
 
         // Switch back to host pointer mode (needed by apply_heff next iteration)
