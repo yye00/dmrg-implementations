@@ -5,6 +5,8 @@
 #include <rocblas/rocblas.h>
 #include <vector>
 #include <string>
+#include <unordered_map>
+#include <cstdint>
 #include "scalar_traits.h"
 #include "../../common/gpu_opts.h"
 
@@ -151,6 +153,17 @@ private:
         std::vector<Scalar> h_rsvd_U_small;    // (r, r) from SVD of B
         // Pre-allocated Vh buffer for boundary merge R_env swap
         Scalar* d_Vh_canonical;       // size: chi_max*d × d*chi_max (same as theta_size_max)
+
+        // LANCZOS_GRAPH: per-segment fixed-address bounce buffer + cached
+        // HIP-graph execs keyed by (site, cL, cR). Only allocated/populated
+        // when opts_.lanczos_graph is on. Both apply_heff_single_site and
+        // apply_heff_two_site share this cache; the key packing includes
+        // site so single-site and two-site entries at the same site don't
+        // collide — but because the same workspace is never used for both
+        // kinds of calls in the same sweep (1-site sweeps vs 2-site sweeps
+        // run independently), this isn't an issue in practice.
+        Scalar* d_heff_input = nullptr;
+        std::unordered_map<uint64_t, hipGraphExec_t> apply_heff_graph_cache;
     };
     std::vector<StreamWorkspace> workspaces_;
 

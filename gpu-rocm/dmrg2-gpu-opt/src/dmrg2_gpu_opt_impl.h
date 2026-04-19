@@ -259,6 +259,13 @@ void DMRG2GPUOpt<Scalar>::free_gpu_resources() {
     if (d_dav_work_) hipFree(d_dav_work_);
     if (d_dav_work2_) hipFree(d_dav_work2_);
 
+    // LANCZOS_GRAPH: destroy cached graph execs and bounce buffer
+    for (auto& kv : apply_heff_graph_cache_) {
+        hipGraphExecDestroy(kv.second);
+    }
+    apply_heff_graph_cache_.clear();
+    if (d_heff_input_) hipFree(d_heff_input_);
+
     rocblas_destroy_handle(rocblas_h_);
     hipStreamDestroy(stream_);
 }
@@ -478,6 +485,29 @@ void DMRG2GPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
     int dd = d * d;
     Scalar one = Traits::one(), zero_val = Traits::zero();
 
+    // LANCZOS_GRAPH: stage caller's theta into a fixed-address bounce buffer
+    // BEFORE any capture window, then either replay the cached graph or
+    // capture a new one for this (site, cL, cR) shape. See dmrg_gpu_impl.h
+    // for the full rationale. Two-site theta has shape (cL, d, d, cR).
+    const Scalar* theta_src = d_theta_in;
+    bool graph_capture_miss = false;
+    if (opts_.lanczos_graph) {
+        int n_theta = cL * dd * cR;
+        HIP_CHECK(hipMemcpyAsync(d_heff_input_, d_theta_in,
+                                 (size_t)n_theta * sizeof(Scalar),
+                                 hipMemcpyDeviceToDevice, stream_));
+        theta_src = d_heff_input_;
+
+        uint64_t key = graph_key(site, cL, cR);
+        auto it = apply_heff_graph_cache_.find(key);
+        if (it != apply_heff_graph_cache_.end()) {
+            HIP_CHECK(hipGraphLaunch(it->second, stream_));
+            return;
+        }
+        graph_capture_miss = true;
+        HIP_CHECK(hipStreamBeginCapture(stream_, hipStreamCaptureModeGlobal));
+    }
+
     Scalar* L_env = d_L_envs_[site];
     Scalar* R_env = d_R_envs_[site + 2];
     Scalar* WW = d_WW_[site];
@@ -493,7 +523,7 @@ void DMRG2GPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
                 for (int s2 = 0; s2 < d; s2++) {
                     int ws = w * dd + s1 * d + s2;
                     h_A[ws] = L_env + w * cL;
-                    h_B[ws] = const_cast<Scalar*>(d_theta_in) + s1 * cL + s2 * cL * d;
+                    h_B[ws] = const_cast<Scalar*>(theta_src) + s1 * cL + s2 * cL * d;
                     h_C[ws] = T1 + ws * cL * cR;
                 }
         HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
@@ -555,6 +585,16 @@ void DMRG2GPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
                 }
             }
         }
+    }
+
+    if (graph_capture_miss) {
+        hipGraph_t graph;
+        HIP_CHECK(hipStreamEndCapture(stream_, &graph));
+        hipGraphExec_t exec;
+        HIP_CHECK(hipGraphInstantiate(&exec, graph, nullptr, nullptr, 0));
+        HIP_CHECK(hipGraphDestroy(graph));
+        apply_heff_graph_cache_[graph_key(site, cL, cR)] = exec;
+        HIP_CHECK(hipGraphLaunch(exec, stream_));
     }
 }
 
