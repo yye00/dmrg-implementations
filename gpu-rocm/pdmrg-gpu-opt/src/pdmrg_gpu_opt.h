@@ -5,6 +5,8 @@
 #include <rocblas/rocblas.h>
 #include <vector>
 #include <string>
+#include <unordered_map>
+#include <cstdint>
 #include "scalar_traits.h"
 #include "../../common/gpu_opts.h"
 
@@ -164,8 +166,21 @@ private:
         Scalar* d_rsvd_U_full;  // (m, r) U = Q @ U_small on GPU
         std::vector<Scalar> h_rsvd_B;       // host buffer for CPU SVD of small B
         std::vector<Scalar> h_rsvd_U_small; // (r, r) from SVD of B
+
+        // LANCZOS_GRAPH: per-segment fixed-address bounce buffer + cached
+        // HIP-graph execs keyed by (site, cL, cR). Only allocated/populated
+        // when opts_.lanczos_graph is on.
+        Scalar* d_heff_input = nullptr;
+        std::unordered_map<uint64_t, hipGraphExec_t> apply_heff_graph_cache;
     };
     std::vector<StreamWorkspace> workspaces_;
+
+    // LANCZOS_GRAPH: packed (site, cL, cR) key for per-(shape) graph caching.
+    static inline uint64_t graph_key(int site, int cL, int cR) {
+        return ((uint64_t)(uint32_t)site << 40) |
+               ((uint64_t)(uint32_t)cL   << 20) |
+                (uint64_t)(uint32_t)cR;
+    }
 
     // Ablation flags + phase timers
     GpuOpts opts_;
