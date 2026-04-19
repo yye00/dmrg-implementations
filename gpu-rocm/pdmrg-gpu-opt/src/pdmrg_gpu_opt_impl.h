@@ -2280,7 +2280,7 @@ void PDMRGGPUOpt<Scalar>::segment_sweep_LR(int seg_idx) {
     int last = seg_last_[seg_idx];
     int si = seg_idx;
 
-    // No pre-sweep canonicalization needed: the two-site optimize_bond → NS/SVD
+    // No pre-sweep canonicalization needed: the two-site optimize_bond → SVD
     // split already produces left-canonical tensors during the LR sweep, and
     // update_left_env incrementally builds correct environments as we go.
     for (int site = first; site < last; site++) {
@@ -2295,7 +2295,7 @@ void PDMRGGPUOpt<Scalar>::segment_sweep_RL(int seg_idx) {
     int last = seg_last_[seg_idx];
     int si = seg_idx;
 
-    // No pre-sweep canonicalization needed: the two-site optimize_bond → NS/SVD
+    // No pre-sweep canonicalization needed: the two-site optimize_bond → SVD
     // split already produces right-canonical tensors during the RL sweep, and
     // update_right_env incrementally builds correct environments as we go.
     for (int site = last - 1; site >= first; site--) {
@@ -2905,7 +2905,7 @@ double PDMRGGPUOpt<Scalar>::merge_and_optimize_boundaries(int parity) {
 template<typename Scalar>
 double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup) {
     const char* type_name = Traits::is_complex ? "complex128" : "float64";
-    printf("=== PDMRG-GPU-OPT (NS + MFMA-16 pad + %s, %s) ===\n",
+    printf("=== PDMRG-GPU-OPT (MFMA-16 pad + %s, %s) ===\n",
            use_batched_sweep_ ? "cross-seg batched" : "per-seg streams", type_name);
     if (chi_max_ != chi_max_user_)
         printf("L = %d, d = %d, chi_max = %d (padded from %d), D_mpo = %d, segments = %d\n",

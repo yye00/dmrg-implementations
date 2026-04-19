@@ -119,7 +119,7 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     HIP_CHECK(hipMalloc(&d_batch_B_, batch_max * sizeof(Scalar*)));
     HIP_CHECK(hipMalloc(&d_batch_C_, batch_max * sizeof(Scalar*)));
 
-    // SVD workspace (reused as NS scratch)
+    // SVD workspace
     int svd_max_m = chi_max_ * d_;
     int svd_max_n = d_ * chi_max_;
     int svd_max_k = std::min(svd_max_m, svd_max_n);  // = chi_max_ * d_
