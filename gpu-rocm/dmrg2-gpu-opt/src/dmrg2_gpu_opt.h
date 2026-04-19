@@ -9,19 +9,17 @@
 #include "../../common/gpu_opts.h"
 
 /**
- * GPU-native DMRG - Two-site optimization with Newton-Schulz + Block-Davidson
+ * GPU-native DMRG - Two-site optimization with Block-Davidson
  *
  * Templated on Scalar: double (real) or hipDoubleComplex (complex128).
  *
  * Key algorithmic changes from dmrg2-gpu:
- * 1. Newton-Schulz polar decomposition replaces SVD for bond splitting
- *    (BLAS-3 GEMM-heavy, GPU-native)
- * 2. Block-Davidson eigensolver replaces Lanczos (BLAS-3 dominant)
+ * 1. Block-Davidson eigensolver replaces Lanczos (BLAS-3 dominant)
  *
  * ALL tensor contractions on GPU via rocBLAS gemm.
  * Fused two-site MPO (WW) precomputed for efficient H_eff application.
- * 3. Dimension padding to MFMA-16 multiples for MI300X tile alignment
- * 4. Strided batched Step-3 GEMMs to reduce kernel launch overhead
+ * 2. Dimension padding to MFMA-16 multiples for MI300X tile alignment
+ * 3. Strided batched Step-3 GEMMs to reduce kernel launch overhead
  */
 
 // Round up to next multiple of 16 for MI300X MFMA FP64 tile alignment
@@ -101,7 +99,7 @@ private:
     Scalar** d_batch_B_;
     Scalar** d_batch_C_;
 
-    // SVD workspace (reused as NS scratch)
+    // SVD workspace
     Scalar* d_svd_A_;
     Scalar* d_svd_U_;
     RealType* d_svd_S_;
@@ -111,16 +109,6 @@ private:
     std::vector<Scalar> h_svd_A_, h_svd_U_, h_svd_Vh_, h_svd_work_, h_svd_tmp_;
     std::vector<RealType> h_svd_S_;
     std::vector<RealType> h_svd_rwork_;
-
-    // Newton-Schulz workspace
-    Scalar* d_ns_U_;
-    Scalar* d_ns_U_new_;
-    Scalar* d_ns_gram_;
-    Scalar* d_ns_P_;
-    std::vector<Scalar> h_ns_PtP_;
-    std::vector<RealType> h_ns_eigvals_;
-    std::vector<Scalar> h_ns_syev_work_;
-    std::vector<RealType> h_ns_syev_rwork_;
 
     // Block-Davidson workspace
     int davidson_b_;
@@ -137,7 +125,7 @@ private:
     GpuOpts opts_;
     PhaseTimer t_lanczos_;      // full lanczos_eigensolver call
     PhaseTimer t_apply_heff_;   // each apply_heff invocation
-    PhaseTimer t_svd_;          // NS/SVD bond splitting
+    PhaseTimer t_svd_;          // SVD bond splitting
     PhaseTimer t_absorb_;       // scale + absorb GEMM
     PhaseTimer t_env_update_;   // update_left_env / update_right_env
     void init_timers();
@@ -155,13 +143,7 @@ private:
     void apply_heff_two_site(int site, const Scalar* d_theta_in, Scalar* d_result);
     double lanczos_eigensolver(int site, Scalar* d_theta, int theta_size);
 
-    // Newton-Schulz polar decomposition
-    void newton_schulz_left(Scalar* d_A, int m, int n,
-                            Scalar* d_U, Scalar* d_P,
-                            double tol, int* out_iters);
-
-    // Bond splitting
-    void ns_split(int site, Scalar* d_theta, char direction);
+    // Bond splitting (CPU LAPACK)
     void svd_split_fallback(int site, Scalar* d_theta, char direction);
 
     // Block-Davidson eigensolver
