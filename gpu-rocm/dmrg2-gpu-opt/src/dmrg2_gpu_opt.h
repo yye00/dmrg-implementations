@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include "scalar_traits.h"
+#include "../../common/gpu_opts.h"
 
 /**
  * GPU-native DMRG - Two-site optimization with Newton-Schulz + Block-Davidson
@@ -45,6 +46,10 @@ public:
 
     double get_energy() const { return energy_; }
     void get_mps(std::vector<std::vector<Scalar>>& h_mps) const;
+
+    // Ablation controls (defaults loaded from DMRG_GPU_OPT_* env vars in ctor)
+    GpuOpts& opts() { return opts_; }
+    const GpuOpts& opts() const { return opts_; }
 
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }
@@ -127,6 +132,16 @@ private:
     std::vector<Scalar> h_dav_H_proj_;
     std::vector<RealType> h_dav_eigvals_;
     std::vector<Scalar> h_dav_eigvecs_;
+
+    // Ablation flags + phase timers
+    GpuOpts opts_;
+    PhaseTimer t_lanczos_;      // full lanczos_eigensolver call
+    PhaseTimer t_apply_heff_;   // each apply_heff invocation
+    PhaseTimer t_svd_;          // NS/SVD bond splitting
+    PhaseTimer t_absorb_;       // scale + absorb GEMM
+    PhaseTimer t_env_update_;   // update_left_env / update_right_env
+    void init_timers();
+    void report_timers();
 
     // Core algorithm
     void build_initial_environments();

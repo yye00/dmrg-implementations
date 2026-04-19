@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include "scalar_traits.h"
+#include "../../common/gpu_opts.h"
 
 /**
  * Stream-Parallel DMRG (PDMRG) on GPU
@@ -40,6 +41,10 @@ public:
     void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
     void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
     void set_quiet(bool) {}  // no-op
+
+    // Ablation controls (defaults loaded from DMRG_GPU_OPT_* env vars in ctor)
+    GpuOpts& opts() { return opts_; }
+    const GpuOpts& opts() const { return opts_; }
 
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }
@@ -147,6 +152,16 @@ private:
         Scalar* d_Vh_canonical;       // size: chi_max*d × d*chi_max (same as theta_size_max)
     };
     std::vector<StreamWorkspace> workspaces_;
+
+    // Ablation flags + phase timers
+    GpuOpts opts_;
+    PhaseTimer t_lanczos_;      // full lanczos_eigensolver call
+    PhaseTimer t_apply_heff_;   // each apply_heff invocation
+    PhaseTimer t_svd_;          // gesvd + truncation
+    PhaseTimer t_absorb_;       // scale + absorb GEMM
+    PhaseTimer t_env_update_;   // update_left_env / update_right_env
+    void init_timers();
+    void report_timers();
 
     bool use_cpu_svd_;
     bool use_rsvd_;

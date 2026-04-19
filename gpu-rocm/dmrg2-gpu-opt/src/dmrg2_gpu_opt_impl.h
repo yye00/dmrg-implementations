@@ -43,6 +43,10 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     : L_(L), d_(d), chi_max_(pad_mfma16(chi_max)), chi_max_user_(chi_max),
       D_mpo_(D_mpo), tol_(tol), energy_(0.0) {
 
+    opts_.load_from_env();
+    opts_.print(stderr);
+    init_timers();
+
     if (chi_max_ != chi_max_user_) {
         printf("[OPT] MFMA-16 padding: chi_max %d -> %d\n", chi_max_user_, chi_max_);
     }
@@ -773,7 +777,8 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
         }
 
         // Eigenvalue convergence check (every 3 iterations after iter >= 4)
-        if (iter >= 4 && iter % 3 == 0) {
+        // LANCZOS_FIXED skips the check entirely — no mid-loop host syncs.
+        if (!opts_.lanczos_fixed && iter >= 4 && iter % 3 == 0) {
             int ncheck = iter + 1;
             std::vector<double> h_D_chk(ncheck), h_E_chk(ncheck);
             std::copy(h_alpha.begin(), h_alpha.begin() + ncheck, h_D_chk.begin());
@@ -1660,8 +1665,40 @@ double DMRG2GPUOpt<Scalar>::run(int n_sweeps) {
     auto t_end = std::chrono::high_resolution_clock::now();
     double total_time = std::chrono::duration<double>(t_end - t_start).count();
     printf("\nTotal wall time: %.3f s\n", total_time);
+    report_timers();
 
     return energy_;
+}
+
+// ============================================================================
+// Phase timers
+// ============================================================================
+
+template<typename Scalar>
+void DMRG2GPUOpt<Scalar>::init_timers() {
+    t_lanczos_.init("lanczos", opts_.profile);
+    t_apply_heff_.init("apply_heff", opts_.profile);
+    t_svd_.init("svd", opts_.profile);
+    t_absorb_.init("absorb", opts_.profile);
+    t_env_update_.init("env_update", opts_.profile);
+}
+
+template<typename Scalar>
+void DMRG2GPUOpt<Scalar>::report_timers() {
+    if (!opts_.profile) return;
+    auto row = [](PhaseTimer& t) {
+        double ms = t.total_ms();
+        int c = t.calls();
+        double per = c > 0 ? ms / c : 0.0;
+        std::fprintf(stderr, "  %-12s: %10.2f ms   (%6d calls, %8.3f ms/call)\n",
+                     t.name, ms, c, per);
+    };
+    std::fprintf(stderr, "== Phase timings ==\n");
+    row(t_lanczos_);
+    row(t_apply_heff_);
+    row(t_svd_);
+    row(t_absorb_);
+    row(t_env_update_);
 }
 
 // ============================================================================

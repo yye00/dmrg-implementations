@@ -144,6 +144,10 @@ PDMRGGPU<Scalar>::PDMRGGPU(int L, int d, int chi_max, int D_mpo, int n_segments,
     : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), tol_(tol), energy_(0.0),
       n_segments_(n_segments) {
 
+    opts_.load_from_env();
+    opts_.print(stderr);
+    init_timers();
+
     if (L < 2 * n_segments) {
         throw std::runtime_error("Need at least 2 sites per segment: L >= 2*n_segments");
     }
@@ -1040,8 +1044,9 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
 
         // Convergence check every 3 iterations after iter >= 4
+        // LANCZOS_FIXED skips the check entirely — no mid-loop host syncs.
         // This is the ONLY sync point in the inner loop
-        if (iter >= 4 && iter % 3 == 0) {
+        if (!opts_.lanczos_fixed && iter >= 4 && iter % 3 == 0) {
             HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
             int ncheck = iter + 1;
@@ -1180,7 +1185,9 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
 
     // Truncation
     int new_k;
-    if (gpu_svd_path) {
+    if (opts_.device_k) {
+        new_k = k;
+    } else if (gpu_svd_path) {
         // GPU path: truncation on device, only copy 1 int back
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, streams_[si],
                            ws.d_svd_S, k, 1e-14, ws.d_svd_info);
@@ -1624,7 +1631,9 @@ void PDMRGGPU<Scalar>::svd_split_single_site(int site, Scalar* d_theta, char dir
 
     // Truncation
     int new_k;
-    if (!use_cpu_svd_) {
+    if (opts_.device_k) {
+        new_k = k;
+    } else if (!use_cpu_svd_) {
         // GPU path: truncation on device, only copy 1 int back
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, streams_[si],
                            ws.d_svd_S, k, 1e-14, ws.d_svd_info);
@@ -2252,8 +2261,40 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
            total_time > 0 ? 100.0 * warmup_sec / total_time : 0.0,
            total_time > 0 ? 100.0 * parallel_sec / total_time : 0.0,
            total_time > 0 ? 100.0 * polish_sec / total_time : 0.0);
+    report_timers();
 
     return energy_;
+}
+
+// ============================================================================
+// Phase timers
+// ============================================================================
+
+template<typename Scalar>
+void PDMRGGPU<Scalar>::init_timers() {
+    t_lanczos_.init("lanczos", opts_.profile);
+    t_apply_heff_.init("apply_heff", opts_.profile);
+    t_svd_.init("svd", opts_.profile);
+    t_absorb_.init("absorb", opts_.profile);
+    t_env_update_.init("env_update", opts_.profile);
+}
+
+template<typename Scalar>
+void PDMRGGPU<Scalar>::report_timers() {
+    if (!opts_.profile) return;
+    auto row = [](PhaseTimer& t) {
+        double ms = t.total_ms();
+        int c = t.calls();
+        double per = c > 0 ? ms / c : 0.0;
+        std::fprintf(stderr, "  %-12s: %10.2f ms   (%6d calls, %8.3f ms/call)\n",
+                     t.name, ms, c, per);
+    };
+    std::fprintf(stderr, "== Phase timings ==\n");
+    row(t_lanczos_);
+    row(t_apply_heff_);
+    row(t_svd_);
+    row(t_absorb_);
+    row(t_env_update_);
 }
 
 // ============================================================================

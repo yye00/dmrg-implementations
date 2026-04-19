@@ -44,6 +44,10 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
       D_mpo_(D_mpo), tol_(tol), energy_(0.0),
       n_segments_(n_segments) {
 
+    opts_.load_from_env();
+    opts_.print(stderr);
+    init_timers();
+
     if (chi_max_ != chi_max_user_) {
         printf("[OPT] MFMA-16 padding: chi_max %d -> %d\n", chi_max_user_, chi_max_);
     }
@@ -1477,7 +1481,9 @@ void PDMRGGPUOpt<Scalar>::svd_split(int site, Scalar* d_theta, char direction, i
 
     // Truncation
     int new_k;
-    if (gpu_svd_path) {
+    if (opts_.device_k) {
+        new_k = k;
+    } else if (gpu_svd_path) {
         // GPU path: truncation on device, only copy 1 int back
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, streams_[si],
                            ws.d_svd_S, k, 1e-14, ws.d_svd_info);
@@ -1993,7 +1999,8 @@ double PDMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
 
         ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
 
-        if (iter >= 4 && iter % 3 == 0) {
+        // LANCZOS_FIXED skips the check entirely — no mid-loop host syncs.
+        if (!opts_.lanczos_fixed && iter >= 4 && iter % 3 == 0) {
             HIP_CHECK(hipStreamSynchronize(streams_[si]));
             int n_copy = iter + 1;
             HIP_CHECK(hipMemcpy(h_alpha.data(), ws.d_alpha_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost));
@@ -2595,7 +2602,9 @@ void PDMRGGPUOpt<Scalar>::svd_split_single_site(int site, Scalar* d_theta, char 
 
     // Truncation
     int new_k;
-    if (!use_cpu_svd_) {
+    if (opts_.device_k) {
+        new_k = k;
+    } else if (!use_cpu_svd_) {
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, streams_[si],
                            ws.d_svd_S, k, 1e-14, ws.d_svd_info);
         HIP_CHECK(hipMemcpy(&new_k, ws.d_svd_info, sizeof(int), hipMemcpyDeviceToHost));
@@ -3548,8 +3557,40 @@ double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_wa
     double total_time = std::chrono::duration<double>(t_end - t_start).count();
     printf("Final energy: %.12f\n", energy_);
     printf("Total wall time: %.3f s\n", total_time);
+    report_timers();
 
     return energy_;
+}
+
+// ============================================================================
+// Phase timers
+// ============================================================================
+
+template<typename Scalar>
+void PDMRGGPUOpt<Scalar>::init_timers() {
+    t_lanczos_.init("lanczos", opts_.profile);
+    t_apply_heff_.init("apply_heff", opts_.profile);
+    t_svd_.init("svd", opts_.profile);
+    t_absorb_.init("absorb", opts_.profile);
+    t_env_update_.init("env_update", opts_.profile);
+}
+
+template<typename Scalar>
+void PDMRGGPUOpt<Scalar>::report_timers() {
+    if (!opts_.profile) return;
+    auto row = [](PhaseTimer& t) {
+        double ms = t.total_ms();
+        int c = t.calls();
+        double per = c > 0 ? ms / c : 0.0;
+        std::fprintf(stderr, "  %-12s: %10.2f ms   (%6d calls, %8.3f ms/call)\n",
+                     t.name, ms, c, per);
+    };
+    std::fprintf(stderr, "== Phase timings ==\n");
+    row(t_lanczos_);
+    row(t_apply_heff_);
+    row(t_svd_);
+    row(t_absorb_);
+    row(t_env_update_);
 }
 
 // ============================================================================

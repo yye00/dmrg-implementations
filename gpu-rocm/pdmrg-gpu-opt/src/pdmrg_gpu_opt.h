@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include "scalar_traits.h"
+#include "../../common/gpu_opts.h"
 
 /**
  * PDMRG-GPU-OPT: Stream-Parallel DMRG with Newton-Schulz + Block-Davidson
@@ -49,6 +50,10 @@ public:
     void set_use_batched_sweep(bool b) { use_batched_sweep_ = b; }
     void set_use_chebyshev(bool b) { use_chebyshev_ = b; }
     void set_quiet(bool) {}  // no-op
+
+    // Ablation controls (defaults loaded from DMRG_GPU_OPT_* env vars in ctor)
+    GpuOpts& opts() { return opts_; }
+    const GpuOpts& opts() const { return opts_; }
 
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }
@@ -175,6 +180,16 @@ private:
         std::vector<Scalar> h_rsvd_U_small; // (r, r) from SVD of B
     };
     std::vector<StreamWorkspace> workspaces_;
+
+    // Ablation flags + phase timers
+    GpuOpts opts_;
+    PhaseTimer t_lanczos_;      // full lanczos_eigensolver call
+    PhaseTimer t_apply_heff_;   // each apply_heff invocation
+    PhaseTimer t_svd_;          // NS/SVD bond splitting
+    PhaseTimer t_absorb_;       // scale + absorb GEMM
+    PhaseTimer t_env_update_;   // update_left_env / update_right_env
+    void init_timers();
+    void report_timers();
 
     bool use_cpu_svd_;
     bool use_ns_split_;
