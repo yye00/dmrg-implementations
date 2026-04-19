@@ -1194,30 +1194,105 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_);
 
-    // GPU SVD via size-gated rocsolver dispatcher (R3-F2 + regression fix):
-    // gesvdj (Jacobi) for large sizes and all real cases; bidiagonal gesvd
-    // fallback for small complex shapes where zgesvdj regresses.
-    // See docs/followups/r3_regression_analysis.md.
-    HIP_CHECK(hipMemcpy(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice));
+    // Choose between full SVD (rocsolver_gesvd_auto) and RSVD (Halko–
+    // Martinsson–Tropp). RSVD is profitable when the matrix has many more
+    // singular values than we want to keep. In 2-site DMRG,
+    //   full_k = d * min(cL, cR)
+    // which can comfortably exceed chi_max + oversample — unlike 1-site,
+    // where full_k ≤ chi_max and RSVD is a net loss.
+    int vh_lda = full_k;
+    int svd_k  = full_k;
+    bool used_rsvd = opts_.rsvd
+                  && full_k > k + RSVD_OVERSAMPLE_
+                  && m > 2 * k;
 
-    Traits::rocsolver_gesvd_auto(rocblas_h_,
-        rocblas_svect_singular, rocblas_svect_singular,
-        m, n_svd,
-        d_svd_A_, m,
-        d_svd_S_,
-        d_svd_U_, m,
-        d_svd_Vh_, full_k,
-        d_svd_E_,
-        d_svdj_residual_, d_svdj_n_sweeps_,
-        d_svd_info_);
+    if (!used_rsvd) {
+        HIP_CHECK(hipMemcpyAsync(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar),
+                                 hipMemcpyDeviceToDevice, stream_));
+        Traits::rocsolver_gesvd_auto(rocblas_h_,
+            rocblas_svect_singular, rocblas_svect_singular,
+            m, n_svd,
+            d_svd_A_, m,
+            d_svd_S_,
+            d_svd_U_, m,
+            d_svd_Vh_, full_k,
+            d_svd_E_,
+            d_svdj_residual_, d_svdj_n_sweeps_,
+            d_svd_info_);
+    } else {
+        int r_use = std::min({k + RSVD_OVERSAMPLE_, full_k, rsvd_r_max_});
 
-    // Truncation
+        // Ω ∈ C^{n_svd x r_use}, fresh per call
+        {
+            std::vector<Scalar> h_omega((size_t)n_svd * r_use);
+            for (size_t i = 0; i < h_omega.size(); i++) {
+                h_omega[i] = Traits::random_val();
+            }
+            HIP_CHECK(hipMemcpyAsync(d_rsvd_omega_, h_omega.data(),
+                h_omega.size() * sizeof(Scalar), hipMemcpyHostToDevice, stream_));
+        }
+
+        Scalar one = Traits::one(), zero_val = Traits::zero();
+
+        // Y = A · Ω  → (m x r_use)
+        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            rocblas_operation_none, rocblas_operation_none,
+            m, r_use, n_svd, &one,
+            d_theta, m,
+            d_rsvd_omega_, n_svd,
+            &zero_val,
+            d_rsvd_Y_, m));
+
+        // Q = qr(Y) in-place
+        ROCBLAS_CHECK(Traits::rocsolver_geqrf(rocblas_h_, m, r_use,
+            d_rsvd_Y_, m, d_rsvd_tau_));
+        ROCBLAS_CHECK(Traits::rocsolver_orgqr(rocblas_h_, m, r_use, r_use,
+            d_rsvd_Y_, m, d_rsvd_tau_));
+
+        // B = Q^H · A  → (r_use x n_svd)
+        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            Traits::op_h, rocblas_operation_none,
+            r_use, n_svd, m, &one,
+            d_rsvd_Y_, m,
+            d_theta, m,
+            &zero_val,
+            d_rsvd_B_, r_use));
+
+        // SVD(B) on GPU → U_small, S, Vh
+        int b_k = std::min(r_use, n_svd);
+        Traits::rocsolver_gesvd_auto(rocblas_h_,
+            rocblas_svect_singular, rocblas_svect_singular,
+            r_use, n_svd,
+            d_rsvd_B_, r_use,
+            d_svd_S_,
+            d_rsvd_U_small_, r_use,
+            d_svd_Vh_, b_k,
+            d_svd_E_,
+            d_svdj_residual_, d_svdj_n_sweeps_,
+            d_svd_info_);
+
+        // U = Q · U_small  → (m x b_k), written into d_svd_U_ with lda = m
+        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            rocblas_operation_none, rocblas_operation_none,
+            m, b_k, r_use, &one,
+            d_rsvd_Y_, m,
+            d_rsvd_U_small_, r_use,
+            &zero_val,
+            d_svd_U_, m));
+
+        vh_lda = b_k;
+        svd_k  = b_k;
+    }
+
+    // Cap truncation target at the number of singular pairs the SVD stage
+    // actually produced (svd_k == full_k for full SVD; svd_k == b_k for RSVD).
+    int k_target = std::min(k, svd_k);
     int new_k;
     if (opts_.device_k) {
-        new_k = k;
+        new_k = k_target;
     } else {
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
-                           d_svd_S_, k, 1e-14, d_svd_info_);
+                           d_svd_S_, k_target, 1e-14, d_svd_info_);
         HIP_CHECK(hipMemcpy(&new_k, d_svd_info_, sizeof(int), hipMemcpyDeviceToHost));
     }
 
@@ -1225,30 +1300,26 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
 
     if (direction == 'R') {
         // U -> MPS[site] (left-canonical), S*Vh -> MPS[site+1]
-
-        // MPS[site] = U[:, :new_k] (column slice, on GPU)
         allocate_mps_tensor(site, cL, new_k);
-        if (new_k == full_k) {
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_svd_U_,
-                                m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice));
+        if (new_k == svd_k) {
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], d_svd_U_,
+                                     m * new_k * sizeof(Scalar),
+                                     hipMemcpyDeviceToDevice, stream_));
         } else {
             int total = m * new_k;
             hipLaunchKernelGGL(extract_cols_kernel<Scalar>, dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
                                d_svd_U_, m, d_mps_tensors_[site], m, m, new_k);
         }
 
-        // S*Vh → d_svd_work_ (scale rows of Vh by S, on GPU)
+        // S*Vh — Vh has leading dim vh_lda (full_k or b_k)
         allocate_mps_tensor(site + 1, new_k, cR);
         {
             int total = new_k * n_svd;
             hipLaunchKernelGGL((scale_rows_by_diag_kernel<Scalar, RealType>), dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
-                               d_svd_S_, d_svd_Vh_, full_k, d_mps_tensors_[site + 1], new_k, new_k, n_svd);
+                               d_svd_S_, d_svd_Vh_, vh_lda, d_mps_tensors_[site + 1], new_k, new_k, n_svd);
         }
 
     } else {  // direction == 'L'
-        // U*S -> MPS[site], Vh -> MPS[site+1] (right-canonical)
-
-        // U*S → MPS[site] (scale columns of U by S, on GPU)
         allocate_mps_tensor(site, cL, new_k);
         {
             int total = m * new_k;
@@ -1256,15 +1327,15 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
                                d_svd_S_, d_svd_U_, m, d_mps_tensors_[site], m, m, new_k);
         }
 
-        // MPS[site+1] = Vh[:new_k, :] (row slice, on GPU)
         allocate_mps_tensor(site + 1, new_k, cR);
-        if (new_k == full_k) {
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], d_svd_Vh_,
-                                full_k * n_svd * sizeof(Scalar), hipMemcpyDeviceToDevice));
+        if (new_k == svd_k && vh_lda == new_k) {
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], d_svd_Vh_,
+                                     (size_t)vh_lda * n_svd * sizeof(Scalar),
+                                     hipMemcpyDeviceToDevice, stream_));
         } else {
             int total = new_k * n_svd;
             hipLaunchKernelGGL(extract_cols_kernel<Scalar>, dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
-                               d_svd_Vh_, full_k, d_mps_tensors_[site + 1], new_k, new_k, n_svd);
+                               d_svd_Vh_, vh_lda, d_mps_tensors_[site + 1], new_k, new_k, n_svd);
         }
     }
 
