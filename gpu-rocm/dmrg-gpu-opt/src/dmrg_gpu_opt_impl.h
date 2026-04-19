@@ -123,6 +123,14 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     d_W_left_.resize(L, nullptr);
     d_W_right_.resize(L, nullptr);
 
+    // SPARSE_MPO index lists (populated in set_mpo when opts_.sparse_mpo is on)
+    d_WL_nnz_rows_.resize(L, nullptr);
+    d_WL_nnz_cols_.resize(L, nullptr);
+    wl_nnz_rows_count_.assign(L, 0);
+    wl_nnz_cols_count_.assign(L, 0);
+    h_WL_nnz_rows_.resize(L);
+    h_WL_nnz_cols_.resize(L);
+
     // Environments
     d_L_envs_.resize(L + 1, nullptr);
     d_R_envs_.resize(L + 1, nullptr);
@@ -240,6 +248,8 @@ void DMRGGPUOpt<Scalar>::free_gpu_resources() {
     for (auto ptr : d_mpo_tensors_) if (ptr) hipFree(ptr);
     for (auto ptr : d_W_left_) if (ptr) hipFree(ptr);
     for (auto ptr : d_W_right_) if (ptr) hipFree(ptr);
+    for (auto ptr : d_WL_nnz_rows_) if (ptr) hipFree(ptr);
+    for (auto ptr : d_WL_nnz_cols_) if (ptr) hipFree(ptr);
     for (auto ptr : d_L_envs_) if (ptr) hipFree(ptr);
     for (auto ptr : d_R_envs_) if (ptr) hipFree(ptr);
 
@@ -400,6 +410,53 @@ void DMRGGPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
         HIP_CHECK(hipMalloc(&d_W_right_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_right_[i], h_WR.data(),
                             size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+
+        // SPARSE_MPO: build nonzero row/column index lists for W_left.
+        // Row r = w*d+s nonzero iff any column has |val| > 0; col c = wp*d+sp
+        // analogously. Padded rows/cols (w >= D_act) are always zero so they
+        // get auto-excluded when the flag is on.
+        if (opts_.sparse_mpo) {
+            int rows = D_use * d;
+            int cols = d * D_use;
+            std::vector<int> nnz_rows, nnz_cols;
+            nnz_rows.reserve(rows);
+            nnz_cols.reserve(cols);
+            const double eps = 1e-14;
+            for (int r = 0; r < rows; r++) {
+                bool nz = false;
+                for (int c = 0; c < cols && !nz; c++) {
+                    if (scalar_abs(h_WL[r + (size_t)c * rows]) > eps) nz = true;
+                }
+                if (nz) nnz_rows.push_back(r);
+            }
+            for (int c = 0; c < cols; c++) {
+                bool nz = false;
+                for (int r = 0; r < rows && !nz; r++) {
+                    if (scalar_abs(h_WL[r + (size_t)c * rows]) > eps) nz = true;
+                }
+                if (nz) nnz_cols.push_back(c);
+            }
+            wl_nnz_rows_count_[i] = (int)nnz_rows.size();
+            wl_nnz_cols_count_[i] = (int)nnz_cols.size();
+            if (!nnz_rows.empty()) {
+                HIP_CHECK(hipMalloc(&d_WL_nnz_rows_[i], nnz_rows.size() * sizeof(int)));
+                HIP_CHECK(hipMemcpy(d_WL_nnz_rows_[i], nnz_rows.data(),
+                                    nnz_rows.size() * sizeof(int), hipMemcpyHostToDevice));
+            }
+            if (!nnz_cols.empty()) {
+                HIP_CHECK(hipMalloc(&d_WL_nnz_cols_[i], nnz_cols.size() * sizeof(int)));
+                HIP_CHECK(hipMemcpy(d_WL_nnz_cols_[i], nnz_cols.data(),
+                                    nnz_cols.size() * sizeof(int), hipMemcpyHostToDevice));
+            }
+            h_WL_nnz_rows_[i] = std::move(nnz_rows);
+            h_WL_nnz_cols_[i] = std::move(nnz_cols);
+            if (i == 0) {
+                std::fprintf(stderr,
+                    "[SPARSE_MPO] site 0: W shape (%d x %d), nnz rows=%d, nnz cols=%d (%.0f%% sparse)\n",
+                    rows, cols, wl_nnz_rows_count_[i], wl_nnz_cols_count_[i],
+                    100.0 * (1.0 - (double)(wl_nnz_rows_count_[i] * wl_nnz_cols_count_[i]) / (rows * cols)));
+            }
+        }
     }
 }
 
@@ -443,28 +500,66 @@ void DMRGGPUOpt<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* 
     Scalar* V = d_T1_;
     Scalar* U = d_T2_;
 
+    // SPARSE_MPO: compact Step 1 / Step 3 batches to non-zero (w,s)/(wp,sp)
+    // rows/cols of W_left. Step 1 uses the full V layout (Step 2 reads V
+    // densely), so skipped slots must be zero — enforced via hipMemsetAsync.
+    // Step 3 accumulates into d_result; for sparse mode we zero d_result first
+    // then use beta=1 for all nnz contributions.
+    const bool sparse_s1 = opts_.sparse_mpo
+                         && wl_nnz_rows_count_[site] > 0
+                         && wl_nnz_rows_count_[site] < D * d;
+    const bool sparse_s3 = opts_.sparse_mpo
+                         && wl_nnz_cols_count_[site] > 0
+                         && wl_nnz_cols_count_[site] < D * d;
+
     // Step 1: V_ws[a',b] = L_w^T[a',a] * theta_s[a,b]  (batched GEMM)
     {
-        std::vector<Scalar*> h_A(D * d), h_B(D * d), h_C(D * d);
-        for (int w = 0; w < D; w++)
-            for (int s = 0; s < d; s++) {
-                int ws = w * d + s;
-                h_A[ws] = L_env + w * cL;
-                h_B[ws] = const_cast<Scalar*>(theta_src) + s * cL;
-                h_C[ws] = V + ws * cL * cR;
+        if (sparse_s1) {
+            HIP_CHECK(hipMemsetAsync(V, 0, (size_t)D * d * cL * cR * sizeof(Scalar), stream_));
+            int nnz = wl_nnz_rows_count_[site];
+            const std::vector<int>& h_nnz = h_WL_nnz_rows_[site];
+            std::vector<Scalar*> h_A(nnz), h_B(nnz), h_C(nnz);
+            for (int idx = 0; idx < nnz; idx++) {
+                int ws = h_nnz[idx];
+                int w = ws / d, s = ws % d;
+                h_A[idx] = L_env + w * cL;
+                h_B[idx] = const_cast<Scalar*>(theta_src) + s * cL;
+                h_C[idx] = V + ws * cL * cR;
             }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-            Traits::op_t, rocblas_operation_none,
-            cL, cR, cL,
-            &one,
-            (const Scalar**)d_batch_A_, cL * D,
-            (const Scalar**)d_batch_B_, cL * d,
-            &zero_val,
-            d_batch_C_, cL,
-            D * d));
+            HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), nnz*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), nnz*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), nnz*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+                Traits::op_t, rocblas_operation_none,
+                cL, cR, cL,
+                &one,
+                (const Scalar**)d_batch_A_, cL * D,
+                (const Scalar**)d_batch_B_, cL * d,
+                &zero_val,
+                d_batch_C_, cL,
+                nnz));
+        } else {
+            std::vector<Scalar*> h_A(D * d), h_B(D * d), h_C(D * d);
+            for (int w = 0; w < D; w++)
+                for (int s = 0; s < d; s++) {
+                    int ws = w * d + s;
+                    h_A[ws] = L_env + w * cL;
+                    h_B[ws] = const_cast<Scalar*>(theta_src) + s * cL;
+                    h_C[ws] = V + ws * cL * cR;
+                }
+            HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+                Traits::op_t, rocblas_operation_none,
+                cL, cR, cL,
+                &one,
+                (const Scalar**)d_batch_A_, cL * D,
+                (const Scalar**)d_batch_B_, cL * d,
+                &zero_val,
+                d_batch_C_, cL,
+                D * d));
+        }
     }
 
     // Step 2: U = V * W_matrix
@@ -480,7 +575,25 @@ void DMRGGPUOpt<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* 
     // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
     // Use strided_batched GEMM only when: large chi AND d<=2
     // (d>=3 causes cache line contention from interleaved output layout)
-    if (cL >= 16 && cR >= 16 && d <= 2) {
+    if (sparse_s3) {
+        HIP_CHECK(hipMemsetAsync(d_result, 0, (size_t)cL * d * cR * sizeof(Scalar), stream_));
+        int nnz = wl_nnz_cols_count_[site];
+        const std::vector<int>& h_nnz = h_WL_nnz_cols_[site];
+        Scalar beta_one = Traits::one();
+        for (int idx = 0; idx < nnz; idx++) {
+            int c = h_nnz[idx];
+            int wp = c / d, sp = c % d;
+            int ws_out = wp * d + sp;
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                cL, cR, cR,
+                &one,
+                U + ws_out * cL * cR, cL,
+                R_env + wp * cR, cR * D,
+                &beta_one,
+                d_result + sp * cL, cL * d));
+        }
+    } else if (cL >= 16 && cR >= 16 && d <= 2) {
         for (int wp = 0; wp < D; wp++) {
             Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
             ROCBLAS_CHECK(Traits::gemm_strided_batched(rocblas_h_,

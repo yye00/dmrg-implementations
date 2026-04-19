@@ -86,6 +86,21 @@ private:
     std::vector<Scalar*> d_W_left_;
     std::vector<Scalar*> d_W_right_;
     std::vector<Scalar*> d_WW_;       // fused two-site MPO
+
+    // SPARSE_MPO: per-site nnz row/col lists. Shared across all segments
+    // because they depend only on the W / WW matrix for that site, not on
+    // which stream is doing the apply_heff call.
+    // Single-site (W_left): used by apply_heff_single_site.
+    std::vector<int*> d_WL_nnz_rows_;
+    std::vector<int*> d_WL_nnz_cols_;
+    std::vector<int>  wl_nnz_rows_count_;
+    std::vector<int>  wl_nnz_cols_count_;
+    // Two-site (WW): used by apply_heff_two_site.
+    std::vector<int*> d_WW_nnz_rows_;
+    std::vector<int*> d_WW_nnz_cols_;
+    std::vector<int>  ww_nnz_rows_count_;
+    std::vector<int>  ww_nnz_cols_count_;
+
     std::vector<int> L_env_alloc_chi_;
     std::vector<int> R_env_alloc_chi_;
 

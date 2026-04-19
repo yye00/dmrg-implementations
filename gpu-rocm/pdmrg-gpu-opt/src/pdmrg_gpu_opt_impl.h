@@ -61,6 +61,29 @@ __global__ void lanczos_fused_norm_copy_kernel(
     v_next[idx] = ScalarTraits<Scalar>::scale_by_real(*d_inv_beta, w[idx]);
 }
 
+// SPARSE_MPO setup kernels (two-site only — single-site sparse uses host-side
+// pointer arrays). Skipped slots must be pre-zeroed by the caller (V /
+// scratch memset) so dense Step 2 reads a correct layout and the Step-3 GEMV
+// reduction doesn't pick up stale data.
+
+// Sparse two-site Step 1 (WW nnz rows): A[idx] = L_env + w*strideA,
+// B[idx] = theta offset for (s1, s2), C[idx] = T1 + packed*strideC.
+// packed = w*dd + s1*d + s2.
+template<typename Scalar>
+__global__ void setup_batch_ptrs_wd_twosite_sparse(Scalar** A, Scalar** B, Scalar** C,
+                                                    Scalar* base_A, Scalar* base_B, Scalar* base_C,
+                                                    const int* nnz_wss, int d, int dd,
+                                                    int strideA, int strideB, int strideC) {
+    int idx = threadIdx.x;
+    int packed = nnz_wss[idx];
+    int w  = packed / dd;
+    int ss = packed % dd;
+    int s1 = ss / d, s2 = ss % d;
+    A[idx] = base_A + w * strideA;
+    B[idx] = base_B + (s1 + s2 * d) * strideB;
+    C[idx] = base_C + packed * strideC;
+}
+
 // ============================================================================
 // Constructor
 // ============================================================================
@@ -154,6 +177,20 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
     d_W_left_.resize(L, nullptr);
     d_W_right_.resize(L, nullptr);
     d_WW_.resize(L - 1, nullptr);
+
+    // SPARSE_MPO nnz lists (populated in set_mpo / precompute_fused_mpo).
+    d_WL_nnz_rows_.resize(L, nullptr);
+    d_WL_nnz_cols_.resize(L, nullptr);
+    wl_nnz_rows_count_.assign(L, 0);
+    wl_nnz_cols_count_.assign(L, 0);
+    d_WW_nnz_rows_.resize(L - 1, nullptr);
+    d_WW_nnz_cols_.resize(L - 1, nullptr);
+    ww_nnz_rows_count_.assign(L - 1, 0);
+    ww_nnz_cols_count_.assign(L - 1, 0);
+    h_WL_nnz_rows_.resize(L);
+    h_WL_nnz_cols_.resize(L);
+    h_WW_nnz_rows_.resize(L - 1);
+    h_WW_nnz_cols_.resize(L - 1);
 
     // Environments
     d_L_envs_.resize(L + 1, nullptr);
@@ -341,6 +378,10 @@ void PDMRGGPUOpt<Scalar>::free_gpu_resources() {
     for (auto ptr : d_W_left_) if (ptr) hipFree(ptr);
     for (auto ptr : d_W_right_) if (ptr) hipFree(ptr);
     for (auto ptr : d_WW_) if (ptr) hipFree(ptr);
+    for (auto ptr : d_WL_nnz_rows_) if (ptr) hipFree(ptr);
+    for (auto ptr : d_WL_nnz_cols_) if (ptr) hipFree(ptr);
+    for (auto ptr : d_WW_nnz_rows_) if (ptr) hipFree(ptr);
+    for (auto ptr : d_WW_nnz_cols_) if (ptr) hipFree(ptr);
     for (auto ptr : d_L_envs_) if (ptr) hipFree(ptr);
     for (auto ptr : d_R_envs_) if (ptr) hipFree(ptr);
     for (auto& ws : workspaces_) {
@@ -552,6 +593,51 @@ void PDMRGGPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
         HIP_CHECK(hipMalloc(&d_W_right_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_right_[i], h_WR.data(),
                             size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+
+        // SPARSE_MPO: build nnz row/col index lists for W_left (single-site).
+        // Used by apply_heff_single_site.
+        if (opts_.sparse_mpo) {
+            int rows = D_use * d;
+            int cols = d * D_use;
+            std::vector<int> nnz_rows, nnz_cols;
+            nnz_rows.reserve(rows);
+            nnz_cols.reserve(cols);
+            const double eps = 1e-14;
+            for (int r = 0; r < rows; r++) {
+                bool nz = false;
+                for (int c = 0; c < cols && !nz; c++) {
+                    if (scalar_abs(h_WL[r + (size_t)c * rows]) > eps) nz = true;
+                }
+                if (nz) nnz_rows.push_back(r);
+            }
+            for (int c = 0; c < cols; c++) {
+                bool nz = false;
+                for (int r = 0; r < rows && !nz; r++) {
+                    if (scalar_abs(h_WL[r + (size_t)c * rows]) > eps) nz = true;
+                }
+                if (nz) nnz_cols.push_back(c);
+            }
+            wl_nnz_rows_count_[i] = (int)nnz_rows.size();
+            wl_nnz_cols_count_[i] = (int)nnz_cols.size();
+            if (!nnz_rows.empty()) {
+                HIP_CHECK(hipMalloc(&d_WL_nnz_rows_[i], nnz_rows.size() * sizeof(int)));
+                HIP_CHECK(hipMemcpy(d_WL_nnz_rows_[i], nnz_rows.data(),
+                                    nnz_rows.size() * sizeof(int), hipMemcpyHostToDevice));
+            }
+            if (!nnz_cols.empty()) {
+                HIP_CHECK(hipMalloc(&d_WL_nnz_cols_[i], nnz_cols.size() * sizeof(int)));
+                HIP_CHECK(hipMemcpy(d_WL_nnz_cols_[i], nnz_cols.data(),
+                                    nnz_cols.size() * sizeof(int), hipMemcpyHostToDevice));
+            }
+            if (i == 0) {
+                std::fprintf(stderr,
+                    "[SPARSE_MPO] site 0: W shape (%d x %d), nnz rows=%d, nnz cols=%d (%.0f%% sparse)\n",
+                    rows, cols, wl_nnz_rows_count_[i], wl_nnz_cols_count_[i],
+                    100.0 * (1.0 - (double)(wl_nnz_rows_count_[i] * wl_nnz_cols_count_[i]) / (rows * cols)));
+            }
+            h_WL_nnz_rows_[i] = std::move(nnz_rows);
+            h_WL_nnz_cols_[i] = std::move(nnz_cols);
+        }
     }
 
     precompute_fused_mpo(h_mpo_tensors);
@@ -598,6 +684,50 @@ void PDMRGGPUOpt<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo
         HIP_CHECK(hipMalloc(&d_WW_[bond], ww_size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_WW_[bond], h_WW.data(),
                             ww_size * sizeof(Scalar), hipMemcpyHostToDevice));
+
+        // SPARSE_MPO: build nnz row/col index lists for WW[bond] (two-site).
+        if (opts_.sparse_mpo) {
+            int rows = D_use * dd;
+            int cols = dd * D_use;
+            std::vector<int> nnz_rows, nnz_cols;
+            nnz_rows.reserve(rows);
+            nnz_cols.reserve(cols);
+            const double eps = 1e-14;
+            for (int r = 0; r < rows; r++) {
+                bool nz = false;
+                for (int c = 0; c < cols && !nz; c++) {
+                    if (scalar_abs(h_WW[r + (size_t)c * rows]) > eps) nz = true;
+                }
+                if (nz) nnz_rows.push_back(r);
+            }
+            for (int c = 0; c < cols; c++) {
+                bool nz = false;
+                for (int r = 0; r < rows && !nz; r++) {
+                    if (scalar_abs(h_WW[r + (size_t)c * rows]) > eps) nz = true;
+                }
+                if (nz) nnz_cols.push_back(c);
+            }
+            ww_nnz_rows_count_[bond] = (int)nnz_rows.size();
+            ww_nnz_cols_count_[bond] = (int)nnz_cols.size();
+            if (!nnz_rows.empty()) {
+                HIP_CHECK(hipMalloc(&d_WW_nnz_rows_[bond], nnz_rows.size() * sizeof(int)));
+                HIP_CHECK(hipMemcpy(d_WW_nnz_rows_[bond], nnz_rows.data(),
+                                    nnz_rows.size() * sizeof(int), hipMemcpyHostToDevice));
+            }
+            if (!nnz_cols.empty()) {
+                HIP_CHECK(hipMalloc(&d_WW_nnz_cols_[bond], nnz_cols.size() * sizeof(int)));
+                HIP_CHECK(hipMemcpy(d_WW_nnz_cols_[bond], nnz_cols.data(),
+                                    nnz_cols.size() * sizeof(int), hipMemcpyHostToDevice));
+            }
+            if (bond == 0) {
+                std::fprintf(stderr,
+                    "[SPARSE_MPO] bond 0: WW shape (%d x %d), nnz rows=%d, nnz cols=%d (%.0f%% sparse)\n",
+                    rows, cols, ww_nnz_rows_count_[bond], ww_nnz_cols_count_[bond],
+                    100.0 * (1.0 - (double)(ww_nnz_rows_count_[bond] * ww_nnz_cols_count_[bond]) / (rows * cols)));
+            }
+            h_WW_nnz_rows_[bond] = std::move(nnz_rows);
+            h_WW_nnz_cols_[bond] = std::move(nnz_cols);
+        }
     }
 }
 
@@ -666,8 +796,41 @@ void PDMRGGPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
     Scalar* T1 = ws.d_T1;
     Scalar* T2 = ws.d_T2;
 
+    // SPARSE_MPO: compact Step 1 / Step 3 batches to non-zero (w,s1,s2) /
+    // (n,s1p,s2p) rows/cols of WW[site]. Step 2 reads T1 densely, so skipped
+    // slots must be zero (hipMemsetAsync). Step 3 accumulates into d_result
+    // via beta; for sparse we zero d_result first then use beta=1 for all
+    // nnz contributions.
+    const bool sparse_s1 = opts_.sparse_mpo
+                         && ww_nnz_rows_count_[site] > 0
+                         && ww_nnz_rows_count_[site] < D * dd;
+    const bool sparse_s3 = opts_.sparse_mpo
+                         && ww_nnz_cols_count_[site] > 0
+                         && ww_nnz_cols_count_[site] < D * dd;
+
     // Step 1: Batched GEMM — L_env^T × theta
-    {
+    if (sparse_s1) {
+        HIP_CHECK(hipMemsetAsync(T1, 0, (size_t)D * dd * cL * cR * sizeof(Scalar), streams_[si]));
+        int nnz = ww_nnz_rows_count_[site];
+        hipLaunchKernelGGL(setup_batch_ptrs_wd_twosite_sparse<Scalar>,
+                           dim3(1), dim3(nnz), 0, streams_[si],
+                           ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
+                           L_env, const_cast<Scalar*>(theta_src), T1,
+                           d_WW_nnz_rows_[site], d, dd, cL, cL, cL * cR);
+        ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
+            Traits::op_t, rocblas_operation_none,
+            cL, cR, cL,
+            &one,
+            (const Scalar**)ws.d_batch_A, cL * D,
+            (const Scalar**)ws.d_batch_B, cL * dd,
+            &zero_val,
+            ws.d_batch_C, cL,
+            nnz));
+        // Invalidate the dense A/C pointer cache so a subsequent dense call
+        // (e.g. if sparse_mpo were later toggled, or during graph-capture
+        // fallback) repopulates it.
+        ws.heff_cached_site = -1;
+    } else {
         int batch_count = D * dd;
 
         if (ws.heff_cached_site != site) {
@@ -703,8 +866,27 @@ void PDMRGGPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
         T2, cL * cR));
 
     // Step 3: Loop of GEMMs — T2 × R_env
-    // Strided batched over s1p when d<=2 and chi>=16 (avoids cache contention at batch_count>2)
-    if (cL >= 16 && cR >= 16 && d <= 2) {
+    if (sparse_s3) {
+        HIP_CHECK(hipMemsetAsync(d_result, 0, (size_t)cL * dd * cR * sizeof(Scalar), streams_[si]));
+        const std::vector<int>& h_nnz = h_WW_nnz_cols_[site];
+        Scalar beta_one = Traits::one();
+        for (int idx = 0; idx < (int)h_nnz.size(); idx++) {
+            int packed = h_nnz[idx];
+            int n  = packed / dd;
+            int ss = packed % dd;
+            int s1p = ss / d, s2p = ss % d;
+            int ws_out = n * dd + s1p * d + s2p;
+            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                rocblas_operation_none, rocblas_operation_none,
+                cL, cR, cR,
+                &one,
+                T2 + (size_t)ws_out * cL * cR, cL,
+                R_env + (size_t)n * cR, cR * D,
+                &beta_one,
+                d_result + s1p * cL + (size_t)s2p * cL * d, cL * dd));
+        }
+    } else if (cL >= 16 && cR >= 16 && d <= 2) {
+        // Strided batched over s1p when d<=2 and chi>=16 (avoids cache contention at batch_count>2)
         for (int s2p = 0; s2p < d; s2p++) {
             for (int n = 0; n < D; n++) {
                 Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
@@ -2082,8 +2264,47 @@ void PDMRGGPUOpt<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta
     Scalar* V = ws.d_T1;
     Scalar* U = ws.d_T2;
 
+    // SPARSE_MPO: compact Step 1 / Step 3 batches to non-zero (w,s)/(wp,sp)
+    // rows/cols of W_left. Step 1 writes into the full V layout (Step 2 reads
+    // V densely) so skipped slots must be zero (hipMemsetAsync). Step 3
+    // accumulates into d_result; for sparse mode we zero d_result first then
+    // use beta=1 for all nnz contributions.
+    const bool sparse_s1 = opts_.sparse_mpo
+                         && wl_nnz_rows_count_[site] > 0
+                         && wl_nnz_rows_count_[site] < D * d;
+    const bool sparse_s3 = opts_.sparse_mpo
+                         && wl_nnz_cols_count_[site] > 0
+                         && wl_nnz_cols_count_[site] < D * d;
+
     // Step 1: V_ws[a',b] = L_w^T[a',a] * theta_s[a,b]  (D*d batched GEMMs)
-    {
+    if (sparse_s1) {
+        HIP_CHECK(hipMemsetAsync(V, 0, (size_t)D * d * cL * cR * sizeof(Scalar), streams_[si]));
+        const std::vector<int>& h_nnz = h_WL_nnz_rows_[site];
+        int nnz = (int)h_nnz.size();
+        Scalar* h_A[256], *h_B[256], *h_C[256];
+        for (int idx = 0; idx < nnz; idx++) {
+            int ws_idx = h_nnz[idx];
+            int w = ws_idx / d, s = ws_idx % d;
+            h_A[idx] = L_env + w * cL;
+            h_B[idx] = const_cast<Scalar*>(theta_src) + s * cL;
+            h_C[idx] = V + ws_idx * cL * cR;
+        }
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, h_A, nnz * sizeof(Scalar*),
+                                  hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, h_B, nnz * sizeof(Scalar*),
+                                  hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, h_C, nnz * sizeof(Scalar*),
+                                  hipMemcpyHostToDevice, streams_[si]));
+        ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
+            Traits::op_t, rocblas_operation_none,
+            cL, cR, cL,
+            &one,
+            (const Scalar**)ws.d_batch_A, cL * D,
+            (const Scalar**)ws.d_batch_B, cL * d,
+            &zero_val,
+            ws.d_batch_C, cL,
+            nnz));
+    } else {
         int batch_count = D * d;
         Scalar* h_A[256], *h_B[256], *h_C[256];
         for (int w = 0; w < D; w++)
@@ -2122,7 +2343,24 @@ void PDMRGGPUOpt<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta
 
     // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
     // Strided batched over sp when d<=2 and chi>=16 (eliminates host pointer DMA)
-    if (cL >= 16 && cR >= 16 && d <= 2) {
+    if (sparse_s3) {
+        HIP_CHECK(hipMemsetAsync(d_result, 0, (size_t)cL * d * cR * sizeof(Scalar), streams_[si]));
+        const std::vector<int>& h_nnz = h_WL_nnz_cols_[site];
+        Scalar beta_one = Traits::one();
+        for (int idx = 0; idx < (int)h_nnz.size(); idx++) {
+            int c = h_nnz[idx];
+            int wp = c / d, sp = c % d;
+            int ws_out = wp * d + sp;
+            ROCBLAS_CHECK(Traits::gemm(handles_[si],
+                rocblas_operation_none, rocblas_operation_none,
+                cL, cR, cR,
+                &one,
+                U + (size_t)ws_out * cL * cR, cL,
+                R_env + wp * cR, cR * D,
+                &beta_one,
+                d_result + sp * cL, cL * d));
+        }
+    } else if (cL >= 16 && cR >= 16 && d <= 2) {
         for (int wp = 0; wp < D; wp++) {
             Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
             ROCBLAS_CHECK(Traits::gemm_strided_batched(handles_[si],

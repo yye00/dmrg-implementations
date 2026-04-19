@@ -99,6 +99,26 @@ private:
     std::vector<Scalar*> d_W_left_;
     std::vector<Scalar*> d_W_right_;
     std::vector<Scalar*> d_WW_;
+
+    // SPARSE_MPO: per-site nnz row/col lists. Class-level (shared across
+    // segments) because they depend only on W / WW for that site.
+    // Single-site (W_left): used by apply_heff_single_site.
+    std::vector<int*> d_WL_nnz_rows_;
+    std::vector<int*> d_WL_nnz_cols_;
+    std::vector<int>  wl_nnz_rows_count_;
+    std::vector<int>  wl_nnz_cols_count_;
+    // Two-site (WW): used by apply_heff_two_site.
+    std::vector<int*> d_WW_nnz_rows_;
+    std::vector<int*> d_WW_nnz_cols_;
+    std::vector<int>  ww_nnz_rows_count_;
+    std::vector<int>  ww_nnz_cols_count_;
+    // Host-side nnz lists (for host-side pointer setup paths: single-site
+    // Step 1/3 and two-site Step 3 beta-accumulation loop).
+    std::vector<std::vector<int>> h_WL_nnz_rows_;
+    std::vector<std::vector<int>> h_WL_nnz_cols_;
+    std::vector<std::vector<int>> h_WW_nnz_rows_;
+    std::vector<std::vector<int>> h_WW_nnz_cols_;
+
     std::vector<int> L_env_alloc_chi_;
     std::vector<int> R_env_alloc_chi_;
 

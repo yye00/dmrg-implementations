@@ -129,6 +129,14 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     // Fused two-site MPO (allocated in set_mpo)
     d_WW_.resize(L - 1, nullptr);
 
+    // SPARSE_MPO nnz lists (populated in precompute_fused_mpo)
+    d_WW_nnz_rows_.resize(L - 1, nullptr);
+    d_WW_nnz_cols_.resize(L - 1, nullptr);
+    ww_nnz_rows_count_.assign(L - 1, 0);
+    ww_nnz_cols_count_.assign(L - 1, 0);
+    h_WW_nnz_rows_.resize(L - 1);
+    h_WW_nnz_cols_.resize(L - 1);
+
     // Environments
     d_L_envs_.resize(L + 1, nullptr);
     d_R_envs_.resize(L + 1, nullptr);
@@ -236,6 +244,9 @@ void DMRG2GPUOpt<Scalar>::free_gpu_resources() {
     for (auto ptr : d_W_left_) if (ptr) hipFree(ptr);
     for (auto ptr : d_W_right_) if (ptr) hipFree(ptr);
     for (auto ptr : d_WW_) if (ptr) hipFree(ptr);
+    // SPARSE_MPO nnz lists
+    for (auto ptr : d_WW_nnz_rows_) if (ptr) hipFree(ptr);
+    for (auto ptr : d_WW_nnz_cols_) if (ptr) hipFree(ptr);
     for (auto ptr : d_L_envs_) if (ptr) hipFree(ptr);
     for (auto ptr : d_R_envs_) if (ptr) hipFree(ptr);
 
@@ -449,6 +460,52 @@ void DMRG2GPUOpt<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo
         HIP_CHECK(hipMalloc(&d_WW_[bond], ww_size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_WW_[bond], h_WW.data(),
                             ww_size * sizeof(Scalar), hipMemcpyHostToDevice));
+
+        // SPARSE_MPO: build nnz row/col index lists for WW[bond].
+        // WW is (D_use*dd, dd*D_use) column-major. Row r = w*dd + s1*d + s2
+        // nonzero if any col has |val| > 0; col c = n*dd + s1p*d + s2p analogously.
+        if (opts_.sparse_mpo) {
+            int rows = D_use * dd;
+            int cols = dd * D_use;
+            std::vector<int> nnz_rows, nnz_cols;
+            nnz_rows.reserve(rows);
+            nnz_cols.reserve(cols);
+            const double eps = 1e-14;
+            for (int r = 0; r < rows; r++) {
+                bool nz = false;
+                for (int c = 0; c < cols && !nz; c++) {
+                    if (scalar_abs(h_WW[r + (size_t)c * rows]) > eps) nz = true;
+                }
+                if (nz) nnz_rows.push_back(r);
+            }
+            for (int c = 0; c < cols; c++) {
+                bool nz = false;
+                for (int r = 0; r < rows && !nz; r++) {
+                    if (scalar_abs(h_WW[r + (size_t)c * rows]) > eps) nz = true;
+                }
+                if (nz) nnz_cols.push_back(c);
+            }
+            ww_nnz_rows_count_[bond] = (int)nnz_rows.size();
+            ww_nnz_cols_count_[bond] = (int)nnz_cols.size();
+            if (!nnz_rows.empty()) {
+                HIP_CHECK(hipMalloc(&d_WW_nnz_rows_[bond], nnz_rows.size() * sizeof(int)));
+                HIP_CHECK(hipMemcpy(d_WW_nnz_rows_[bond], nnz_rows.data(),
+                                    nnz_rows.size() * sizeof(int), hipMemcpyHostToDevice));
+            }
+            if (!nnz_cols.empty()) {
+                HIP_CHECK(hipMalloc(&d_WW_nnz_cols_[bond], nnz_cols.size() * sizeof(int)));
+                HIP_CHECK(hipMemcpy(d_WW_nnz_cols_[bond], nnz_cols.data(),
+                                    nnz_cols.size() * sizeof(int), hipMemcpyHostToDevice));
+            }
+            if (bond == 0) {
+                std::fprintf(stderr,
+                    "[SPARSE_MPO] bond 0: WW shape (%d x %d), nnz rows=%d, nnz cols=%d (%.0f%% sparse)\n",
+                    rows, cols, ww_nnz_rows_count_[bond], ww_nnz_cols_count_[bond],
+                    100.0 * (1.0 - (double)(ww_nnz_rows_count_[bond] * ww_nnz_cols_count_[bond]) / (rows * cols)));
+            }
+            h_WW_nnz_rows_[bond] = std::move(nnz_rows);
+            h_WW_nnz_cols_[bond] = std::move(nnz_cols);
+        }
     }
 }
 
@@ -514,30 +571,69 @@ void DMRG2GPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
     Scalar* T1 = d_T1_;
     Scalar* T2 = d_T2_;
 
+    // SPARSE_MPO: compact Step 1 / Step 3 batches to non-zero (w,s1,s2) /
+    // (n,s1p,s2p) rows/cols of WW[site]. Step 2 reads T1 densely, so skipped
+    // slots must be zero (hipMemsetAsync before Step 1). Step 3 accumulates
+    // into d_result; for sparse mode we zero d_result first then use beta=1.
+    const bool sparse_s1 = opts_.sparse_mpo
+                         && ww_nnz_rows_count_[site] > 0
+                         && ww_nnz_rows_count_[site] < D * dd;
+    const bool sparse_s3 = opts_.sparse_mpo
+                         && ww_nnz_cols_count_[site] > 0
+                         && ww_nnz_cols_count_[site] < D * dd;
+
     // Step 1: Batched GEMM — contract L_env with theta
     {
-        int batch_count = D * dd;
-        std::vector<Scalar*> h_A(batch_count), h_B(batch_count), h_C(batch_count);
-        for (int w = 0; w < D; w++)
-            for (int s1 = 0; s1 < d; s1++)
-                for (int s2 = 0; s2 < d; s2++) {
-                    int ws = w * dd + s1 * d + s2;
-                    h_A[ws] = L_env + w * cL;
-                    h_B[ws] = const_cast<Scalar*>(theta_src) + s1 * cL + s2 * cL * d;
-                    h_C[ws] = T1 + ws * cL * cR;
-                }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
-            Traits::op_t, rocblas_operation_none,
-            cL, cR, cL,
-            &one,
-            (const Scalar**)d_batch_A_, cL * D,
-            (const Scalar**)d_batch_B_, cL * dd,
-            &zero_val,
-            d_batch_C_, cL,
-            batch_count));
+        if (sparse_s1) {
+            HIP_CHECK(hipMemsetAsync(T1, 0, (size_t)D * dd * cL * cR * sizeof(Scalar), stream_));
+            int nnz = ww_nnz_rows_count_[site];
+            const std::vector<int>& h_nnz = h_WW_nnz_rows_[site];
+            std::vector<Scalar*> h_A(nnz), h_B(nnz), h_C(nnz);
+            for (int idx = 0; idx < nnz; idx++) {
+                int packed = h_nnz[idx];
+                int w = packed / dd;
+                int ss = packed % dd;
+                int s1 = ss / d, s2 = ss % d;
+                h_A[idx] = L_env + w * cL;
+                h_B[idx] = const_cast<Scalar*>(theta_src) + s1 * cL + s2 * cL * d;
+                h_C[idx] = T1 + packed * cL * cR;
+            }
+            HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), nnz*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), nnz*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), nnz*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+                Traits::op_t, rocblas_operation_none,
+                cL, cR, cL,
+                &one,
+                (const Scalar**)d_batch_A_, cL * D,
+                (const Scalar**)d_batch_B_, cL * dd,
+                &zero_val,
+                d_batch_C_, cL,
+                nnz));
+        } else {
+            int batch_count = D * dd;
+            std::vector<Scalar*> h_A(batch_count), h_B(batch_count), h_C(batch_count);
+            for (int w = 0; w < D; w++)
+                for (int s1 = 0; s1 < d; s1++)
+                    for (int s2 = 0; s2 < d; s2++) {
+                        int ws = w * dd + s1 * d + s2;
+                        h_A[ws] = L_env + w * cL;
+                        h_B[ws] = const_cast<Scalar*>(theta_src) + s1 * cL + s2 * cL * d;
+                        h_C[ws] = T1 + ws * cL * cR;
+                    }
+            HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), batch_count*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
+            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+                Traits::op_t, rocblas_operation_none,
+                cL, cR, cL,
+                &one,
+                (const Scalar**)d_batch_A_, cL * D,
+                (const Scalar**)d_batch_B_, cL * dd,
+                &zero_val,
+                d_batch_C_, cL,
+                batch_count));
+        }
     }
 
     // Step 2: Dense GEMM — absorb fused WW
@@ -551,8 +647,28 @@ void DMRG2GPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
         T2, cL * cR));
 
     // Step 3: Loop of GEMMs — contract R_env
-    // Strided batched over s1p when d<=2 and chi>=16 (avoids cache contention at batch_count>2)
-    if (cL >= 16 && cR >= 16 && d <= 2) {
+    if (sparse_s3) {
+        HIP_CHECK(hipMemsetAsync(d_result, 0, (size_t)cL * dd * cR * sizeof(Scalar), stream_));
+        int nnz = ww_nnz_cols_count_[site];
+        const std::vector<int>& h_nnz = h_WW_nnz_cols_[site];
+        Scalar beta_one = Traits::one();
+        for (int idx = 0; idx < nnz; idx++) {
+            int packed = h_nnz[idx];
+            int n  = packed / dd;
+            int ss = packed % dd;
+            int s1p = ss / d, s2p = ss % d;
+            int ws_out = n * dd + s1p * d + s2p;
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+                rocblas_operation_none, rocblas_operation_none,
+                cL, cR, cR,
+                &one,
+                T2 + ws_out * cL * cR, cL,
+                R_env + n * cR, cR * D,
+                &beta_one,
+                d_result + s1p * cL + s2p * cL * d, cL * dd));
+        }
+    } else if (cL >= 16 && cR >= 16 && d <= 2) {
+        // Strided batched over s1p when d<=2 and chi>=16 (avoids cache contention at batch_count>2)
         for (int s2p = 0; s2p < d; s2p++) {
             for (int n = 0; n < D; n++) {
                 Scalar beta = (n == 0) ? Traits::zero() : Traits::one();

@@ -78,6 +78,15 @@ private:
     // Fused two-site MPO: WW[bond] is (D*d*d, d*d*D) for bond (site, site+1)
     std::vector<Scalar*> d_WW_;
 
+    // SPARSE_MPO: per-bond nnz row/col lists for WW (two-site fused MPO)
+    std::vector<int*> d_WW_nnz_rows_;
+    std::vector<int*> d_WW_nnz_cols_;
+    std::vector<int>  ww_nnz_rows_count_;
+    std::vector<int>  ww_nnz_cols_count_;
+    // Host-side nnz lists (needed for host-pointer setup path)
+    std::vector<std::vector<int>> h_WW_nnz_rows_;
+    std::vector<std::vector<int>> h_WW_nnz_cols_;
+
     std::vector<int> L_env_alloc_chi_;
     std::vector<int> R_env_alloc_chi_;
 
