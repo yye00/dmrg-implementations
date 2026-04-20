@@ -30,15 +30,18 @@ find_package(rocblas REQUIRED)
 find_package(rocsolver REQUIRED)
 
 # Find LAPACK/BLAS
+# Detect full path to libgfortran (ld.lld does not search gcc default paths).
+execute_process(COMMAND gfortran -print-file-name=libgfortran.so OUTPUT_VARIABLE GFORTRAN_LIB OUTPUT_STRIP_TRAILING_WHITESPACE)
+
 # Prefer local OpenBLAS 0.3.28+ (system OpenBLAS 0.3.20 has broken dgesvd for tall-skinny matrices)
 set(OPENBLAS_PATH "$ENV{HOME}/openblas-0.3.28" CACHE PATH "Path to local OpenBLAS installation")
 if(EXISTS "/usr/local/openblas/lib/libopenblas.so")
     message(STATUS "Using system-local OpenBLAS: /usr/local/openblas")
-    set(LAPACK_LIBRARIES "/usr/local/openblas/lib/libopenblas.so" pthread gfortran gomp)
+    set(LAPACK_LIBRARIES "/usr/local/openblas/lib/libopenblas.so" pthread ${GFORTRAN_LIB} gomp)
     include_directories(/usr/local/openblas/include)
 elseif(EXISTS "${OPENBLAS_PATH}/lib/libopenblas.a")
     message(STATUS "Using local OpenBLAS: ${OPENBLAS_PATH}")
-    set(LAPACK_LIBRARIES "${OPENBLAS_PATH}/lib/libopenblas.a" pthread gfortran gomp)
+    set(LAPACK_LIBRARIES "${OPENBLAS_PATH}/lib/libopenblas.a" pthread ${GFORTRAN_LIB} gomp)
     include_directories(${OPENBLAS_PATH}/include)
 else()
     message(WARNING "Local OpenBLAS not found, falling back to system LAPACK (may have SVD bugs)")
