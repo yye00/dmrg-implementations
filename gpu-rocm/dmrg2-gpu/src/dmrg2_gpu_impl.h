@@ -636,7 +636,8 @@ void DMRG2GPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
 
 template<typename Scalar>
 void DMRG2GPU<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
-    int D = D_mpo_, d = d_;
+    int D = D_mpo_, d = d_;        // padded (output layout)
+    int D_act = D_mpo_actual_;     // actual (host MPO stride)
     int dd = d * d;
 
     for (int bond = 0; bond < L_ - 1; bond++) {
@@ -648,18 +649,18 @@ void DMRG2GPU<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo_te
         const Scalar* WL = h_mpo_tensors[bond];
         const Scalar* WR = h_mpo_tensors[bond + 1];
 
-        for (int w = 0; w < D; w++)
-            for (int n = 0; n < D; n++)
+        for (int w = 0; w < D_act; w++)
+            for (int n = 0; n < D_act; n++)
                 for (int s1 = 0; s1 < d; s1++)
                     for (int s2 = 0; s2 < d; s2++)
                         for (int s1p = 0; s1p < d; s1p++)
                             for (int s2p = 0; s2p < d; s2p++) {
                                 Scalar val = Traits::zero();
-                                for (int m = 0; m < D; m++) {
-                                    // W_L[w, s1, s1p, m] at w + s1*D + s1p*D*d + m*D*d*d
-                                    Scalar wl = WL[w + s1*D + s1p*D*d + m*D*d*d];
-                                    // W_R[m, s2, s2p, n] at m + s2*D + s2p*D*d + n*D*d*d
-                                    Scalar wr = WR[m + s2*D + s2p*D*d + n*D*d*d];
+                                for (int m = 0; m < D_act; m++) {
+                                    // W_L[w, s1, s1p, m] at w + s1*D_act + s1p*D_act*d + m*D_act*d*d
+                                    Scalar wl = WL[w + s1*D_act + s1p*D_act*d + m*D_act*d*d];
+                                    // W_R[m, s2, s2p, n] at m + s2*D_act + s2p*D_act*d + n*D_act*d*d
+                                    Scalar wr = WR[m + s2*D_act + s2p*D_act*d + n*D_act*d*d];
                                     if constexpr (Traits::is_complex) {
                                         val = hipCadd(val, hipCmul(wl, wr));
                                     } else {
@@ -668,7 +669,7 @@ void DMRG2GPU<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo_te
                                 }
                                 int row = w * dd + s1 * d + s2;
                                 int col = n * dd + s1p * d + s2p;
-                                h_WW[row + col * D * dd] = val;  // column-major
+                                h_WW[row + col * D * dd] = val;  // column-major, padded pitch
                             }
 
         HIP_CHECK(hipMalloc(&d_WW_[bond], ww_size * sizeof(Scalar)));
