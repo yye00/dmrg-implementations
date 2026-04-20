@@ -69,11 +69,14 @@ target_compile_options(pdmrg_gpu PRIVATE
     -O3
 )
 
+find_package(OpenMP REQUIRED)
+
 target_link_libraries(pdmrg_gpu
     hip::device
     roc::rocblas
     roc::rocsolver
     ${LAPACK_LIBRARIES}
+    OpenMP::OpenMP_CXX
 )
 
 # ==========================================

@@ -166,6 +166,31 @@ static __global__ void promote_double_to_complex(const double* src, hipDoubleCom
     if (i < n) dst[i] = make_hipDoubleComplex(src[i], 0.0);
 }
 
+// Fused Lanczos update:  w := w + (-α)*v_i + [(-β_{im1})*v_{im1}]
+template<typename Scalar>
+__global__ void lanczos_fused_sub_kernel(
+    Scalar* w, const Scalar* v_i, const Scalar* v_im1,
+    const Scalar* d_neg_alpha, const Scalar* d_neg_beta_im1,
+    int n, int has_prev) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+    Scalar wi = w[idx];
+    wi = scalar_add(wi, scalar_mul(*d_neg_alpha, v_i[idx]));
+    if (has_prev) {
+        wi = scalar_add(wi, scalar_mul(*d_neg_beta_im1, v_im1[idx]));
+    }
+    w[idx] = wi;
+}
+
+// Fused normalize-and-copy:  v_{i+1}[k] = w[k] * inv_beta
+template<typename Scalar, typename RealType>
+__global__ void lanczos_fused_norm_copy_kernel(
+    Scalar* v_next, const Scalar* w, const RealType* d_inv_beta, int n) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= n) return;
+    v_next[idx] = ScalarTraits<Scalar>::scale_by_real(*d_inv_beta, w[idx]);
+}
+
 // ============================================================================
 // Constructor
 // ============================================================================
