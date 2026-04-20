@@ -68,7 +68,7 @@ BENCH_CONFIGS = [
 ]
 
 CORRECTNESS_CONFIG = {"L": 8, "chi": 32, "sweeps": 10, "nmax": 2}
-ENERGY_TOL = 1e-10
+ENERGY_TOL = 5e-10  # 5e-10 accommodates RSVD stochasticity (~4e-11 std across reps)
 
 
 def build_argv(binary: str, cfg: dict) -> list:
