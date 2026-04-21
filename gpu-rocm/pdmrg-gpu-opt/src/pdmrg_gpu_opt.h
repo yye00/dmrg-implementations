@@ -7,6 +7,7 @@
 #include <string>
 #include <unordered_map>
 #include <cstdint>
+#include <cstdio>
 #include "scalar_traits.h"
 #include "../../common/gpu_opts.h"
 
@@ -44,7 +45,20 @@ public:
     double get_energy() const { return energy_; }
     void get_mps(std::vector<std::vector<Scalar>>& h_mps) const;
     void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
-    void set_use_davidson(bool use_dav) { use_davidson_ = use_dav; }
+    void set_use_davidson(bool use_dav) {
+        use_davidson_ = use_dav;
+        // LANCZOS_GRAPH + Block-Davidson is incompatible: apply_heff_two_site
+        // is called with AV + j*dim (variable output pointer per subspace
+        // column); graph capture locks in the first-seen address and replays
+        // write to the stale pointer, hanging Rayleigh-Ritz. Force the flag
+        // off here so Lanczos mode can keep using graph capture unaffected.
+        if (use_davidson_ && opts_.lanczos_graph) {
+            std::fprintf(stderr,
+                "[pdmrg-gpu-opt] LANCZOS_GRAPH=1 incompatible with --davidson; "
+                "disabling graph capture.\n");
+            opts_.lanczos_graph = false;
+        }
+    }
     void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
     void set_use_batched_sweep(bool b) { use_batched_sweep_ = b; }
     void set_use_chebyshev(bool b) { use_chebyshev_ = b; }

@@ -96,20 +96,6 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
 
     opts_.load_from_env();
 
-    // LANCZOS_GRAPH safeguard: this variant uses Block-Davidson, which calls
-    // apply_heff_two_site(site, V + j*dim, AV + j*dim) with a variable output
-    // pointer per subspace column. HIP graph capture burns the first-seen
-    // output address into the graph; replays then write to the stale address
-    // instead of AV + j*dim, Rayleigh-Ritz sees garbage, and the outer loop
-    // hangs indefinitely. Force the flag off with a one-line warning; use
-    // dmrg-gpu (Lanczos) or pdmrg-gpu for graph-captured apply_heff.
-    if (opts_.lanczos_graph) {
-        std::fprintf(stderr,
-            "[pdmrg-gpu-opt] LANCZOS_GRAPH=1 is incompatible with Block-Davidson "
-            "(variable output pointer per subspace column). Disabling.\n");
-        opts_.lanczos_graph = false;
-    }
-
     // D_PAD: round MPO bond dim up to a multiple of 8 for MFMA-friendly
     // GEMM shapes. All allocations and internal GEMMs use the padded D;
     // the padded rows/cols of the W matrices are zero-filled in set_mpo
