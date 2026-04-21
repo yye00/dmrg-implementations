@@ -71,6 +71,22 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
 
     opts_.load_from_env();
 
+    // LANCZOS_GRAPH safeguard: dmrg-gpu-opt uses Block-Davidson as its
+    // eigensolver, not Lanczos. Block-Davidson calls apply_heff(site, V+j*dim,
+    // AV+j*dim) with a variable output pointer per subspace column. HIP graph
+    // capture burns the first-seen output address into the graph; replaying
+    // writes to the stale address instead of AV+j*dim, Rayleigh-Ritz reads
+    // garbage, the outer loop never converges, and the process hangs. Force
+    // the flag off here; users that want captured apply_heff should use
+    // dmrg-gpu (Lanczos, reuses one Hv buffer) or pdmrg-gpu (fixed bounce
+    // buffer pattern). Print once so benchmark drivers can log the override.
+    if (opts_.lanczos_graph) {
+        std::fprintf(stderr,
+            "[dmrg-gpu-opt] LANCZOS_GRAPH=1 is incompatible with Block-Davidson "
+            "(variable output pointer per subspace column). Disabling.\n");
+        opts_.lanczos_graph = false;
+    }
+
     // D_PAD: round MPO bond dim up to a multiple of 8 for MFMA-friendly
     // GEMM shapes. All allocations and internal GEMMs use the padded D;
     // the padded rows/cols of the W matrices are zero-filled in set_mpo
