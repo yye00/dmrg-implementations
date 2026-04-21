@@ -1,0 +1,1263 @@
+{
+  "timestamp": "2026-04-21T04:24:35.781885",
+  "binary": "/home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/build/dmrg_gpu_opt",
+  "binary_info": {
+    "path": "/home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/build/dmrg_gpu_opt",
+    "exists": true,
+    "size": 21388536,
+    "mtime": "2026-04-20T16:23:37.330736+00:00",
+    "sha256": "98e1ab093905ef74bd2535021cac4090646baf459f8518fee91ad47af6f65ec5"
+  },
+  "provenance": {
+    "generated_utc": "2026-04-21T04:24:35.801193+00:00",
+    "git": {
+      "commit": "c26f0bd39b573f4960c5f360daf8beca8a69d57b",
+      "commit_short": "c26f0bd39b57",
+      "branch": "main",
+      "dirty": true,
+      "dirty_files": [
+        "benchmarks/data/gpu_ablation/20260420T181425Z/dmrg2-gpu/",
+        "benchmarks/data/gpu_ablation/20260420T181425Z/pdmrg-gpu/"
+      ],
+      "last_commit_msg": "bench(ablate): back up completed dmrg-gpu ablation results",
+      "last_commit_iso": "2026-04-20T16:36:15-04:00",
+      "ahead_of_upstream": 0,
+      "behind_upstream": 0
+    },
+    "host": {
+      "hostname": "enc1-gpuvm002",
+      "fqdn": "enc1-gpuvm002",
+      "platform": "Linux-5.15.0-170-generic-x86_64-with-glibc2.35",
+      "python": "3.10.12",
+      "cpu": "x86_64"
+    },
+    "gpu": {
+      "vendor": "unknown"
+    },
+    "env": {},
+    "script": {
+      "path": "/home/hotaisle/dmrg-implementations/benchmarks/bench_dmrg_gpu_ablate.py",
+      "argv": [
+        "--impl",
+        "dmrg-gpu-opt",
+        "dmrg2-gpu-opt",
+        "pdmrg-gpu-opt",
+        "--reps",
+        "3"
+      ],
+      "cwd": "/home/hotaisle/dmrg-implementations"
+    }
+  },
+  "problems": [
+    {
+      "label": "josephson_L32_chi128",
+      "L": 32,
+      "chi": 128,
+      "sweeps": 20,
+      "nmax": 2
+    },
+    {
+      "label": "josephson_L32_chi256",
+      "L": 32,
+      "chi": 256,
+      "sweeps": 15,
+      "nmax": 2
+    }
+  ],
+  "opt_flags": [
+    "DEVICE_K",
+    "LANCZOS_FIXED",
+    "LANCZOS_GRAPH",
+    "RSVD",
+    "SPARSE_MPO",
+    "FUSE_LANCZOS",
+    "D_PAD"
+  ],
+  "reps": 3,
+  "results": [
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "baseline",
+      "flags": [],
+      "reps": [
+        {
+          "energy": -12.840606884663,
+          "wall_s": 218.709,
+          "wall_wallclock_s": 219.0237214565277,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884661,
+          "wall_s": 209.959,
+          "wall_wallclock_s": 210.26796889305115,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884663,
+          "wall_s": 220.667,
+          "wall_wallclock_s": 220.97595500946045,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 218.709
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_DEVICE_K",
+      "flags": [
+        "DEVICE_K"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884662,
+          "wall_s": 220.125,
+          "wall_wallclock_s": 220.43163228034973,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884663,
+          "wall_s": 229.878,
+          "wall_wallclock_s": 230.2038767337799,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884662,
+          "wall_s": 220.373,
+          "wall_wallclock_s": 220.69181442260742,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 220.373
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_LANCZOS_FIXED",
+      "flags": [
+        "LANCZOS_FIXED"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884661,
+          "wall_s": 218.737,
+          "wall_wallclock_s": 219.05600452423096,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884662,
+          "wall_s": 229.139,
+          "wall_wallclock_s": 229.45571994781494,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884662,
+          "wall_s": 220.852,
+          "wall_wallclock_s": 221.16786289215088,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 220.852
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_LANCZOS_GRAPH",
+      "flags": [
+        "LANCZOS_GRAPH"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 0.7898619174957275,
+          "wall_wallclock_s": 0.7898619174957275,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : off\n  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n:0:rocdevice.cpp            :3586: 33312363168 us:  Callback: Queue 0x7f99b1c00000 aborting with error : HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION: The agent attempted to access memory beyond the largest legal address. code: 0x29\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.7652111053466797,
+          "wall_wallclock_s": 0.7652111053466797,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : off\n  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n:0:rocdevice.cpp            :3586: 33313123451 us:  Callback: Queue 0x7fa39c800000 aborting with error : HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION: The agent attempted to access memory beyond the largest legal address. code: 0x29\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.7902593612670898,
+          "wall_wallclock_s": 0.7902593612670898,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : off\n  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n:0:rocdevice.cpp            :3586: 33313919613 us:  Callback: Queue 0x7fb92f000000 aborting with error : HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION: The agent attempted to access memory beyond the largest legal address. code: 0x29\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 0.7898619174957275
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_RSVD",
+      "flags": [
+        "RSVD"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884663,
+          "wall_s": 219.383,
+          "wall_wallclock_s": 219.6903111934662,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884661,
+          "wall_s": 228.154,
+          "wall_wallclock_s": 228.47177600860596,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884661,
+          "wall_s": 228.587,
+          "wall_wallclock_s": 228.89514207839966,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 228.154
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_SPARSE_MPO",
+      "flags": [
+        "SPARSE_MPO"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884663,
+          "wall_s": 218.959,
+          "wall_wallclock_s": 219.28452610969543,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)"
+        },
+        {
+          "energy": -12.840606884661,
+          "wall_s": 228.436,
+          "wall_wallclock_s": 228.7558524608612,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)"
+        },
+        {
+          "energy": -12.840606884661,
+          "wall_s": 219.631,
+          "wall_wallclock_s": 219.95196557044983,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)"
+        }
+      ],
+      "median_wall_s": 219.631
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_FUSE_LANCZOS",
+      "flags": [
+        "FUSE_LANCZOS"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884664,
+          "wall_s": 220.116,
+          "wall_wallclock_s": 220.43175196647644,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884661,
+          "wall_s": 219.906,
+          "wall_wallclock_s": 220.2232735157013,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884661,
+          "wall_s": 229.822,
+          "wall_wallclock_s": 230.1350018978119,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 220.116
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_D_PAD",
+      "flags": [
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884663,
+          "wall_s": 240.017,
+          "wall_wallclock_s": 240.3293948173523,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 4 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884662,
+          "wall_s": 228.926,
+          "wall_wallclock_s": 229.239848613739,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 4 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884662,
+          "wall_s": 228.832,
+          "wall_wallclock_s": 229.15583753585815,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 4 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 228.926
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_DEVICE_K",
+      "flags": [
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 0.7975447177886963,
+          "wall_wallclock_s": 0.7975447177886963,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.7962212562561035,
+          "wall_wallclock_s": 0.7962212562561035,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.8046267032623291,
+          "wall_wallclock_s": 0.8046267032623291,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 0.7975447177886963
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_LANCZOS_FIXED",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 0.794825553894043,
+          "wall_wallclock_s": 0.794825553894043,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : off\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.796036958694458,
+          "wall_wallclock_s": 0.796036958694458,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : off\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.8116588592529297,
+          "wall_wallclock_s": 0.8116588592529297,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : off\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 0.796036958694458
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_LANCZOS_GRAPH",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884662,
+          "wall_s": 229.891,
+          "wall_wallclock_s": 230.21025586128235,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)"
+        },
+        {
+          "energy": -12.840606884663,
+          "wall_s": 230.193,
+          "wall_wallclock_s": 230.50764656066895,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)"
+        },
+        {
+          "energy": -12.840606884664,
+          "wall_s": 220.1,
+          "wall_wallclock_s": 220.4153516292572,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)"
+        }
+      ],
+      "median_wall_s": 229.891
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_RSVD",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 0.8020949363708496,
+          "wall_wallclock_s": 0.8020949363708496,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.8119900226593018,
+          "wall_wallclock_s": 0.8119900226593018,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.7923495769500732,
+          "wall_wallclock_s": 0.7923495769500732,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 0.8020949363708496
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_SPARSE_MPO",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 0.8036849498748779,
+          "wall_wallclock_s": 0.8036849498748779,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n:0:rocdevice.cpp            :3586: 36717632623 us:  Callback: Queue 0x7ff74e000000 aborting with error : HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION: The agent attempted to access memory beyond the largest legal address. code: 0x29\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.7916672229766846,
+          "wall_wallclock_s": 0.7916672229766846,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n:0:rocdevice.cpp            :3586: 36718426374 us:  Callback: Queue 0x7f5669800000 aborting with error : HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION: The agent attempted to access memory beyond the largest legal address. code: 0x29\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.8121423721313477,
+          "wall_wallclock_s": 0.8121423721313477,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n:0:rocdevice.cpp            :3586: 36719236713 us:  Callback: Queue 0x7fb831800000 aborting with error : HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION: The agent attempted to access memory beyond the largest legal address. code: 0x29\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 0.8036849498748779
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_FUSE_LANCZOS",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 0.7958030700683594,
+          "wall_wallclock_s": 0.7958030700683594,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.7688767910003662,
+          "wall_wallclock_s": 0.7688767910003662,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.7950782775878906,
+          "wall_wallclock_s": 0.7950782775878906,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 0.7950782775878906
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_D_PAD",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 0.7919890880584717,
+          "wall_wallclock_s": 0.7919890880584717,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.7838184833526611,
+          "wall_wallclock_s": 0.7838184833526611,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.7961933612823486,
+          "wall_wallclock_s": 0.7961933612823486,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 0.7919890880584717
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "all_on",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 0.7959549427032471,
+          "wall_wallclock_s": 0.7959549427032471,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.7999594211578369,
+          "wall_wallclock_s": 0.7999594211578369,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 0.7953152656555176,
+          "wall_wallclock_s": 0.7953152656555176,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 0.7959549427032471
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "baseline",
+      "flags": [],
+      "reps": [
+        {
+          "energy": -12.840606887633,
+          "wall_s": 317.982,
+          "wall_wallclock_s": 318.51829409599304,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 354.501,
+          "wall_wallclock_s": 355.04857897758484,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 320.278,
+          "wall_wallclock_s": 320.83056569099426,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 320.278
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_DEVICE_K",
+      "flags": [
+        "DEVICE_K"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887633,
+          "wall_s": 318.51,
+          "wall_wallclock_s": 319.05592489242554,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 357.943,
+          "wall_wallclock_s": 358.4885485172272,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 310.279,
+          "wall_wallclock_s": 310.82352447509766,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 318.51
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_LANCZOS_FIXED",
+      "flags": [
+        "LANCZOS_FIXED"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887633,
+          "wall_s": 320.7,
+          "wall_wallclock_s": 321.2399957180023,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 319.306,
+          "wall_wallclock_s": 319.85107254981995,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 318.272,
+          "wall_wallclock_s": 318.81256222724915,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 319.306
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_LANCZOS_GRAPH",
+      "flags": [
+        "LANCZOS_GRAPH"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 1.0183062553405762,
+          "wall_wallclock_s": 1.0183062553405762,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : off\n  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n:0:rocdevice.cpp            :3586: 39670049484 us:  Callback: Queue 0x7f397e600000 aborting with error : HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION: The agent attempted to access memory beyond the largest legal address. code: 0x29\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.0276179313659668,
+          "wall_wallclock_s": 1.0276179313659668,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : off\n  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n:0:rocdevice.cpp            :3586: 39671076527 us:  Callback: Queue 0x7fe936600000 aborting with error : HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION: The agent attempted to access memory beyond the largest legal address. code: 0x29\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.0241315364837646,
+          "wall_wallclock_s": 1.0241315364837646,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : off\n  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n:0:rocdevice.cpp            :3586: 39672099837 us:  Callback: Queue 0x7f145aa00000 aborting with error : HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION: The agent attempted to access memory beyond the largest legal address. code: 0x29\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 1.0241315364837646
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_RSVD",
+      "flags": [
+        "RSVD"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887633,
+          "wall_s": 319.669,
+          "wall_wallclock_s": 320.20955991744995,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 354.204,
+          "wall_wallclock_s": 354.75184512138367,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 319.037,
+          "wall_wallclock_s": 319.57575845718384,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 319.669
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_SPARSE_MPO",
+      "flags": [
+        "SPARSE_MPO"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887633,
+          "wall_s": 319.24,
+          "wall_wallclock_s": 319.79998755455017,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 320.22,
+          "wall_wallclock_s": 320.7638657093048,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 320.495,
+          "wall_wallclock_s": 321.0438959598541,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)"
+        }
+      ],
+      "median_wall_s": 320.22
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_FUSE_LANCZOS",
+      "flags": [
+        "FUSE_LANCZOS"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887633,
+          "wall_s": 315.468,
+          "wall_wallclock_s": 316.00398230552673,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 325.931,
+          "wall_wallclock_s": 326.4797902107239,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 318.792,
+          "wall_wallclock_s": 319.3477392196655,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 318.792
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_D_PAD",
+      "flags": [
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887633,
+          "wall_s": 327.692,
+          "wall_wallclock_s": 328.2519497871399,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 4 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 327.599,
+          "wall_wallclock_s": 328.13538432121277,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 4 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 327.422,
+          "wall_wallclock_s": 327.9576802253723,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 4 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 327.599
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_DEVICE_K",
+      "flags": [
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 1.0327479839324951,
+          "wall_wallclock_s": 1.0327479839324951,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.0364937782287598,
+          "wall_wallclock_s": 1.0364937782287598,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.043349027633667,
+          "wall_wallclock_s": 1.043349027633667,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 1.0364937782287598
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_LANCZOS_FIXED",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 1.0398573875427246,
+          "wall_wallclock_s": 1.0398573875427246,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : off\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.0399169921875,
+          "wall_wallclock_s": 1.0399169921875,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : off\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.0398738384246826,
+          "wall_wallclock_s": 1.0398738384246826,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : off\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 1.0398738384246826
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_LANCZOS_GRAPH",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887633,
+          "wall_s": 322.04,
+          "wall_wallclock_s": 322.5776000022888,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 354.693,
+          "wall_wallclock_s": 355.247802734375,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)"
+        },
+        {
+          "energy": -12.840606887633,
+          "wall_s": 353.333,
+          "wall_wallclock_s": 353.8728837966919,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)"
+        }
+      ],
+      "median_wall_s": 353.333
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_RSVD",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 1.0294113159179688,
+          "wall_wallclock_s": 1.0294113159179688,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.0043244361877441,
+          "wall_wallclock_s": 1.0043244361877441,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.032301425933838,
+          "wall_wallclock_s": 1.032301425933838,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 1.0294113159179688
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_SPARSE_MPO",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 1.0471062660217285,
+          "wall_wallclock_s": 1.0471062660217285,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n:0:rocdevice.cpp            :3586: 44616468584 us:  Callback: Queue 0x7ff892c00000 aborting with error : HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION: The agent attempted to access memory beyond the largest legal address. code: 0x29\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.0357475280761719,
+          "wall_wallclock_s": 1.0357475280761719,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n:0:rocdevice.cpp            :3586: 44617504884 us:  Callback: Queue 0x7f7cea000000 aborting with error : HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION: The agent attempted to access memory beyond the largest legal address. code: 0x29\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.0476922988891602,
+          "wall_wallclock_s": 1.0476922988891602,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n:0:rocdevice.cpp            :3586: 44618551341 us:  Callback: Queue 0x7fad6bc00000 aborting with error : HSA_STATUS_ERROR_MEMORY_APERTURE_VIOLATION: The agent attempted to access memory beyond the largest legal address. code: 0x29\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 1.0471062660217285
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_FUSE_LANCZOS",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 1.0321018695831299,
+          "wall_wallclock_s": 1.0321018695831299,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.028717041015625,
+          "wall_wallclock_s": 1.028717041015625,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.050788164138794,
+          "wall_wallclock_s": 1.050788164138794,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 1.0321018695831299
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_D_PAD",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 1.020251750946045,
+          "wall_wallclock_s": 1.020251750946045,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.0196537971496582,
+          "wall_wallclock_s": 1.0196537971496582,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.0303928852081299,
+          "wall_wallclock_s": 1.0303928852081299,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 1.020251750946045
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "all_on",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 1.0058398246765137,
+          "wall_wallclock_s": 1.0058398246765137,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.0440828800201416,
+          "wall_wallclock_s": 1.0440828800201416,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        },
+        {
+          "energy": null,
+          "wall_s": 1.0472633838653564,
+          "wall_wallclock_s": 1.0472633838653564,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+        }
+      ],
+      "median_wall_s": 1.0440828800201416
+    }
+  ],
+  "profile_runs_all_on": {
+    "josephson_L32_chi128": {
+      "energy": null,
+      "wall_s": 0.791407585144043,
+      "wall_wallclock_s": 0.791407585144043,
+      "phases": {},
+      "returncode": -6,
+      "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : on\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+    },
+    "josephson_L32_chi256": {
+      "energy": null,
+      "wall_s": 1.0485692024230957,
+      "wall_wallclock_s": 1.0485692024230957,
+      "phases": {},
+      "returncode": -6,
+      "stderr_tail": "  lanczos_fixed  : on\n  lanczos_graph  : on\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : on\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg-gpu-opt/src/dmrg_gpu_opt_impl.h:1268 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error"
+    }
+  }
+}
