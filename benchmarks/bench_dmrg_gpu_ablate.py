@@ -71,13 +71,27 @@ CORRECTNESS_CONFIG = {"L": 8, "chi": 32, "sweeps": 10, "nmax": 2}
 ENERGY_TOL = 5e-10  # 5e-10 accommodates RSVD stochasticity (~4e-11 std across reps)
 
 
-def build_argv(binary: str, cfg: dict) -> list:
-    return [
+def build_argv(binary: str, cfg: dict, model: str = "josephson") -> list:
+    """Build CLI for the binary.
+
+    Two models: josephson (complex128) and heisenberg (real). All
+    binaries accept positional ``L chi sweeps`` plus optional
+    ``--josephson`` (heisenberg is the default). ``--nmax`` is used
+    by the josephson path only but the heisenberg path ignores it
+    safely.
+
+    Default is josephson to match the historical ablation. Override
+    via --model (needed for dmrg2-gpu-opt, which hangs on the
+    complex path at any chi >= 32 — see lessons memory)."""
+    argv = [
         str(binary),
         str(cfg["L"]), str(cfg["chi"]), str(cfg["sweeps"]),
-        "--josephson", "--nmax", str(cfg["nmax"]),
+        "--nmax", str(cfg["nmax"]),
         "--quiet",
     ]
+    if model == "josephson":
+        argv.append("--josephson")
+    return argv
 
 
 def build_env(flag_names: list, profile: bool = False) -> dict:
@@ -98,11 +112,33 @@ WALL_RE   = re.compile(r"Total wall time:\s+([\d.]+)\s*s")
 PHASE_RE  = re.compile(r"^\s+(\w+)\s*:\s+([\d.]+) ms\s+\(\s*(\d+) calls")
 
 
-def run_one(binary: str, cfg: dict, flag_names: list, profile: bool = False, timeout: int = 1800):
-    argv = build_argv(binary, cfg)
+def run_one(binary: str, cfg: dict, flag_names: list, profile: bool = False, timeout: int = 1800, model: str = "josephson"):
+    """Run one binary+config+flag-set.
+
+    Hardened after 2026-04-21 lesson: previously a TimeoutExpired
+    propagated up and killed the whole ablation, losing everything run
+    so far. Now we catch it and record a synthetic result so the outer
+    loop continues and the checkpointed results.json keeps growing.
+    """
+    argv = build_argv(binary, cfg, model=model)
     env = build_env(flag_names, profile=profile)
     t0 = time.time()
-    proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout)
+    try:
+        proc = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        wall = time.time() - t0
+        tail = (e.stderr or "")
+        if isinstance(tail, bytes):
+            tail = tail.decode(errors="replace")
+        return {
+            "energy": None,
+            "wall_s": None,
+            "wall_wallclock_s": wall,
+            "phases": {},
+            "returncode": -1,
+            "timeout": True,
+            "stderr_tail": "[TIMEOUT " + str(timeout) + "s]\n" + "\n".join(tail.splitlines()[-10:]),
+        }
     wall = time.time() - t0
     energy = None
     reported_wall = None
@@ -127,18 +163,18 @@ def run_one(binary: str, cfg: dict, flag_names: list, profile: bool = False, tim
     }
 
 
-def correctness_gate(binary: str):
+def correctness_gate(binary: str, model: str = "josephson"):
     """Run baseline + each single flag on the tiny config; assert energy match."""
     print(f"== Correctness gate ({CORRECTNESS_CONFIG['L']}, chi={CORRECTNESS_CONFIG['chi']}, "
           f"sweeps={CORRECTNESS_CONFIG['sweeps']}, tol={ENERGY_TOL}) ==")
-    base = run_one(binary, CORRECTNESS_CONFIG, [])
+    base = run_one(binary, CORRECTNESS_CONFIG, [], model=model)
     if base["energy"] is None or base["returncode"] != 0:
         print(f"  baseline FAILED: rc={base['returncode']}\n{base['stderr_tail']}")
         sys.exit(2)
     print(f"  baseline                E = {base['energy']:.12f}")
     bad = []
     for f in OPT_FLAGS:
-        r = run_one(binary, CORRECTNESS_CONFIG, [f])
+        r = run_one(binary, CORRECTNESS_CONFIG, [f], model=model)
         if r["energy"] is None:
             status = "MISSING_ENERGY"
         elif abs(r["energy"] - base["energy"]) < ENERGY_TOL:
@@ -166,7 +202,7 @@ def ablation_configs():
     return configs
 
 
-def run_bench(binary: str, reps: int, out_dir: Path):
+def run_bench(binary: str, reps: int, out_dir: Path, model: str = "josephson"):
     out_dir.mkdir(parents=True, exist_ok=True)
     results = []
     configs = ablation_configs()
@@ -178,7 +214,7 @@ def run_bench(binary: str, reps: int, out_dir: Path):
             for r in range(reps):
                 i += 1
                 t0 = time.time()
-                res = run_one(binary, prob, flags, profile=False)
+                res = run_one(binary, prob, flags, profile=False, model=model)
                 print(f"  [{i:3d}/{n}] {prob['label']:<24} {label:<22} rep={r} "
                       f"wall={res['wall_s']:.2f}s E={res['energy']}")
                 if res["returncode"] != 0 or res["energy"] is None:
@@ -193,10 +229,21 @@ def run_bench(binary: str, reps: int, out_dir: Path):
                 "reps": reps_data,
                 "median_wall_s": median_wall,
             })
+            # Checkpoint after every config so an outer crash doesn't lose prior runs.
+            (out_dir / "results.json").write_text(json.dumps({
+                "timestamp": datetime.utcnow().isoformat(),
+                "binary": str(binary),
+                "problems": BENCH_CONFIGS,
+                "opt_flags": OPT_FLAGS,
+        "model": model,
+                "reps": reps,
+                "partial": True,
+                "results": results,
+            }, indent=2))
     # One profile run per problem for phase breakdown (all-on).
     profile_runs = {}
     for prob in BENCH_CONFIGS:
-        r = run_one(binary, prob, list(OPT_FLAGS), profile=True)
+        r = run_one(binary, prob, list(OPT_FLAGS), profile=True, model=model)
         profile_runs[prob["label"]] = r
 
     payload = {
@@ -282,6 +329,9 @@ def main():
                     help="output directory root")
     ap.add_argument("--skip-correctness", action="store_true",
                     help="skip the correctness gate (NOT recommended)")
+    ap.add_argument("--model", default="josephson", choices=["josephson", "heisenberg"],
+                    help="physics model to benchmark (default josephson). Use "
+                         "heisenberg for dmrg2-gpu-opt, which hangs on complex.")
     args = ap.parse_args()
 
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
@@ -302,9 +352,9 @@ def main():
         print(f"  Variant: {impl_name}  ({binary})")
         print(f"{'='*60}\n")
         if not args.skip_correctness:
-            correctness_gate(str(binary))
+            correctness_gate(str(binary), model=args.model)
         out_dir = Path(args.out) / stamp / impl_name
-        payload = run_bench(str(binary), args.reps, out_dir)
+        payload = run_bench(str(binary), args.reps, out_dir, model=args.model)
         print_markdown(payload)
         print(f"\nresults → {out_dir / 'results.json'}")
 
