@@ -1,0 +1,466 @@
+{
+  "implementation": "dmrg2-gpu-opt",
+  "architecture": "mi300x",
+  "benchmark": "challenge",
+  "timestamp": "20260421_100543",
+  "results": [
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "heisenberg",
+      "L": 50,
+      "chi": 64,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 18.907,
+      "time_median": 18.907,
+      "time_min": 18.731,
+      "times": [
+        18.731,
+        18.939,
+        18.907
+      ],
+      "energy": -21.97211027161,
+      "energies": [
+        -21.97211027161,
+        -21.97211027161,
+        -21.97211027161
+      ],
+      "repeats": 3,
+      "successful_reps": 3,
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "50",
+        "64",
+        "20"
+      ]
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "heisenberg",
+      "L": 50,
+      "chi": 128,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 19.95,
+      "time_median": 19.95,
+      "time_min": 19.771,
+      "times": [
+        19.957,
+        19.95,
+        19.771
+      ],
+      "energy": -21.97211028124,
+      "energies": [
+        -21.97211028124,
+        -21.97211028124,
+        -21.97211028124
+      ],
+      "repeats": 3,
+      "successful_reps": 3,
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "50",
+        "128",
+        "20"
+      ]
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "heisenberg",
+      "L": 50,
+      "chi": 256,
+      "sweeps": 15,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 52.224,
+      "time_median": 52.224,
+      "time_min": 52.196,
+      "times": [
+        52.224,
+        52.513,
+        52.196
+      ],
+      "energy": -21.97211028125,
+      "energies": [
+        -21.97211028125,
+        -21.97211028125,
+        -21.97211028125
+      ],
+      "repeats": 3,
+      "successful_reps": 3,
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "50",
+        "256",
+        "15"
+      ]
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "heisenberg",
+      "L": 100,
+      "chi": 64,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 91.059,
+      "time_median": 91.059,
+      "time_min": 90.015,
+      "times": [
+        91.059,
+        91.181,
+        90.015
+      ],
+      "energy": -44.12773924985,
+      "energies": [
+        -44.12773924985,
+        -44.12773924985,
+        -44.12773924985
+      ],
+      "repeats": 3,
+      "successful_reps": 3,
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "100",
+        "64",
+        "20"
+      ]
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "heisenberg",
+      "L": 100,
+      "chi": 128,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 67.981,
+      "time_median": 67.981,
+      "time_min": 67.975,
+      "times": [
+        67.975,
+        68.645,
+        67.981
+      ],
+      "energy": -44.12773989068,
+      "energies": [
+        -44.12773989068,
+        -44.12773989068,
+        -44.12773989068
+      ],
+      "repeats": 3,
+      "successful_reps": 3,
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "100",
+        "128",
+        "20"
+      ]
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "heisenberg",
+      "L": 100,
+      "chi": 256,
+      "sweeps": 15,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 143.364,
+      "time_median": 143.364,
+      "time_min": 141.952,
+      "times": [
+        143.733,
+        143.364,
+        141.952
+      ],
+      "energy": -44.12773989329,
+      "energies": [
+        -44.12773989329,
+        -44.12773989329,
+        -44.12773989329
+      ],
+      "repeats": 3,
+      "successful_reps": 3,
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "100",
+        "256",
+        "15"
+      ]
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "josephson",
+      "L": 16,
+      "chi": 64,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 53.776,
+      "time_median": 53.776,
+      "time_min": 53.581,
+      "times": [
+        53.776,
+        54.118,
+        53.581
+      ],
+      "energy": -6.172597162304,
+      "energies": [
+        -6.172597162304,
+        -6.172597162304,
+        -6.172597162304
+      ],
+      "repeats": 3,
+      "successful_reps": 3,
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "16",
+        "64",
+        "20",
+        "--josephson",
+        "--nmax",
+        "2"
+      ],
+      "nmax": 2
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "josephson",
+      "L": 16,
+      "chi": 128,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 136.978,
+      "time_median": 136.978,
+      "time_min": 135.627,
+      "times": [
+        135.627,
+        138.467,
+        136.978
+      ],
+      "energy": -6.172597174056,
+      "energies": [
+        -6.172597174056,
+        -6.172597174056,
+        -6.172597174056
+      ],
+      "repeats": 3,
+      "successful_reps": 3,
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "16",
+        "128",
+        "20",
+        "--josephson",
+        "--nmax",
+        "2"
+      ],
+      "nmax": 2
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "josephson",
+      "L": 16,
+      "chi": 256,
+      "sweeps": 15,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 745.327,
+      "time_median": 745.327,
+      "time_min": 737.46,
+      "times": [
+        737.46,
+        745.327,
+        757.006
+      ],
+      "energy": -6.172597174065,
+      "energies": [
+        -6.172597174065,
+        -6.172597174065,
+        -6.172597174065
+      ],
+      "repeats": 3,
+      "successful_reps": 3,
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "16",
+        "256",
+        "15",
+        "--josephson",
+        "--nmax",
+        "2"
+      ],
+      "nmax": 2
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "josephson",
+      "L": 32,
+      "chi": 64,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 204.313,
+      "time_median": 204.313,
+      "time_min": 171.693,
+      "times": [
+        204.313,
+        235.287,
+        171.693
+      ],
+      "energy": -12.840605988744,
+      "energies": [
+        -12.840605988744,
+        -12.840605988744,
+        -12.840605988744
+      ],
+      "repeats": 3,
+      "successful_reps": 3,
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "32",
+        "64",
+        "20",
+        "--josephson",
+        "--nmax",
+        "2"
+      ],
+      "nmax": 2
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "josephson",
+      "L": 32,
+      "chi": 128,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": false,
+      "time": null,
+      "time_median": null,
+      "time_min": null,
+      "times": [],
+      "energy": null,
+      "energies": [],
+      "repeats": 3,
+      "successful_reps": 0,
+      "error": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n",
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "32",
+        "128",
+        "20",
+        "--josephson",
+        "--nmax",
+        "2"
+      ],
+      "nmax": 2
+    }
+  ],
+  "provenance": {
+    "generated_utc": "2026-04-21T10:05:43.618640+00:00",
+    "git": {
+      "commit": "9b4ecf49aa6f2ebed0116efda63b696b38de6b58",
+      "commit_short": "9b4ecf49aa6f",
+      "branch": "main",
+      "dirty": false,
+      "dirty_files": [],
+      "last_commit_msg": "bench(ablate): dmrg-gpu-opt (-opt ablation segment 1/3)",
+      "last_commit_iso": "2026-04-21T00:27:18-04:00",
+      "ahead_of_upstream": 0,
+      "behind_upstream": 0
+    },
+    "host": {
+      "hostname": "enc1-gpuvm002",
+      "fqdn": "enc1-gpuvm002",
+      "platform": "Linux-5.15.0-170-generic-x86_64-with-glibc2.35",
+      "python": "3.10.12",
+      "cpu": "x86_64"
+    },
+    "gpu": {
+      "vendor": "unknown"
+    },
+    "env": {},
+    "script": {
+      "path": "/home/hotaisle/dmrg-implementations/benchmarks/run_mi300x_challenge.py",
+      "argv": [
+        "--trim",
+        "--repeats",
+        "3"
+      ],
+      "cwd": "/home/hotaisle/dmrg-implementations"
+    }
+  },
+  "run_config": {
+    "grid": "ULTRA_TRIM (18 configs)",
+    "impl_names": [
+      "dmrg-gpu",
+      "dmrg-gpu-base",
+      "dmrg-gpu-opt",
+      "dmrg2-gpu",
+      "dmrg2-gpu-base",
+      "dmrg2-gpu-opt",
+      "pdmrg-gpu",
+      "pdmrg-gpu-base",
+      "pdmrg-gpu-opt",
+      "pdmrg-multi-gpu",
+      "quimb-dmrg1"
+    ],
+    "models": [
+      "heisenberg",
+      "josephson",
+      "tfim"
+    ],
+    "repeats": 3,
+    "skip_warmup": false,
+    "trim": true,
+    "tag": null,
+    "pdmrg_warmup": null,
+    "pdmrg_polish": null,
+    "pdmrg_local": null,
+    "pdmrg_recal": null,
+    "josephson_nmax": 2
+  },
+  "binary": {
+    "path": "/home/hotaisle/dmrg-implementations/gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+    "exists": true,
+    "size": 21389088,
+    "mtime": "2026-04-20T16:23:37.346738+00:00",
+    "sha256": "580c4e8fbd810de053f18cf37fb2dd33bc4ce0911d4dffdef38ad364d6b83d78"
+  }
+}
