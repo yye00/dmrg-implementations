@@ -1,0 +1,1305 @@
+{
+  "timestamp": "2026-04-21T19:06:43.060964",
+  "binary": "/home/hotaisle/dmrg-implementations/gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+  "binary_info": {
+    "path": "/home/hotaisle/dmrg-implementations/gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+    "exists": true,
+    "size": 21389088,
+    "mtime": "2026-04-21T18:07:53.294513+00:00",
+    "sha256": "937ac1900a32f3d2634f1b1d00b08a53fccd055c404858a7eed7b434edd04fd5"
+  },
+  "provenance": {
+    "generated_utc": "2026-04-21T19:06:43.080122+00:00",
+    "git": {
+      "commit": "b561ce4549e9e62ac8fdb84277878c30cb19c44c",
+      "commit_short": "b561ce4549e9",
+      "branch": "main",
+      "dirty": true,
+      "dirty_files": [
+        "benchmarks/data/gpu_ablation/20260421T182820Z/",
+        "benchmarks/data/gpu_ablation/20260421T184247Z/"
+      ],
+      "last_commit_msg": "bench(ablate): harden + add --model flag",
+      "last_commit_iso": "2026-04-21T18:17:21+00:00",
+      "ahead_of_upstream": 7,
+      "behind_upstream": 0
+    },
+    "host": {
+      "hostname": "enc1-gpuvm002",
+      "fqdn": "enc1-gpuvm002",
+      "platform": "Linux-5.15.0-170-generic-x86_64-with-glibc2.35",
+      "python": "3.10.12",
+      "cpu": "x86_64"
+    },
+    "gpu": {
+      "vendor": "unknown"
+    },
+    "env": {},
+    "script": {
+      "path": "/home/hotaisle/dmrg-implementations/benchmarks/bench_dmrg_gpu_ablate.py",
+      "argv": [
+        "--impl",
+        "dmrg2-gpu-opt",
+        "--reps",
+        "3",
+        "--model",
+        "heisenberg"
+      ],
+      "cwd": "/home/hotaisle/dmrg-implementations"
+    }
+  },
+  "problems": [
+    {
+      "label": "josephson_L32_chi128",
+      "L": 32,
+      "chi": 128,
+      "sweeps": 20,
+      "nmax": 2
+    },
+    {
+      "label": "josephson_L32_chi256",
+      "L": 32,
+      "chi": 256,
+      "sweeps": 15,
+      "nmax": 2
+    }
+  ],
+  "opt_flags": [
+    "DEVICE_K",
+    "LANCZOS_FIXED",
+    "LANCZOS_GRAPH",
+    "RSVD",
+    "SPARSE_MPO",
+    "FUSE_LANCZOS",
+    "D_PAD"
+  ],
+  "reps": 3,
+  "results": [
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "baseline",
+      "flags": [],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 154.513,
+          "wall_wallclock_s": 154.89205288887024,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.311,
+          "wall_wallclock_s": 9.555516958236694,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.393,
+          "wall_wallclock_s": 9.647839784622192,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 9.393
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_DEVICE_K",
+      "flags": [
+        "DEVICE_K"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.345,
+          "wall_wallclock_s": 9.587615489959717,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.277,
+          "wall_wallclock_s": 9.528112173080444,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.285,
+          "wall_wallclock_s": 9.531590938568115,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 9.285
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_LANCZOS_FIXED",
+      "flags": [
+        "LANCZOS_FIXED"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.342,
+          "wall_wallclock_s": 9.587481021881104,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.344,
+          "wall_wallclock_s": 9.596088171005249,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.281,
+          "wall_wallclock_s": 9.531913757324219,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 9.342
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_LANCZOS_GRAPH",
+      "flags": [
+        "LANCZOS_GRAPH"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.442,
+          "wall_wallclock_s": 9.691497325897217,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[dmrg2-gpu-opt] LANCZOS_GRAPH=1 is incompatible with Block-Davidson (variable output pointer per subspace column). Disabling.\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.309,
+          "wall_wallclock_s": 9.563199520111084,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[dmrg2-gpu-opt] LANCZOS_GRAPH=1 is incompatible with Block-Davidson (variable output pointer per subspace column). Disabling.\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.32,
+          "wall_wallclock_s": 9.564177513122559,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[dmrg2-gpu-opt] LANCZOS_GRAPH=1 is incompatible with Block-Davidson (variable output pointer per subspace column). Disabling.\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 9.32
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_RSVD",
+      "flags": [
+        "RSVD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.275,
+          "wall_wallclock_s": 9.519439697265625,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.339,
+          "wall_wallclock_s": 9.584005117416382,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.319,
+          "wall_wallclock_s": 9.563854694366455,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 9.319
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_SPARSE_MPO",
+      "flags": [
+        "SPARSE_MPO"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.778,
+          "wall_wallclock_s": 10.023717880249023,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (20 x 20), nnz rows=4, nnz cols=16 (84% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.899,
+          "wall_wallclock_s": 10.143946886062622,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (20 x 20), nnz rows=4, nnz cols=16 (84% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.868,
+          "wall_wallclock_s": 10.115747451782227,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (20 x 20), nnz rows=4, nnz cols=16 (84% sparse)"
+        }
+      ],
+      "median_wall_s": 9.868
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_FUSE_LANCZOS",
+      "flags": [
+        "FUSE_LANCZOS"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.277,
+          "wall_wallclock_s": 9.531119108200073,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.363,
+          "wall_wallclock_s": 9.619903564453125,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.375,
+          "wall_wallclock_s": 9.62013864517212,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 9.363
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_D_PAD",
+      "flags": [
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.261,
+          "wall_wallclock_s": 9.519229173660278,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 5 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.248,
+          "wall_wallclock_s": 9.495880365371704,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 5 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.271,
+          "wall_wallclock_s": 9.52354907989502,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 5 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 9.261
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_DEVICE_K",
+      "flags": [
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.628,
+          "wall_wallclock_s": 8.8717520236969,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.66,
+          "wall_wallclock_s": 8.907944917678833,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.645,
+          "wall_wallclock_s": 8.899818181991577,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 8.645
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_LANCZOS_FIXED",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.548,
+          "wall_wallclock_s": 8.799186944961548,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.609,
+          "wall_wallclock_s": 8.860095262527466,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.634,
+          "wall_wallclock_s": 8.875802040100098,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 8.609
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_LANCZOS_GRAPH",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.776,
+          "wall_wallclock_s": 9.02734112739563,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.683,
+          "wall_wallclock_s": 8.927606582641602,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.629,
+          "wall_wallclock_s": 8.87199068069458,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 8.683
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_RSVD",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.633,
+          "wall_wallclock_s": 8.887095928192139,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.676,
+          "wall_wallclock_s": 8.919939517974854,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.655,
+          "wall_wallclock_s": 8.903908014297485,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 8.655
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_SPARSE_MPO",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.26,
+          "wall_wallclock_s": 9.519088506698608,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 5 -> 8\n== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.375,
+          "wall_wallclock_s": 9.61596393585205,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 5 -> 8\n== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.252,
+          "wall_wallclock_s": 9.498158931732178,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 5 -> 8\n== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 9.26
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_FUSE_LANCZOS",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.656,
+          "wall_wallclock_s": 8.900569677352905,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.688,
+          "wall_wallclock_s": 8.935696363449097,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.7,
+          "wall_wallclock_s": 8.960092067718506,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 8.688
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_D_PAD",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.781,
+          "wall_wallclock_s": 10.031226396560669,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (20 x 20), nnz rows=4, nnz cols=16 (84% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.879,
+          "wall_wallclock_s": 10.123816013336182,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (20 x 20), nnz rows=4, nnz cols=16 (84% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 9.845,
+          "wall_wallclock_s": 10.099953413009644,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (20 x 20), nnz rows=4, nnz cols=16 (84% sparse)"
+        }
+      ],
+      "median_wall_s": 9.845
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "all_on",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.71,
+          "wall_wallclock_s": 8.959150791168213,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.698,
+          "wall_wallclock_s": 8.93971586227417,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 8.674,
+          "wall_wallclock_s": 8.91575026512146,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 8.698
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "baseline",
+      "flags": [],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.399,
+          "wall_wallclock_s": 23.675114631652832,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.228,
+          "wall_wallclock_s": 23.47985076904297,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.421,
+          "wall_wallclock_s": 23.700050830841064,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 23.399
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_DEVICE_K",
+      "flags": [
+        "DEVICE_K"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.224,
+          "wall_wallclock_s": 23.478138208389282,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.55,
+          "wall_wallclock_s": 23.804770469665527,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.719,
+          "wall_wallclock_s": 23.971806049346924,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 23.55
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_LANCZOS_FIXED",
+      "flags": [
+        "LANCZOS_FIXED"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.701,
+          "wall_wallclock_s": 23.95905828475952,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.593,
+          "wall_wallclock_s": 23.855592250823975,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.41,
+          "wall_wallclock_s": 23.667779207229614,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 23.593
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_LANCZOS_GRAPH",
+      "flags": [
+        "LANCZOS_GRAPH"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.466,
+          "wall_wallclock_s": 23.719237089157104,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[dmrg2-gpu-opt] LANCZOS_GRAPH=1 is incompatible with Block-Davidson (variable output pointer per subspace column). Disabling.\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.668,
+          "wall_wallclock_s": 23.923946619033813,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[dmrg2-gpu-opt] LANCZOS_GRAPH=1 is incompatible with Block-Davidson (variable output pointer per subspace column). Disabling.\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 332.424,
+          "wall_wallclock_s": 332.70793557167053,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[dmrg2-gpu-opt] LANCZOS_GRAPH=1 is incompatible with Block-Davidson (variable output pointer per subspace column). Disabling.\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 23.668
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_RSVD",
+      "flags": [
+        "RSVD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 226.336,
+          "wall_wallclock_s": 226.61428785324097,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.469,
+          "wall_wallclock_s": 23.720590829849243,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.699,
+          "wall_wallclock_s": 23.951700687408447,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 23.699
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_SPARSE_MPO",
+      "flags": [
+        "SPARSE_MPO"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 24.087,
+          "wall_wallclock_s": 24.342789888381958,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (20 x 20), nnz rows=4, nnz cols=16 (84% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.916,
+          "wall_wallclock_s": 24.175891876220703,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (20 x 20), nnz rows=4, nnz cols=16 (84% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 24.104,
+          "wall_wallclock_s": 24.35996723175049,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (20 x 20), nnz rows=4, nnz cols=16 (84% sparse)"
+        }
+      ],
+      "median_wall_s": 24.087
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_FUSE_LANCZOS",
+      "flags": [
+        "FUSE_LANCZOS"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.484,
+          "wall_wallclock_s": 23.738484382629395,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.627,
+          "wall_wallclock_s": 23.891929626464844,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.584,
+          "wall_wallclock_s": 23.847828149795532,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 23.584
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_D_PAD",
+      "flags": [
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 24.632,
+          "wall_wallclock_s": 24.895145654678345,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 5 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 24.366,
+          "wall_wallclock_s": 24.627697467803955,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 5 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 24.3,
+          "wall_wallclock_s": 24.563998222351074,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 5 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 24.366
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_DEVICE_K",
+      "flags": [
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.997,
+          "wall_wallclock_s": 24.250606536865234,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.841,
+          "wall_wallclock_s": 24.099847555160522,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.936,
+          "wall_wallclock_s": 24.19594693183899,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 23.936
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_LANCZOS_FIXED",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.551,
+          "wall_wallclock_s": 23.810733318328857,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.65,
+          "wall_wallclock_s": 23.90403723716736,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.541,
+          "wall_wallclock_s": 23.807804584503174,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 23.551
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_LANCZOS_GRAPH",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.733,
+          "wall_wallclock_s": 23.990772485733032,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.482,
+          "wall_wallclock_s": 23.735531091690063,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.869,
+          "wall_wallclock_s": 24.132142543792725,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 23.733
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_RSVD",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.731,
+          "wall_wallclock_s": 23.986492156982422,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.712,
+          "wall_wallclock_s": 23.967710733413696,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.619,
+          "wall_wallclock_s": 23.872175931930542,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 23.712
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_SPARSE_MPO",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 24.226,
+          "wall_wallclock_s": 24.486698389053345,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 5 -> 8\n== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 24.438,
+          "wall_wallclock_s": 24.69594168663025,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 5 -> 8\n== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 24.547,
+          "wall_wallclock_s": 24.799640417099,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 5 -> 8\n== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 24.438
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_FUSE_LANCZOS",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.597,
+          "wall_wallclock_s": 23.85874843597412,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.714,
+          "wall_wallclock_s": 23.967812538146973,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 24.079,
+          "wall_wallclock_s": 24.34763741493225,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 23.714
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_D_PAD",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.901,
+          "wall_wallclock_s": 24.1550133228302,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (20 x 20), nnz rows=4, nnz cols=16 (84% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.629,
+          "wall_wallclock_s": 23.891143083572388,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (20 x 20), nnz rows=4, nnz cols=16 (84% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 24.166,
+          "wall_wallclock_s": 24.42057514190674,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (20 x 20), nnz rows=4, nnz cols=16 (84% sparse)"
+        }
+      ],
+      "median_wall_s": 23.901
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "all_on",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.603,
+          "wall_wallclock_s": 23.85807466506958,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.7,
+          "wall_wallclock_s": 23.952402114868164,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        },
+        {
+          "energy": -13.997315618224,
+          "wall_s": 23.679,
+          "wall_wallclock_s": 23.93565559387207,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 23.679
+    }
+  ],
+  "profile_runs_all_on": {
+    "josephson_L32_chi128": {
+      "energy": -13.997315618224,
+      "wall_s": 8.692,
+      "wall_wallclock_s": 8.958473920822144,
+      "phases": {
+        "lanczos": {
+          "ms": 0.0,
+          "calls": 0
+        },
+        "apply_heff": {
+          "ms": 0.0,
+          "calls": 0
+        },
+        "svd": {
+          "ms": 0.0,
+          "calls": 0
+        },
+        "absorb": {
+          "ms": 0.0,
+          "calls": 0
+        },
+        "env_update": {
+          "ms": 0.0,
+          "calls": 0
+        }
+      },
+      "returncode": 0,
+      "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : on\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)\n== Phase timings ==\n  lanczos     :       0.00 ms   (     0 calls,    0.000 ms/call)\n  apply_heff  :       0.00 ms   (     0 calls,    0.000 ms/call)\n  svd         :       0.00 ms   (     0 calls,    0.000 ms/call)\n  absorb      :       0.00 ms   (     0 calls,    0.000 ms/call)\n  env_update  :       0.00 ms   (     0 calls,    0.000 ms/call)"
+    },
+    "josephson_L32_chi256": {
+      "energy": -13.997315618224,
+      "wall_s": 23.654,
+      "wall_wallclock_s": 23.907615661621094,
+      "phases": {
+        "lanczos": {
+          "ms": 0.0,
+          "calls": 0
+        },
+        "apply_heff": {
+          "ms": 0.0,
+          "calls": 0
+        },
+        "svd": {
+          "ms": 0.0,
+          "calls": 0
+        },
+        "absorb": {
+          "ms": 0.0,
+          "calls": 0
+        },
+        "env_update": {
+          "ms": 0.0,
+          "calls": 0
+        }
+      },
+      "returncode": 0,
+      "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : on\n[SPARSE_MPO] bond 0: WW shape (32 x 32), nnz rows=4, nnz cols=16 (94% sparse)\n== Phase timings ==\n  lanczos     :       0.00 ms   (     0 calls,    0.000 ms/call)\n  apply_heff  :       0.00 ms   (     0 calls,    0.000 ms/call)\n  svd         :       0.00 ms   (     0 calls,    0.000 ms/call)\n  absorb      :       0.00 ms   (     0 calls,    0.000 ms/call)\n  env_update  :       0.00 ms   (     0 calls,    0.000 ms/call)"
+    }
+  }
+}
