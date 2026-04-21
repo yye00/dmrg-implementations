@@ -1,0 +1,1262 @@
+{
+  "timestamp": "2026-04-21T00:41:44.960175",
+  "binary": "/home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/build/pdmrg_gpu",
+  "binary_info": {
+    "path": "/home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/build/pdmrg_gpu",
+    "exists": true,
+    "size": 21609144,
+    "mtime": "2026-04-20T16:23:37.322734+00:00",
+    "sha256": "0faa038344aed8ea6b457dcfb9d08bbaff1ce3b3154214cd1aca0e7f74bf7018"
+  },
+  "provenance": {
+    "generated_utc": "2026-04-21T00:41:44.979043+00:00",
+    "git": {
+      "commit": "c26f0bd39b573f4960c5f360daf8beca8a69d57b",
+      "commit_short": "c26f0bd39b57",
+      "branch": "main",
+      "dirty": true,
+      "dirty_files": [
+        "benchmarks/data/gpu_ablation/20260420T181425Z/dmrg2-gpu/"
+      ],
+      "last_commit_msg": "bench(ablate): back up completed dmrg-gpu ablation results",
+      "last_commit_iso": "2026-04-20T16:36:15-04:00",
+      "ahead_of_upstream": 0,
+      "behind_upstream": 0
+    },
+    "host": {
+      "hostname": "enc1-gpuvm002",
+      "fqdn": "enc1-gpuvm002",
+      "platform": "Linux-5.15.0-170-generic-x86_64-with-glibc2.35",
+      "python": "3.10.12",
+      "cpu": "x86_64"
+    },
+    "gpu": {
+      "vendor": "unknown"
+    },
+    "env": {},
+    "script": {
+      "path": "/home/hotaisle/dmrg-implementations/benchmarks/bench_dmrg_gpu_ablate.py",
+      "argv": [
+        "--impl",
+        "dmrg-gpu",
+        "dmrg2-gpu",
+        "pdmrg-gpu",
+        "--reps",
+        "3"
+      ],
+      "cwd": "/home/hotaisle/dmrg-implementations"
+    }
+  },
+  "problems": [
+    {
+      "label": "josephson_L32_chi128",
+      "L": 32,
+      "chi": 128,
+      "sweeps": 20,
+      "nmax": 2
+    },
+    {
+      "label": "josephson_L32_chi256",
+      "L": 32,
+      "chi": 256,
+      "sweeps": 15,
+      "nmax": 2
+    }
+  ],
+  "opt_flags": [
+    "DEVICE_K",
+    "LANCZOS_FIXED",
+    "LANCZOS_GRAPH",
+    "RSVD",
+    "SPARSE_MPO",
+    "FUSE_LANCZOS",
+    "D_PAD"
+  ],
+  "reps": 3,
+  "results": [
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "baseline",
+      "flags": [],
+      "reps": [
+        {
+          "energy": -12.840606884842,
+          "wall_s": 61.383,
+          "wall_wallclock_s": 62.10125470161438,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884843,
+          "wall_s": 61.894,
+          "wall_wallclock_s": 62.619847536087036,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884843,
+          "wall_s": 62.049,
+          "wall_wallclock_s": 62.77594494819641,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 61.894
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_DEVICE_K",
+      "flags": [
+        "DEVICE_K"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884843,
+          "wall_s": 60.841,
+          "wall_wallclock_s": 61.57174015045166,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884843,
+          "wall_s": 61.245,
+          "wall_wallclock_s": 61.96380376815796,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884843,
+          "wall_s": 60.96,
+          "wall_wallclock_s": 61.68422889709473,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 60.96
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_LANCZOS_FIXED",
+      "flags": [
+        "LANCZOS_FIXED"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884843,
+          "wall_s": 74.428,
+          "wall_wallclock_s": 75.16351222991943,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884843,
+          "wall_s": 73.774,
+          "wall_wallclock_s": 74.49198460578918,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884843,
+          "wall_s": 74.301,
+          "wall_wallclock_s": 75.01994347572327,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 74.301
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_LANCZOS_GRAPH",
+      "flags": [
+        "LANCZOS_GRAPH"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 7.784012794494629,
+          "wall_wallclock_s": 7.784012794494629,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\nHIP error in rocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1009/home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1412 -  - status 6operation not permitted when stream is capturing\n\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  rocBLAS error"
+        },
+        {
+          "energy": null,
+          "wall_s": 7.840901851654053,
+          "wall_wallclock_s": 7.840901851654053,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:998 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 7.743830919265747,
+          "wall_wallclock_s": 7.743830919265747,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  lanczos_graph  : on\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:998 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'"
+        }
+      ],
+      "median_wall_s": 7.784012794494629
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_RSVD",
+      "flags": [
+        "RSVD"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884843,
+          "wall_s": 61.491,
+          "wall_wallclock_s": 62.238884925842285,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884843,
+          "wall_s": 61.178,
+          "wall_wallclock_s": 61.89987540245056,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884843,
+          "wall_s": 61.932,
+          "wall_wallclock_s": 62.67186665534973,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 61.491
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_SPARSE_MPO",
+      "flags": [
+        "SPARSE_MPO"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884843,
+          "wall_s": 61.863,
+          "wall_wallclock_s": 62.591673374176025,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\n[SPARSE_MPO] bond 0: WW shape (100 x 100), nnz rows=25, nnz cols=90 (78% sparse)"
+        },
+        {
+          "energy": -12.840606884843,
+          "wall_s": 61.333,
+          "wall_wallclock_s": 62.06412100791931,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\n[SPARSE_MPO] bond 0: WW shape (100 x 100), nnz rows=25, nnz cols=90 (78% sparse)"
+        },
+        {
+          "energy": -12.840606884842,
+          "wall_s": 62.449,
+          "wall_wallclock_s": 63.17956209182739,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\n[SPARSE_MPO] bond 0: WW shape (100 x 100), nnz rows=25, nnz cols=90 (78% sparse)"
+        }
+      ],
+      "median_wall_s": 61.863
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_FUSE_LANCZOS",
+      "flags": [
+        "FUSE_LANCZOS"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884843,
+          "wall_s": 61.821,
+          "wall_wallclock_s": 62.53941607475281,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884842,
+          "wall_s": 62.429,
+          "wall_wallclock_s": 63.15653920173645,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884843,
+          "wall_s": 62.296,
+          "wall_wallclock_s": 63.015748262405396,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 62.296
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "only_D_PAD",
+      "flags": [
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884843,
+          "wall_s": 61.806,
+          "wall_wallclock_s": 62.543890953063965,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 4 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884842,
+          "wall_s": 62.567,
+          "wall_wallclock_s": 63.2919979095459,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 4 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -12.840606884843,
+          "wall_s": 62.244,
+          "wall_wallclock_s": 62.97502160072327,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 4 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 62.244
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_DEVICE_K",
+      "flags": [
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 5.193296670913696,
+          "wall_wallclock_s": 5.193296670913696,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1556 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error from hip error code: 'hipErrorStreamCaptureInvalidated':901\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1068 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 5.123400688171387,
+          "wall_wallclock_s": 5.123400688171387,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 5.164384603500366,
+          "wall_wallclock_s": 5.164384603500366,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'"
+        }
+      ],
+      "median_wall_s": 5.164384603500366
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_LANCZOS_FIXED",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 7.715208053588867,
+          "wall_wallclock_s": 7.715208053588867,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 7.883666276931763,
+          "wall_wallclock_s": 7.883666276931763,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 7.768699645996094,
+          "wall_wallclock_s": 7.768699645996094,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        }
+      ],
+      "median_wall_s": 7.768699645996094
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_LANCZOS_GRAPH",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606884843,
+          "wall_s": 74.688,
+          "wall_wallclock_s": 75.44324350357056,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)"
+        },
+        {
+          "energy": -12.840606884842,
+          "wall_s": 74.986,
+          "wall_wallclock_s": 75.7240936756134,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)"
+        },
+        {
+          "energy": -12.840606884843,
+          "wall_s": 74.82,
+          "wall_wallclock_s": 75.55974793434143,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 74.82
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_RSVD",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 5.108136892318726,
+          "wall_wallclock_s": 5.108136892318726,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  rocBLAS error"
+        },
+        {
+          "energy": null,
+          "wall_s": 5.154419898986816,
+          "wall_wallclock_s": 5.154419898986816,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 5.145007371902466,
+          "wall_wallclock_s": 5.145007371902466,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        }
+      ],
+      "median_wall_s": 5.145007371902466
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_SPARSE_MPO",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 5.036111831665039,
+          "wall_wallclock_s": 5.036111831665039,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:998 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 5.059788465499878,
+          "wall_wallclock_s": 5.059788465499878,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:998 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 5.0734124183654785,
+          "wall_wallclock_s": 5.0734124183654785,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:998 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        }
+      ],
+      "median_wall_s": 5.059788465499878
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_FUSE_LANCZOS",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 5.174339532852173,
+          "wall_wallclock_s": 5.174339532852173,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 5.167872428894043,
+          "wall_wallclock_s": 5.167872428894043,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 5.164071559906006,
+          "wall_wallclock_s": 5.164071559906006,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        }
+      ],
+      "median_wall_s": 5.167872428894043
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "no_D_PAD",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 5.071651458740234,
+          "wall_wallclock_s": 5.071651458740234,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\n[SPARSE_MPO] bond 0: WW shape (100 x 100), nnz rows=25, nnz cols=90 (78% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  rocBLAS error"
+        },
+        {
+          "energy": null,
+          "wall_s": 5.0723631381988525,
+          "wall_wallclock_s": 5.0723631381988525,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\n[SPARSE_MPO] bond 0: WW shape (100 x 100), nnz rows=25, nnz cols=90 (78% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 5.075730800628662,
+          "wall_wallclock_s": 5.075730800628662,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\n[SPARSE_MPO] bond 0: WW shape (100 x 100), nnz rows=25, nnz cols=90 (78% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  rocBLAS error"
+        }
+      ],
+      "median_wall_s": 5.0723631381988525
+    },
+    {
+      "problem": "josephson_L32_chi128",
+      "config": "all_on",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 5.131721019744873,
+          "wall_wallclock_s": 5.131721019744873,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 5.120295286178589,
+          "wall_wallclock_s": 5.120295286178589,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  rocBLAS error"
+        },
+        {
+          "energy": null,
+          "wall_s": 5.15610671043396,
+          "wall_wallclock_s": 5.15610671043396,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        }
+      ],
+      "median_wall_s": 5.131721019744873
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "baseline",
+      "flags": [],
+      "reps": [
+        {
+          "energy": -12.840606887686,
+          "wall_s": 239.288,
+          "wall_wallclock_s": 240.30736112594604,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887685,
+          "wall_s": 242.748,
+          "wall_wallclock_s": 243.77637553215027,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887685,
+          "wall_s": 243.748,
+          "wall_wallclock_s": 244.77946829795837,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 242.748
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_DEVICE_K",
+      "flags": [
+        "DEVICE_K"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887686,
+          "wall_s": 240.909,
+          "wall_wallclock_s": 241.94788122177124,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887686,
+          "wall_s": 241.468,
+          "wall_wallclock_s": 242.48389291763306,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887685,
+          "wall_s": 237.546,
+          "wall_wallclock_s": 238.5881962776184,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : on\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 240.909
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_LANCZOS_FIXED",
+      "flags": [
+        "LANCZOS_FIXED"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887684,
+          "wall_s": 289.743,
+          "wall_wallclock_s": 290.75186800956726,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887684,
+          "wall_s": 290.683,
+          "wall_wallclock_s": 291.69576120376587,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887684,
+          "wall_s": 290.94,
+          "wall_wallclock_s": 291.9717285633087,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 290.683
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_LANCZOS_GRAPH",
+      "flags": [
+        "LANCZOS_GRAPH"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 15.422959566116333,
+          "wall_wallclock_s": 15.422959566116333,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:998 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 15.267832517623901,
+          "wall_wallclock_s": 15.267832517623901,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:998 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 15.520434379577637,
+          "wall_wallclock_s": 15.520434379577637,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1412 - operation not permitted when stream is capturing\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:998 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        }
+      ],
+      "median_wall_s": 15.422959566116333
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_RSVD",
+      "flags": [
+        "RSVD"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887686,
+          "wall_s": 243.125,
+          "wall_wallclock_s": 244.18019342422485,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887685,
+          "wall_s": 241.832,
+          "wall_wallclock_s": 242.8522334098816,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887686,
+          "wall_s": 244.58,
+          "wall_wallclock_s": 245.61191177368164,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 243.125
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_SPARSE_MPO",
+      "flags": [
+        "SPARSE_MPO"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887684,
+          "wall_s": 241.925,
+          "wall_wallclock_s": 242.93995475769043,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\n[SPARSE_MPO] bond 0: WW shape (100 x 100), nnz rows=25, nnz cols=90 (78% sparse)"
+        },
+        {
+          "energy": -12.840606887685,
+          "wall_s": 240.742,
+          "wall_wallclock_s": 241.76338720321655,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\n[SPARSE_MPO] bond 0: WW shape (100 x 100), nnz rows=25, nnz cols=90 (78% sparse)"
+        },
+        {
+          "energy": -12.840606887685,
+          "wall_s": 238.602,
+          "wall_wallclock_s": 239.62821793556213,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\n[SPARSE_MPO] bond 0: WW shape (100 x 100), nnz rows=25, nnz cols=90 (78% sparse)"
+        }
+      ],
+      "median_wall_s": 240.742
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_FUSE_LANCZOS",
+      "flags": [
+        "FUSE_LANCZOS"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887686,
+          "wall_s": 242.635,
+          "wall_wallclock_s": 243.64767932891846,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887685,
+          "wall_s": 240.646,
+          "wall_wallclock_s": 241.6633608341217,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887685,
+          "wall_s": 242.799,
+          "wall_wallclock_s": 243.82835698127747,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 242.635
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "only_D_PAD",
+      "flags": [
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887685,
+          "wall_s": 242.359,
+          "wall_wallclock_s": 243.3883810043335,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 4 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887685,
+          "wall_s": 245.47,
+          "wall_wallclock_s": 246.50325989723206,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 4 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        },
+        {
+          "energy": -12.840606887685,
+          "wall_s": 241.727,
+          "wall_wallclock_s": 242.77980375289917,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "[D_PAD] D_mpo padded: 4 -> 8\n== GPU options ==\n  device_k       : off\n  lanczos_fixed  : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off"
+        }
+      ],
+      "median_wall_s": 242.359
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_DEVICE_K",
+      "flags": [
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 12.414730310440063,
+          "wall_wallclock_s": 12.414730310440063,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 12.400914669036865,
+          "wall_wallclock_s": 12.400914669036865,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  rocBLAS error"
+        },
+        {
+          "energy": null,
+          "wall_s": 12.383074045181274,
+          "wall_wallclock_s": 12.383074045181274,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        }
+      ],
+      "median_wall_s": 12.400914669036865
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_LANCZOS_FIXED",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 15.530976295471191,
+          "wall_wallclock_s": 15.530976295471191,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 15.636558055877686,
+          "wall_wallclock_s": 15.636558055877686,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 15.663949728012085,
+          "wall_wallclock_s": 15.663949728012085,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        }
+      ],
+      "median_wall_s": 15.636558055877686
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_LANCZOS_GRAPH",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": -12.840606887685,
+          "wall_s": 292.115,
+          "wall_wallclock_s": 293.18538331985474,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)"
+        },
+        {
+          "energy": -12.840606887684,
+          "wall_s": 294.196,
+          "wall_wallclock_s": 295.22760915756226,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)"
+        },
+        {
+          "energy": -12.840606887683,
+          "wall_s": 294.265,
+          "wall_wallclock_s": 295.32005071640015,
+          "phases": {},
+          "returncode": 0,
+          "stderr_tail": "  device_k       : on\n  lanczos_fixed  : on\n  lanczos_graph  : off\n  rsvd           : on\n  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)"
+        }
+      ],
+      "median_wall_s": 294.196
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_RSVD",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 12.386607646942139,
+          "wall_wallclock_s": 12.386607646942139,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 12.436336755752563,
+          "wall_wallclock_s": 12.436336755752563,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 12.419142723083496,
+          "wall_wallclock_s": 12.419142723083496,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  rocBLAS error"
+        }
+      ],
+      "median_wall_s": 12.419142723083496
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_SPARSE_MPO",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 12.511873483657837,
+          "wall_wallclock_s": 12.511873483657837,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:998 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 12.507977485656738,
+          "wall_wallclock_s": 12.507977485656738,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:998 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 12.523703575134277,
+          "wall_wallclock_s": 12.523703575134277,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  rsvd           : on\n  sparse_mpo     : off\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:998 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        }
+      ],
+      "median_wall_s": 12.511873483657837
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_FUSE_LANCZOS",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 12.49204158782959,
+          "wall_wallclock_s": 12.49204158782959,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 12.472091436386108,
+          "wall_wallclock_s": 12.472091436386108,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 12.55973196029663,
+          "wall_wallclock_s": 12.55973196029663,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  sparse_mpo     : on\n  fuse_lanczos   : off\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'"
+        }
+      ],
+      "median_wall_s": 12.49204158782959
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "no_D_PAD",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 12.247707605361938,
+          "wall_wallclock_s": 12.247707605361938,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\n[SPARSE_MPO] bond 0: WW shape (100 x 100), nnz rows=25, nnz cols=90 (78% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 12.19997763633728,
+          "wall_wallclock_s": 12.19997763633728,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\n[SPARSE_MPO] bond 0: WW shape (100 x 100), nnz rows=25, nnz cols=90 (78% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 12.23215937614441,
+          "wall_wallclock_s": 12.23215937614441,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : off\n  profile        : off\n[SPARSE_MPO] site 0: W shape (20 x 20), nnz rows=5, nnz cols=17 (79% sparse)\n[SPARSE_MPO] bond 0: WW shape (100 x 100), nnz rows=25, nnz cols=90 (78% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  rocBLAS error"
+        }
+      ],
+      "median_wall_s": 12.23215937614441
+    },
+    {
+      "problem": "josephson_L32_chi256",
+      "config": "all_on",
+      "flags": [
+        "DEVICE_K",
+        "LANCZOS_FIXED",
+        "LANCZOS_GRAPH",
+        "RSVD",
+        "SPARSE_MPO",
+        "FUSE_LANCZOS",
+        "D_PAD"
+      ],
+      "reps": [
+        {
+          "energy": null,
+          "wall_s": 12.479849815368652,
+          "wall_wallclock_s": 12.479849815368652,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        },
+        {
+          "energy": null,
+          "wall_s": 12.412055969238281,
+          "wall_wallclock_s": 12.412055969238281,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+        },
+        {
+          "energy": null,
+          "wall_s": 12.423254251480103,
+          "wall_wallclock_s": 12.423254251480103,
+          "phases": {},
+          "returncode": -6,
+          "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : off\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  HIP error"
+        }
+      ],
+      "median_wall_s": 12.423254251480103
+    }
+  ],
+  "profile_runs_all_on": {
+    "josephson_L32_chi128": {
+      "energy": null,
+      "wall_s": 5.161130905151367,
+      "wall_wallclock_s": 5.161130905151367,
+      "phases": {},
+      "returncode": -6,
+      "stderr_tail": "  fuse_lanczos   : on\n  d_pad          : on\n  profile        : on\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'\n  what():  "
+    },
+    "josephson_L32_chi256": {
+      "energy": null,
+      "wall_s": 12.363385677337646,
+      "wall_wallclock_s": 12.363385677337646,
+      "phases": {},
+      "returncode": -6,
+      "stderr_tail": "  sparse_mpo     : on\n  fuse_lanczos   : on\n  d_pad          : on\n  profile        : on\n[SPARSE_MPO] site 0: W shape (40 x 40), nnz rows=5, nnz cols=17 (95% sparse)\n[SPARSE_MPO] bond 0: WW shape (200 x 200), nnz rows=25, nnz cols=90 (94% sparse)\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1285 - operation would make the legacy stream depend on a capturing blocking stream\nrocBLAS error in /home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:971 - status 6\nterminate called recursively\nterminate called after throwing an instance of 'std::runtime_error'"
+    }
+  }
+}
