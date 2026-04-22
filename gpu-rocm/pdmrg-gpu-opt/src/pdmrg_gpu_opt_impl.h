@@ -3333,7 +3333,6 @@ double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_wa
     initialize_boundary_states();
     double energy_prev = warmup_energy;
     energy_ = warmup_energy;
-    bool outer_converged = false;
 
     auto parallel_sweep = [this](auto sweep_fn) {
         std::vector<std::thread> threads(n_segments_);
@@ -3381,23 +3380,28 @@ double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_wa
         double dE = std::abs(energy_ - energy_prev);
         if (dE < tol_ && outer > 0) {
             printf("Converged after %d outer iterations!\n", outer + 1);
-            outer_converged = true;
             break;
         }
         energy_prev = energy_;
     }
 
-    // Polish phase: full-chain sweeps to fix stale boundary environments
+    // Polish phase: full-chain single-site sweeps to fix stale boundary
+    // environments left by parallel segment sweeps. Required for segments>1:
+    // without it, energy plateaus at ~3.6e-5 above the two-site optimum.
+    // K-consecutive stop filters transient plateaus from threading noise.
     if (n_segments_ > 1) {
         int n_polish = 10;
+        int consecutive = 0;
+        const int K = 3;
         build_initial_environments();
         for (int sw = 0; sw < n_polish; sw++) {
             sweep_LR_full_1site();
             double eRL = sweep_RL_full_1site();
             double dE = std::abs(eRL - energy_);
             energy_ = eRL;
-            if (dE < tol_) {
-                printf("Polish converged after %d sweeps\n", sw + 1);
+            consecutive = (dE < tol_) ? (consecutive + 1) : 0;
+            if (consecutive >= K && sw + 1 >= K) {
+                printf("Polish converged after %d sweeps (K=%d consecutive)\n", sw + 1, K);
                 break;
             }
         }
