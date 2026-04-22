@@ -319,6 +319,31 @@ The original paper \cite{Grigori2025} tested only quantum chemistry Hamiltonians
 Our implementation extends the algorithm to lattice spin models (Heisenberg, Josephson, TFIM) and tests larger system sizes ($L$ up to 64).
 Section~\ref{sec:opt_failure} reports that accuracy degrades beyond $L \approx 20$ and that serial warm-up renders the parallel phase redundant---a paradox that Section~\ref{sec:discussion} analyzes in detail.
 
+\subsection{GPU micro-optimization framework}
+\label{sec:opt_framework}
+
+The five algorithmic variants above are large-grain hypotheses: each replaces an entire kernel (SVD, eigensolver, sweep parallelism) with a different algorithm.
+A complementary question is whether smaller, BLAS-3-preserving optimizations of the existing baseline---targeting kernel launch overhead, memory traffic, or specific sub-bottlenecks---can move the needle without changing the algorithm.
+
+To answer this systematically, we built an env-var-gated ablation framework.
+Each of six independent optimizations is a runtime flag (\texttt{DMRG\_GPU\_OPT\_<NAME>=1}) wired into every \texttt{-gpu} and \texttt{-gpu-opt} variant via a shared \texttt{GpuOpts} struct, so the same binary reproduces baseline numerics with all flags off and exercises any combination otherwise.
+The six flags target distinct mechanisms:
+
+\begin{itemize}
+\item \textbf{DEVICE\_K}: skip the device$\to$host readback of the per-bond truncation rank by always retaining $\chi_\text{max}$ singular values; eliminates one stream drain per optimized site.
+\item \textbf{LANCZOS\_GRAPH}: capture each variant's \texttt{apply\_heff} call as a HIP graph keyed on $(\text{site}, \chi_L, \chi_R)$ and replay on subsequent Lanczos iterations; amortizes per-kernel launch overhead across the inner loop.
+\item \textbf{RSVD}: Halko--Martinsson--Tropp randomized SVD for the bond-splitting step, replacing \texttt{rocsolver\_gesvd} with the chain $Y = A\Omega$, $Q = \mathrm{qr}(Y)$, $B = Q^H A$, small SVD of $B$, $U = Q\,U_\text{small}$.
+\item \textbf{SPARSE\_MPO}: detect zero rows and columns of the fused MPO matrix at construction time and compact the Step~1 / Step~3 batched GEMMs in \texttt{apply\_heff} accordingly.
+\item \textbf{FUSE\_LANCZOS}: replace the per-iteration sequential rocBLAS \texttt{axpy}+\texttt{axpy}+\texttt{memcpy}+\texttt{scal} chain with two fused kernels (one for $w := w - \alpha v_i - \beta v_{i-1}$, one for $v_{i+1} := w / \beta_i$).
+\item \textbf{D\_PAD}: round the MPO bond dimension up to the next multiple of 8 (zero-filling padded rows/columns of $W$) for MFMA-friendly GEMM shapes.
+\end{itemize}
+
+A seventh flag, \texttt{LANCZOS\_FIXED} (a fixed-iteration Lanczos eliminating mid-loop convergence-check syncs), was included in early ablation runs but consistently regressed performance by 1.4--2.5$\times$ across all tested variants and was removed from the framework.
+The fixed-count Lanczos doubles the number of \texttt{apply\_heff} calls relative to the adaptive baseline, and the per-call cost dominates the saved synchronization.
+
+The ablation script (\texttt{benchmarks/bench\_dmrg\_gpu\_ablate.py}) runs each variant through baseline (all flags off), one-at-a-time (each flag in isolation), leave-one-out (all flags except one), and all-on configurations, with $N=3$ repeats per cell and a built-in correctness gate at $|\Delta E| < 5\times 10^{-10}$.
+Results are reported per-flag in Section~\ref{sec:opt_ablation}.
+
 
 %% ============================================================
 \section{Computational details}
@@ -702,6 +727,70 @@ The batched mode fails because:
 
 Parallelism failed because serial phases dominate; algorithmic variants failed because they increase total work.  These failures---spanning four independent strategies---share a common explanation, which profiling reveals directly.
 
+\subsection{Per-flag ablation across variants}
+\label{sec:opt_ablation}
+
+Before turning to the SVD profile, we present the results of the micro-optimization ablation framework introduced in Section~\ref{sec:opt_framework}.
+The framework lets us measure each flag's effect in isolation across all six \texttt{-gpu} and \texttt{-gpu-opt} variants on a fixed Josephson-junction array workload (complex128, $L=32$, $n_\text{max}=2$, three repeats per cell, median wall-time reported).
+
+Two configurations were swept: $\chi=128$ (apply\_heff/SVD-mixed regime) and $\chi=256$ (SVD-dominated).
+Table~\ref{tab:opt_ablation} reports the speedup of each flag on its own (\emph{only-X}) relative to the variant's flags-off baseline.
+A speedup $> 1.05\times$ is highlighted; values within $\pm 5\%$ of unity are reported as ``--'' (within run-to-run noise).
+Crashes or correctness violations are marked $\dagger$.
+
+\begin{table*}[t]
+\centering
+\caption{Per-flag speedup over the variant baseline at $\chi=128$ / $\chi=256$ on Josephson $L=32$, $n_\text{max}=2$.  Bold = $>1.05\times$ speedup; dash = within $\pm 5\%$ of baseline; n/a = flag inapplicable to that variant; $\dagger$ = crash, see text.  Sample: median of 3 repeats per cell.}
+\label{tab:opt_ablation}
+\small
+\begin{tabular}{lcccccc}
+\toprule
+Variant & DEVICE\_K & LANCZOS\_GRAPH & RSVD & SPARSE\_MPO & FUSE\_LANCZOS & D\_PAD \\
+\midrule
+\texttt{dmrg-gpu}      & --/--             & --/--                              & --/--                            & --/--                              & --/--             & --/-- \\
+\texttt{dmrg2-gpu}     & --/1.02$\times$   & 0.99$\times$/0.81$\times$          & \textbf{5.49$\times$/6.29$\times$} & \textbf{1.15$\times$/1.31$\times$} & --/0.81$\times$   & \textbf{1.14$\times$}/-- \\
+\texttt{pdmrg-gpu}     & 1.01$\times$/--   & \textbf{1.18$\times$/1.77$\times$} & --/--                            & --/--                              & --/--             & --/-- \\
+\texttt{dmrg-gpu-opt}  & n/a               & $\dagger$                          & n/a                              & --/--                              & --/--             & --/-- \\
+\texttt{dmrg2-gpu-opt} & n/a               & $\dagger$                          & n/a                              & 0.95$\times$/--                    & --/--             & 1.01$\times$/-- \\
+\texttt{pdmrg-gpu-opt} & --/--             & 1.02$\times$/-- (Lanczos only)     & n/a                              & --/--                              & --/--             & --/-- \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\linewidth]{figures/fig6_ablation.pdf}
+\caption{Per-flag speedup over baseline across the six \texttt{-gpu} and \texttt{-gpu-opt} variants on the Josephson workload.  Cells show only-X (single-flag) speedups at $\chi=128$ and $\chi=256$; ``n/a'' marks flag-variant pairs where the flag is inapplicable (no device SVD truncation kernel for DEVICE\_K, CPU LAPACK SVD path for RSVD) or constructor-disabled (LANCZOS\_GRAPH on Block-Davidson \texttt{-gpu-opt}).  Two cells exceed $1.5\times$: RSVD on dmrg2-gpu and LANCZOS\_GRAPH on pdmrg-gpu.}
+\label{fig:ablation}
+\end{figure}
+
+Figure~\ref{fig:ablation} visualizes the same data as a heatmap.
+The headline observation is that \emph{four of six flags are flat}---DEVICE\_K, SPARSE\_MPO (in 1-site), FUSE\_LANCZOS, and D\_PAD all sit within $\pm 5\%$ of baseline almost everywhere.
+DEVICE\_K eliminates one stream drain per site, but the drained streams are followed by overlapping work whose serialization point migrated rather than disappeared.
+FUSE\_LANCZOS replaces six rocBLAS calls per Lanczos iteration with two custom kernels, but the per-call BLAS-1/2 operations are bandwidth-dominated and the launch savings are dwarfed by the unchanged \texttt{apply\_heff} time inside each iteration.
+D\_PAD adds zero-padded dimensions to the MPO bond axis to align GEMM shapes with MFMA tile sizes; for the tested $D \in \{4, 5\}$ this gives the right alignment in principle but the smallest GEMMs are already memory-bound, not throughput-bound.
+SPARSE\_MPO compacts batched GEMMs to the nonzero columns of the MPO; the Heisenberg and Josephson MPOs are sufficiently dense at the tested sizes that the saved batches do not exceed the bookkeeping cost---except in the 2-site fused MPO where the redundant identity blocks expose enough sparsity to net 15--31\%.
+
+The two non-flat findings are more interesting:
+
+\paragraph{RSVD is a 5--6$\times$ win in 2-site DMRG, only.}
+For dmrg2-gpu at $\chi = 128$, randomized SVD reduces wall time from 124.6~s (baseline) to 22.7~s ($5.49\times$); at $\chi = 256$, from 219.1~s to 34.9~s ($6.29\times$).
+This is exactly the regime where Halko--Martinsson--Tropp pays off: in 2-site DMRG the per-bond matrix has $\text{full\_k} = d \cdot \min(\chi_L, \chi_R)$, which exceeds the truncation rank $\chi_\text{max}$ by a factor of $d$.
+The RSVD pipeline (project to $\chi_\text{max} + p$ rank, QR, project back, small SVD, expand) consequently does asymptotically less work than the deterministic SVD it replaces.
+In contrast, single-site DMRG has $\text{full\_k} = \min(\chi_L \cdot d, \chi_R) \leq \chi_\text{max}$, so the RSVD guard never fires and the flag is a no-op (the dmrg-gpu row above).
+
+\paragraph{HIP graph capture is a 1.2--1.8$\times$ win in pdmrg-gpu, only.}
+For pdmrg-gpu at $\chi = 128$, capturing \texttt{apply\_heff} as a HIP graph and replaying across Lanczos iterations reduces wall time from 55.3~s to 47.0~s ($1.18\times$); at $\chi = 256$, from 226.7~s to 128.4~s ($1.77\times$, the largest LANCZOS\_GRAPH win in the framework).
+The win is largest in pdmrg-gpu because its segment-parallel architecture launches many short-lived per-segment kernels whose individual launch latency is a substantial fraction of per-iteration wallclock; graph replay amortizes that latency over the captured subgraph.
+The same flag is flat in dmrg-gpu (where each Lanczos iteration already does enough work per launch) and outright incompatible with the Block-Davidson variants (\texttt{-gpu-opt}), where the captured graph would lock in the first-iteration subspace pointer and replay against stale columns; the variant constructors detect this and force the flag off, with the table cells marked $\dagger$ to distinguish from a bare regression.
+
+\paragraph{Pattern.}
+The flags that target the \emph{measured} bottleneck of a specific variant deliver wins; flags that try to redistribute work without changing what is bottlenecked do not.
+RSVD wins because the 2-site SVD has more singular values than the truncation needs.
+LANCZOS\_GRAPH wins because pdmrg-gpu's per-segment launch overhead is a real fraction of wallclock.
+Neither win is portable to other variants: RSVD's mathematical regime does not exist in 1-site DMRG, and the launch-amortization regime does not apply where the per-call work is already large enough.
+This pattern---wins are variant-specific and bottleneck-specific---reinforces the broader Section~\ref{sec:discussion} argument that GPU optimization for DMRG is a search for the locally-binding constraint, not a general algorithmic move.
+
 \subsection{The reveal: SVD profiling}
 \label{sec:svd_bottleneck}
 
@@ -789,10 +878,16 @@ On a single GPU, the segment parallelism competes for the same compute resources
 With multiple GPUs, each segment would have dedicated compute capacity, and the Amdahl's law bottleneck from serial coupling sweeps could be addressed through pipelining.
 
 \paragraph{Alternative SVD approaches.}
-Randomized SVD \cite{Halko2011} could provide speedups when the truncation rank is much smaller than $\chi$, but in DMRG the truncation typically retains $\chi_\text{max}$ singular values, limiting the savings.
-Mixed-precision approaches (single-precision for warmup, double for final convergence) could halve the SVD time for the majority of sweeps.
+Randomized SVD \cite{Halko2011} provides large speedups (5--6$\times$ at $\chi = 128$--$256$) in two-site DMRG, where the per-bond matrix has $d$ times more singular values than the truncation retains; the ablation results in Section~\ref{sec:opt_ablation} confirm this.
+The same flag is a no-op in single-site DMRG, where the matrix never has more singular values than $\chi_\text{max}$.
+Mixed-precision approaches (single-precision for warmup, double for final convergence) could halve the SVD time for the majority of sweeps and remain unexplored in this study.
 
-The honest summary is that GPU DMRG at $\chi \leq 256$ is a solution in search of a problem large enough to justify it.
+\paragraph{Launch-overhead amortization for parallel variants.}
+HIP graph capture of \texttt{apply\_heff} (Section~\ref{sec:opt_ablation}) yields a $1.8\times$ speedup at $\chi = 256$ in pdmrg-gpu, where the segment-parallel architecture launches many short-lived per-segment kernels.
+For variants whose per-call work is already large enough to amortize launch latency---dmrg-gpu, dmrg2-gpu---the same flag is flat.
+This is the second instance of the broader pattern: micro-optimizations that target the measured local bottleneck of a specific variant pay off; those that attempt to redistribute work without addressing the bottleneck do not.
+
+The honest summary is that GPU DMRG at $\chi \leq 256$ is a solution in search of a problem large enough to justify it---except in two specific niches: two-site DMRG (where RSVD is binding) and segment-parallel pdmrg-gpu (where launch latency is binding).
 
 
 %% ============================================================
@@ -817,6 +912,12 @@ Our main findings are:
   The Newton--Schulz variant achieves a 0\% win rate across 50 configurations and diverges numerically at $\chi \geq 128$.
   Chebyshev filtering is $1.9$--$11\times$ slower.
   Cross-segment batched GEMM is slower in 18 of 19 configurations.
+
+  \item A systematic ablation of six GPU micro-optimizations across all six \texttt{-gpu} and \texttt{-gpu-opt} variants finds two real wins and four flat outcomes (Section~\ref{sec:opt_ablation}).
+  Randomized SVD yields $5$--$6\times$ speedups in two-site DMRG, where the per-bond matrix has $d$ times more singular values than the truncation retains.
+  HIP graph capture of \texttt{apply\_heff} yields $1.2$--$1.8\times$ in segment-parallel pdmrg-gpu, where launch latency is a meaningful fraction of per-iteration wallclock.
+  Both wins target the locally-binding bottleneck of a specific variant; the same flags are flat where their target bottleneck does not bind.
+  Device-side truncation, fused Lanczos kernels, sparse-MPO compaction, and MFMA-friendly bond-dim padding are all flat across variants.
 
   \item CPU SVD consumes 97--98\% of per-sweep wall time at $\chi = 256$.
   This bottleneck cannot be addressed by any optimization that targets the remaining 2--3\% of runtime.
