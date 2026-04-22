@@ -38,7 +38,6 @@ REQUIRED_FEATURES = [
     ("PhaseTimer_lanczos",  r'PhaseTimer\s+t_lanczos_'),
     ("PhaseTimer_heff",     r'PhaseTimer\s+t_apply_heff_'),
     ("PhaseTimer_svd",      r'PhaseTimer\s+t_svd_'),
-    ("lanczos_fixed_use",   r'opts_\.lanczos_fixed\b'),
 ]
 
 # Conditional features: applicable only if the variant uses a device-side SVD.

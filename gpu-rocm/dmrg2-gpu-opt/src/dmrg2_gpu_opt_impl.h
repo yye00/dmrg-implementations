@@ -1027,8 +1027,7 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
         }
 
         // Eigenvalue convergence check (every 3 iterations after iter >= 4)
-        // LANCZOS_FIXED skips the check entirely — no mid-loop host syncs.
-        if (!opts_.lanczos_fixed && iter >= 4 && iter % 3 == 0) {
+        if (iter >= 4 && iter % 3 == 0) {
             int ncheck = iter + 1;
             std::vector<double> h_D_chk(ncheck), h_E_chk(ncheck);
             std::copy(h_alpha.begin(), h_alpha.begin() + ncheck, h_D_chk.begin());

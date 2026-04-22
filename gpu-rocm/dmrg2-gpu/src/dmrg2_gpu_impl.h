@@ -1212,7 +1212,7 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
 
         // Convergence check every 3 iterations after iter >= 4
-        if (!opts_.lanczos_fixed && iter >= 4 && iter % 3 == 0) {
+        if (iter >= 4 && iter % 3 == 0) {
             HIP_CHECK(hipStreamSynchronize(stream_));
 
             int ncheck = iter + 1;

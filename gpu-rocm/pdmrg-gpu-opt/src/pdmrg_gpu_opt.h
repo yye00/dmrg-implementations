@@ -202,17 +202,21 @@ private:
         std::vector<Scalar> h_rsvd_U_small; // (r, r) from SVD of B
 
         // LANCZOS_GRAPH: per-segment fixed-address bounce buffer + cached
-        // HIP-graph execs keyed by (site, cL, cR). Only allocated/populated
-        // when opts_.lanczos_graph is on.
+        // HIP-graph execs keyed by (two_site_flag, site, cL, cR). Only
+        // allocated/populated when opts_.lanczos_graph is on. The two_site
+        // bit prevents collisions when warmup single-site calls share the
+        // workspace with later two-site calls — see pdmrg_gpu.h.
         Scalar* d_heff_input = nullptr;
         std::unordered_map<uint64_t, hipGraphExec_t> apply_heff_graph_cache;
     };
     std::vector<StreamWorkspace> workspaces_;
 
-    // LANCZOS_GRAPH: packed (site, cL, cR) key for per-(shape) graph caching.
-    static inline uint64_t graph_key(int site, int cL, int cR) {
-        return ((uint64_t)(uint32_t)site << 40) |
-               ((uint64_t)(uint32_t)cL   << 20) |
+    // LANCZOS_GRAPH: packed (two_site, site, cL, cR) key for per-(shape)
+    // graph caching. Bit 63 separates two-site from single-site captures.
+    static inline uint64_t graph_key(bool two_site, int site, int cL, int cR) {
+        return ((uint64_t)(two_site ? 1 : 0) << 63) |
+               ((uint64_t)(uint32_t)site     << 40) |
+               ((uint64_t)(uint32_t)cL       << 20) |
                 (uint64_t)(uint32_t)cR;
     }
 

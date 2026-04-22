@@ -15,7 +15,6 @@
 // ============================================================================
 struct GpuOpts {
     bool device_k      = false;  // skip D2H readback of truncation rank (DMRG_GPU_OPT_DEVICE_K)
-    bool lanczos_fixed = false;  // fixed Lanczos iter count, no convergence-check sync (DMRG_GPU_OPT_LANCZOS_FIXED)
     bool lanczos_graph = false;  // capture Lanczos inner loop as a HIP graph (DMRG_GPU_OPT_LANCZOS_GRAPH)
     bool rsvd          = false;  // randomized SVD for truncation (DMRG_GPU_OPT_RSVD)
     bool sparse_mpo    = false;  // block-sparse apply_heff (DMRG_GPU_OPT_SPARSE_MPO)
@@ -31,7 +30,6 @@ struct GpuOpts {
     }
     void load_from_env() {
         device_k      = env_flag("DMRG_GPU_OPT_DEVICE_K");
-        lanczos_fixed = env_flag("DMRG_GPU_OPT_LANCZOS_FIXED");
         lanczos_graph = env_flag("DMRG_GPU_OPT_LANCZOS_GRAPH");
         rsvd          = env_flag("DMRG_GPU_OPT_RSVD");
         sparse_mpo    = env_flag("DMRG_GPU_OPT_SPARSE_MPO");
@@ -42,7 +40,6 @@ struct GpuOpts {
     void print(FILE* out) const {
         std::fprintf(out, "== GPU options ==\n");
         std::fprintf(out, "  device_k       : %s\n", device_k      ? "on" : "off");
-        std::fprintf(out, "  lanczos_fixed  : %s\n", lanczos_fixed ? "on" : "off");
         std::fprintf(out, "  lanczos_graph  : %s\n", lanczos_graph ? "on" : "off");
         std::fprintf(out, "  rsvd           : %s\n", rsvd          ? "on" : "off");
         std::fprintf(out, "  sparse_mpo     : %s\n", sparse_mpo    ? "on" : "off");

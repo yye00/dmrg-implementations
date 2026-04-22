@@ -170,22 +170,26 @@ private:
         Scalar* d_Vh_canonical;       // size: chi_max*d × d*chi_max (same as theta_size_max)
 
         // LANCZOS_GRAPH: per-segment fixed-address bounce buffer + cached
-        // HIP-graph execs keyed by (site, cL, cR). Only allocated/populated
-        // when opts_.lanczos_graph is on. Both apply_heff_single_site and
-        // apply_heff_two_site share this cache; the key packing includes
-        // site so single-site and two-site entries at the same site don't
-        // collide — but because the same workspace is never used for both
-        // kinds of calls in the same sweep (1-site sweeps vs 2-site sweeps
-        // run independently), this isn't an issue in practice.
+        // HIP-graph execs keyed by (two_site_flag, site, cL, cR). Only
+        // allocated/populated when opts_.lanczos_graph is on. Both
+        // apply_heff_single_site (warmup/polish) and apply_heff_two_site
+        // (main sweep) share this workspace across phases, so the key MUST
+        // distinguish the two kinds of captures — otherwise a single-site
+        // graph from warmup with bond dims matching a later two-site call
+        // would be replayed for a two-site apply_heff, producing silent
+        // numeric drift (the two-site theta layout is cL*d*d*cR, not
+        // cL*d*cR).
         Scalar* d_heff_input = nullptr;
         std::unordered_map<uint64_t, hipGraphExec_t> apply_heff_graph_cache;
     };
     std::vector<StreamWorkspace> workspaces_;
 
-    // LANCZOS_GRAPH: packed (site, cL, cR) key for per-(shape) graph caching.
-    static inline uint64_t graph_key(int site, int cL, int cR) {
-        return ((uint64_t)(uint32_t)site << 40) |
-               ((uint64_t)(uint32_t)cL   << 20) |
+    // LANCZOS_GRAPH: packed (two_site, site, cL, cR) key for per-(shape)
+    // graph caching. Bit 63 separates two-site from single-site captures.
+    static inline uint64_t graph_key(bool two_site, int site, int cL, int cR) {
+        return ((uint64_t)(two_site ? 1 : 0) << 63) |
+               ((uint64_t)(uint32_t)site     << 40) |
+               ((uint64_t)(uint32_t)cL       << 20) |
                 (uint64_t)(uint32_t)cR;
     }
 

@@ -780,14 +780,16 @@ void PDMRGGPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
                                  hipMemcpyDeviceToDevice, streams_[si]));
         theta_src = ws.d_heff_input;
 
-        uint64_t key = graph_key(site, cL, cR);
+        uint64_t key = graph_key(/*two_site=*/true, site, cL, cR);
         auto it = ws.apply_heff_graph_cache.find(key);
         if (it != ws.apply_heff_graph_cache.end()) {
             HIP_CHECK(hipGraphLaunch(it->second, streams_[si]));
             return;
         }
         graph_capture_miss = true;
-        HIP_CHECK(hipStreamBeginCapture(streams_[si], hipStreamCaptureModeGlobal));
+        // ThreadLocal: pdmrg-gpu-opt parallelizes segment sweeps across std::threads;
+        // Global mode would cross-check other segments' ops during capture and abort.
+        HIP_CHECK(hipStreamBeginCapture(streams_[si], hipStreamCaptureModeThreadLocal));
     }
 
     Scalar* L_env = d_L_envs_[site];
@@ -923,7 +925,7 @@ void PDMRGGPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
         hipGraphExec_t exec;
         HIP_CHECK(hipGraphInstantiate(&exec, graph, nullptr, nullptr, 0));
         HIP_CHECK(hipGraphDestroy(graph));
-        ws.apply_heff_graph_cache[graph_key(site, cL, cR)] = exec;
+        ws.apply_heff_graph_cache[graph_key(/*two_site=*/true, site, cL, cR)] = exec;
         HIP_CHECK(hipGraphLaunch(exec, streams_[si]));
     }
 }
@@ -1192,11 +1194,13 @@ void PDMRGGPUOpt<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction, 
         d_theta, m,
         &zero_val,
         ws.d_rsvd_B, r));
+    // Step 5: Copy B to host, compute SVD of B (r x n_svd) -- much smaller than (m x n_svd).
+    // Async D2H + explicit stream sync: bare hipMemcpy routes through the
+    // legacy/null stream and collides with peer segments' in-flight graph
+    // captures under LANCZOS_GRAPH.
+    HIP_CHECK(hipMemcpyAsync(ws.h_rsvd_B.data(), ws.d_rsvd_B,
+                              r * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost, streams_[si]));
     HIP_CHECK(hipStreamSynchronize(streams_[si]));
-
-    // Step 5: Copy B to host, compute SVD of B (r x n_svd) -- much smaller than (m x n_svd)
-    HIP_CHECK(hipMemcpy(ws.h_rsvd_B.data(), ws.d_rsvd_B,
-                         r * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
 
     int small_k = std::min(r, n_svd);
     {
@@ -1342,10 +1346,12 @@ void PDMRGGPUOpt<Scalar>::svd_split(int site, Scalar* d_theta, char direction, i
     if (opts_.device_k) {
         new_k = k;
     } else if (gpu_svd_path) {
-        // GPU path: truncation on device, only copy 1 int back
+        // GPU path: truncation on device, only copy 1 int back.
+        // Async + explicit sync (avoids null-stream collisions under LANCZOS_GRAPH).
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, streams_[si],
                            ws.d_svd_S, k, 1e-14, ws.d_svd_info);
-        HIP_CHECK(hipMemcpy(&new_k, ws.d_svd_info, sizeof(int), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpyAsync(&new_k, ws.d_svd_info, sizeof(int), hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
     } else {
         new_k = k;
         for (int i = 0; i < new_k; i++) {
@@ -1782,12 +1788,14 @@ double PDMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
     ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
     ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
 
-    HIP_CHECK(hipMemcpy(&norm, ws.d_nrm2_result, sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpyAsync(&norm, ws.d_nrm2_result, sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
     if (norm < 1e-14) {
         std::vector<Scalar> h_init(n);
         srand(42 + site);
         for (int i = 0; i < n; i++) h_init[i] = Traits::random_val();
-        HIP_CHECK(hipMemcpy(d_theta, h_init.data(), n * sizeof(Scalar), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpyAsync(d_theta, h_init.data(), n * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
         ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &norm));
     }
 
@@ -1878,12 +1886,15 @@ double PDMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
 
         ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
 
-        // LANCZOS_FIXED skips the check entirely — no mid-loop host syncs.
-        if (!opts_.lanczos_fixed && iter >= 4 && iter % 3 == 0) {
-            HIP_CHECK(hipStreamSynchronize(streams_[si]));
+        // Convergence check every 3 iterations after iter >= 4.
+        // Use hipMemcpyAsync (stream-bound) rather than synchronous hipMemcpy:
+        // synchronous copies touch the legacy/null stream, which collides
+        // with peer segments' ThreadLocal graph captures under LANCZOS_GRAPH.
+        if (iter >= 4 && iter % 3 == 0) {
             int n_copy = iter + 1;
-            HIP_CHECK(hipMemcpy(h_alpha.data(), ws.d_alpha_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost));
-            HIP_CHECK(hipMemcpy(h_beta.data(), ws.d_beta_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpyAsync(h_alpha.data(), ws.d_alpha_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(h_beta.data(), ws.d_beta_dev, n_copy * sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
+            HIP_CHECK(hipStreamSynchronize(streams_[si]));
             last_synced_iter = iter;
 
             bool early_break = false;
@@ -1918,12 +1929,13 @@ double PDMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
     }
 
     int niter = iter;
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
     if (last_synced_iter < niter - 1) {
-        HIP_CHECK(hipMemcpy(h_alpha.data(), ws.d_alpha_dev, niter * sizeof(double), hipMemcpyDeviceToHost));
-        HIP_CHECK(hipMemcpy(h_beta.data(), ws.d_beta_dev, niter * sizeof(double), hipMemcpyDeviceToHost));
+        // Async + explicit sync: avoids null-stream collision under LANCZOS_GRAPH.
+        HIP_CHECK(hipMemcpyAsync(h_alpha.data(), ws.d_alpha_dev, niter * sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(h_beta.data(), ws.d_beta_dev, niter * sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
     }
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
     std::vector<double> h_D(niter), h_E(niter), h_Z(niter * niter);
     std::vector<double> h_work(std::max(1, 2*niter - 2));
@@ -2235,28 +2247,17 @@ void PDMRGGPUOpt<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& ws = workspaces_[si];
 
-    // LANCZOS_GRAPH: stage caller's theta into the per-segment fixed-address
-    // bounce buffer BEFORE any capture window, then either replay the cached
-    // graph or capture a new one for this (site, cL, cR) shape. Single-site
-    // theta has shape (cL, d, cR). See dmrg_gpu_impl.h for full rationale.
+    // LANCZOS_GRAPH is DISABLED for single-site here: Step 1/Step 3 else-branches
+    // (and the sparse path) use stack-allocated Scalar* h_A[256], h_B[256], h_C[256]
+    // plus hipMemcpyAsync H2D inside the capture window. The graph node records
+    // the host source pointer; after this function returns those stack pointers
+    // are dead, and graph replay dereferences garbage (observed: hang on
+    // Josephson L=8 warmup). pdmrg-gpu's single-site uses device-side setup
+    // kernels instead and is safe. Two-site apply_heff above uses
+    // setup_heff_A/B/C_ptrs kernels (device-side) and keeps graph caching.
+    // Fix plan: port device-side ptr-setup kernels to this path to regain
+    // warmup/polish graph caching; for now warmup runs un-captured.
     const Scalar* theta_src = d_theta_in;
-    bool graph_capture_miss = false;
-    if (opts_.lanczos_graph) {
-        int n_theta = cL * d * cR;
-        HIP_CHECK(hipMemcpyAsync(ws.d_heff_input, d_theta_in,
-                                 (size_t)n_theta * sizeof(Scalar),
-                                 hipMemcpyDeviceToDevice, streams_[si]));
-        theta_src = ws.d_heff_input;
-
-        uint64_t key = graph_key(site, cL, cR);
-        auto it = ws.apply_heff_graph_cache.find(key);
-        if (it != ws.apply_heff_graph_cache.end()) {
-            HIP_CHECK(hipGraphLaunch(it->second, streams_[si]));
-            return;
-        }
-        graph_capture_miss = true;
-        HIP_CHECK(hipStreamBeginCapture(streams_[si], hipStreamCaptureModeGlobal));
-    }
 
     Scalar* L_env = d_L_envs_[site];
     Scalar* R_env = d_R_envs_[site + 1];
@@ -2394,15 +2395,6 @@ void PDMRGGPUOpt<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta
         }
     }
 
-    if (graph_capture_miss) {
-        hipGraph_t graph;
-        HIP_CHECK(hipStreamEndCapture(streams_[si], &graph));
-        hipGraphExec_t exec;
-        HIP_CHECK(hipGraphInstantiate(&exec, graph, nullptr, nullptr, 0));
-        HIP_CHECK(hipGraphDestroy(graph));
-        ws.apply_heff_graph_cache[graph_key(site, cL, cR)] = exec;
-        HIP_CHECK(hipGraphLaunch(exec, streams_[si]));
-    }
 }
 
 // ============================================================================
@@ -2464,9 +2456,11 @@ void PDMRGGPUOpt<Scalar>::svd_split_single_site(int site, Scalar* d_theta, char 
     if (opts_.device_k) {
         new_k = k;
     } else if (!use_cpu_svd_) {
+        // Async + explicit sync (avoids null-stream collisions under LANCZOS_GRAPH).
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, streams_[si],
                            ws.d_svd_S, k, 1e-14, ws.d_svd_info);
-        HIP_CHECK(hipMemcpy(&new_k, ws.d_svd_info, sizeof(int), hipMemcpyDeviceToHost));
+        HIP_CHECK(hipMemcpyAsync(&new_k, ws.d_svd_info, sizeof(int), hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
     } else {
         h_S_data = ws.h_svd_S.data();
         new_k = k;

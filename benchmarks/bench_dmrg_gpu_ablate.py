@@ -50,7 +50,6 @@ from provenance import provenance_block, binary_info
 # ─── Optimization flags (mirrors GpuOpts in dmrg_gpu.h) ───────────────────────
 OPT_FLAGS = [
     "DEVICE_K",
-    "LANCZOS_FIXED",
     "LANCZOS_GRAPH",
     "RSVD",
     "SPARSE_MPO",
@@ -80,9 +79,7 @@ def build_argv(binary: str, cfg: dict, model: str = "josephson") -> list:
     by the josephson path only but the heisenberg path ignores it
     safely.
 
-    Default is josephson to match the historical ablation. Override
-    via --model (needed for dmrg2-gpu-opt, which hangs on the
-    complex path at any chi >= 32 — see lessons memory)."""
+    Default is josephson to match the historical ablation."""
     argv = [
         str(binary),
         str(cfg["L"]), str(cfg["chi"]), str(cfg["sweeps"]),
@@ -330,8 +327,7 @@ def main():
     ap.add_argument("--skip-correctness", action="store_true",
                     help="skip the correctness gate (NOT recommended)")
     ap.add_argument("--model", default="josephson", choices=["josephson", "heisenberg"],
-                    help="physics model to benchmark (default josephson). Use "
-                         "heisenberg for dmrg2-gpu-opt, which hangs on complex.")
+                    help="physics model to benchmark (default josephson).")
     args = ap.parse_args()
 
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")

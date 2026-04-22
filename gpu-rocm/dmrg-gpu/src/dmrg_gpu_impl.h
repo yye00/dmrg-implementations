@@ -1145,11 +1145,7 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
         ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
 
         // Convergence check every 3 iterations after iter >= 4.
-        // LANCZOS_FIXED skips the check entirely → no mid-loop host syncs,
-        // runs the full max_iter iterations. Cost: ~2-3× more apply_heff per
-        // site if Lanczos converges early. Benefit: eliminates stream drain
-        // + D2H readback on every third iter, which dominates at small n.
-        if (!opts_.lanczos_fixed && iter >= 4 && iter % 3 == 0) {
+        if (iter >= 4 && iter % 3 == 0) {
             HIP_CHECK(hipStreamSynchronize(stream_));
 
             int ncheck = iter + 1;

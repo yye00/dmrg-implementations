@@ -245,22 +245,12 @@ PDMRGGPU<Scalar>::PDMRGGPU(int L, int d, int chi_max, int D_mpo, int n_segments,
 
     opts_.load_from_env();
 
-    // LANCZOS_GRAPH safeguard: the multi-segment (n_segments >= 2) + graph
-    // capture combination produces wrong energies on pdmrg-gpu (observed
-    // 2026-04-21). Root cause: per-thread hipStreamBeginCapture windows
-    // overlap and rocBLAS handle state apparently leaks across streams in
-    // the captured graph. Until root-caused, force single-segment operation
-    // when graph capture is on so the flag exercises the capture code path
-    // correctly; users get no segment parallelism but also no garbage
-    // numerics. Print once so benchmark scripts can see the override.
-    if (opts_.lanczos_graph && n_segments_ > 1) {
-        std::fprintf(stderr,
-            "[pdmrg-gpu] LANCZOS_GRAPH=1 requested with n_segments=%d; "
-            "forcing n_segments=1 (multi-segment+graph has a known "
-            "correctness bug — see CLAUDE.md / lessons memory).\n",
-            n_segments_);
-        n_segments_ = 1;
-    }
+    // LANCZOS_GRAPH + multi-segment: previously force-downgraded to n_segments=1
+    // because of a correctness bug observed 2026-04-21. Root-caused 2026-04-22
+    // as a graph-cache key collision between apply_heff_single_site (warmup)
+    // and apply_heff_two_site (main sweep) sharing the same workspace cache
+    // — fixed by adding a two_site bit to graph_key. Safeguard removed; the
+    // multi-segment+graph combination is now expected to be correct.
 
     // D_PAD: round MPO bond dim up to a multiple of 8 for MFMA-friendly
     // GEMM shapes. All allocations and internal GEMMs use the padded D;
@@ -960,19 +950,20 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
                                  hipMemcpyDeviceToDevice, streams_[si]));
         theta_src = ws.d_heff_input;
 
-        uint64_t key = graph_key(site, cL, cR);
+        uint64_t key = graph_key(/*two_site=*/true, site, cL, cR);
         auto it = ws.apply_heff_graph_cache.find(key);
         if (it != ws.apply_heff_graph_cache.end()) {
             HIP_CHECK(hipGraphLaunch(it->second, streams_[si]));
             return;
         }
         graph_capture_miss = true;
-        // Relaxed mode: pdmrg runs multiple streams concurrently on one thread
-        // for segment-parallel sweeps. Global/ThreadLocal modes treat the
-        // other segment's in-flight rocBLAS work as a cross-stream dependency
-        // with the legacy stream and abort the capture. We guarantee no
-        // cross-segment dependencies exist within a capture window by design.
-        HIP_CHECK(hipStreamBeginCapture(streams_[si], hipStreamCaptureModeRelaxed));
+        // ThreadLocal capture: pdmrg-gpu parallelizes segment sweeps across
+        // std::threads, each driving its own stream. Global mode cross-checks
+        // operations on ALL streams during any capture, so one segment's
+        // hipStreamSynchronize (inside the Lanczos convergence check) aborts
+        // another segment's capture. ThreadLocal restricts capture to the
+        // calling thread's stream operations, which is exactly what we want.
+        HIP_CHECK(hipStreamBeginCapture(streams_[si], hipStreamCaptureModeThreadLocal));
     }
 
     Scalar* L_env = d_L_envs_[site];
@@ -1115,7 +1106,7 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
         hipGraphExec_t exec;
         HIP_CHECK(hipGraphInstantiate(&exec, graph, nullptr, nullptr, 0));
         HIP_CHECK(hipGraphDestroy(graph));
-        ws.apply_heff_graph_cache[graph_key(site, cL, cR)] = exec;
+        ws.apply_heff_graph_cache[graph_key(/*two_site=*/true, site, cL, cR)] = exec;
         HIP_CHECK(hipGraphLaunch(exec, streams_[si]));
     }
 }
@@ -1323,15 +1314,20 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
     ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
 
     // Check norm on host (need the value for near-zero check).
-    // Sync on our non-blocking stream first so the host read sees the nrm2
-    // result, not stale data.
+    // Use hipMemcpyAsync (stream-bound) + explicit stream sync rather than bare
+    // hipMemcpy: bare sync hipMemcpy routes through the legacy/null stream,
+    // which collides with peer segments' in-flight graph captures under
+    // LANCZOS_GRAPH ("operation would make the legacy stream depend on a
+    // capturing blocking stream"). Same rule applies to every D2H/H2D in
+    // this sweep-hot path below.
+    HIP_CHECK(hipMemcpyAsync(&norm, ws.d_nrm2_result, sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
     HIP_CHECK(hipStreamSynchronize(streams_[si]));
-    HIP_CHECK(hipMemcpy(&norm, ws.d_nrm2_result, sizeof(double), hipMemcpyDeviceToHost));
     if (norm < 1e-14) {
         std::vector<Scalar> h_init(n);
         srand(42 + site);
         for (int i = 0; i < n; i++) h_init[i] = Traits::random_val();
-        HIP_CHECK(hipMemcpy(d_theta, h_init.data(), n * sizeof(Scalar), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpyAsync(d_theta, h_init.data(), n * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
         ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &norm));
     }
 
@@ -1449,20 +1445,23 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         // Switch back to host pointer mode (needed by apply_heff next iteration)
         ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
 
-        // Convergence check every 3 iterations after iter >= 4
-        // LANCZOS_FIXED skips the check entirely — no mid-loop host syncs.
-        // This is the ONLY sync point in the inner loop
-        if (!opts_.lanczos_fixed && iter >= 4 && iter % 3 == 0) {
+        // Convergence check every 3 iterations after iter >= 4.
+        // This is the ONLY sync point in the inner loop.
+        if (iter >= 4 && iter % 3 == 0) {
             HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
             int ncheck = iter + 1;
 
-            // Check for invariant subspace (beta < tol) on GPU
+            // Check for invariant subspace (beta < tol) on GPU.
+            // Use hipMemcpyAsync (stream-bound) rather than the synchronous
+            // hipMemcpy: synchronous copies touch the legacy/null stream,
+            // which collides with OTHER segments' ThreadLocal graph captures
+            // under LANCZOS_GRAPH + n_segments > 1.
             hipLaunchKernelGGL(lanczos_check_beta, dim3(1), dim3(1), 0, streams_[si],
                                ws.d_beta_dev, ncheck, tol_lanczos, ws.d_steqr_info);
             rocblas_int h_beta_idx;
+            HIP_CHECK(hipMemcpyAsync(&h_beta_idx, ws.d_steqr_info, sizeof(rocblas_int), hipMemcpyDeviceToHost, streams_[si]));
             HIP_CHECK(hipStreamSynchronize(streams_[si]));
-            HIP_CHECK(hipMemcpy(&h_beta_idx, ws.d_steqr_info, sizeof(rocblas_int), hipMemcpyDeviceToHost));
             if (h_beta_idx > 0) { iter = h_beta_idx; break; }
 
             // Eigenvalue convergence check via rocsolver on GPU
@@ -1472,9 +1471,9 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
                              ws.d_steqr_D, ws.d_steqr_E, nullptr, ncheck, ws.d_steqr_info);
             rocblas_int h_info_chk;
             double cur_energy;
+            HIP_CHECK(hipMemcpyAsync(&h_info_chk, ws.d_steqr_info, sizeof(rocblas_int), hipMemcpyDeviceToHost, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(&cur_energy, ws.d_steqr_D, sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
             HIP_CHECK(hipStreamSynchronize(streams_[si]));
-            HIP_CHECK(hipMemcpy(&h_info_chk, ws.d_steqr_info, sizeof(rocblas_int), hipMemcpyDeviceToHost));
-            HIP_CHECK(hipMemcpy(&cur_energy, ws.d_steqr_D, sizeof(double), hipMemcpyDeviceToHost));
             if (h_info_chk == 0) {
                 if (std::abs(cur_energy - prev_energy) < tol_eig_conv) {
                     iter++;
@@ -1496,15 +1495,15 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
     rocsolver_dsteqr(handles_[si], rocblas_evect_tridiagonal, niter,
                      ws.d_steqr_D, ws.d_steqr_E, ws.d_steqr_C, niter, ws.d_steqr_info);
 
+    // Async + explicit sync (see norm-read comment above for rationale).
     rocblas_int h_steqr_info;
+    HIP_CHECK(hipMemcpyAsync(&h_steqr_info, ws.d_steqr_info, sizeof(rocblas_int), hipMemcpyDeviceToHost, streams_[si]));
+    double energy;
+    HIP_CHECK(hipMemcpyAsync(&energy, ws.d_steqr_D, sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
     HIP_CHECK(hipStreamSynchronize(streams_[si]));
-    HIP_CHECK(hipMemcpy(&h_steqr_info, ws.d_steqr_info, sizeof(rocblas_int), hipMemcpyDeviceToHost));
     if (h_steqr_info != 0) {
         throw std::runtime_error("rocsolver_dsteqr failed with info = " + std::to_string(h_steqr_info));
     }
-
-    double energy;
-    HIP_CHECK(hipMemcpy(&energy, ws.d_steqr_D, sizeof(double), hipMemcpyDeviceToHost));
 
     // Ritz coefficients = first column of eigenvector matrix (on device)
     if constexpr (std::is_same_v<Scalar, double>) {
@@ -1597,11 +1596,13 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
     if (opts_.device_k) {
         new_k = k;
     } else if (gpu_svd_path) {
-        // GPU path: truncation on device, only copy 1 int back
+        // GPU path: truncation on device, only copy 1 int back.
+        // Async + explicit sync to avoid null-stream collisions with peer
+        // segments' in-flight graph captures (see lanczos_eigensolver).
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, streams_[si],
                            ws.d_svd_S, k, 1e-14, ws.d_svd_info);
+        HIP_CHECK(hipMemcpyAsync(&new_k, ws.d_svd_info, sizeof(int), hipMemcpyDeviceToHost, streams_[si]));
         HIP_CHECK(hipStreamSynchronize(streams_[si]));
-        HIP_CHECK(hipMemcpy(&new_k, ws.d_svd_info, sizeof(int), hipMemcpyDeviceToHost));
     } else {
         new_k = k;
         for (int i = 0; i < new_k; i++) {
@@ -1764,8 +1765,10 @@ void PDMRGGPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction, int
         HIP_CHECK(hipStreamSynchronize(streams_[si]));
     }
 
-    // Step 5: Copy B to host, compute SVD of B (r x n_svd) — much smaller than (m x n_svd)
-    HIP_CHECK(hipMemcpy(ws.h_rsvd_B.data(), ws.d_rsvd_B, r * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
+    // Step 5: Copy B to host, compute SVD of B (r x n_svd) — much smaller than (m x n_svd).
+    // Async D2H to avoid null-stream capture collisions (see lanczos_eigensolver note).
+    HIP_CHECK(hipMemcpyAsync(ws.h_rsvd_B.data(), ws.d_rsvd_B, r * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost, streams_[si]));
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
     int small_k = std::min(r, n_svd);
     {
@@ -1925,17 +1928,15 @@ void PDMRGGPU<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta_in
                                  hipMemcpyDeviceToDevice, streams_[si]));
         theta_src = ws.d_heff_input;
 
-        uint64_t key = graph_key(site, cL, cR);
+        uint64_t key = graph_key(/*two_site=*/false, site, cL, cR);
         auto it = ws.apply_heff_graph_cache.find(key);
         if (it != ws.apply_heff_graph_cache.end()) {
             HIP_CHECK(hipGraphLaunch(it->second, streams_[si]));
             return;
         }
         graph_capture_miss = true;
-        // Relaxed: multi-segment capture sees other segment's rocBLAS work on
-        // the legacy stream under Global/ThreadLocal. See apply_heff_two_site
-        // for rationale.
-        HIP_CHECK(hipStreamBeginCapture(streams_[si], hipStreamCaptureModeRelaxed));
+        // ThreadLocal mode (see apply_heff_two_site for rationale).
+        HIP_CHECK(hipStreamBeginCapture(streams_[si], hipStreamCaptureModeThreadLocal));
     }
 
     Scalar* L_env = d_L_envs_[site];
@@ -2063,7 +2064,7 @@ void PDMRGGPU<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta_in
         hipGraphExec_t exec;
         HIP_CHECK(hipGraphInstantiate(&exec, graph, nullptr, nullptr, 0));
         HIP_CHECK(hipGraphDestroy(graph));
-        ws.apply_heff_graph_cache[graph_key(site, cL, cR)] = exec;
+        ws.apply_heff_graph_cache[graph_key(/*two_site=*/false, site, cL, cR)] = exec;
         HIP_CHECK(hipGraphLaunch(exec, streams_[si]));
     }
 }
@@ -2128,11 +2129,12 @@ void PDMRGGPU<Scalar>::svd_split_single_site(int site, Scalar* d_theta, char dir
     if (opts_.device_k) {
         new_k = k;
     } else if (!use_cpu_svd_) {
-        // GPU path: truncation on device, only copy 1 int back
+        // GPU path: truncation on device, only copy 1 int back.
+        // Async + explicit sync (see lanczos_eigensolver rationale).
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, streams_[si],
                            ws.d_svd_S, k, 1e-14, ws.d_svd_info);
+        HIP_CHECK(hipMemcpyAsync(&new_k, ws.d_svd_info, sizeof(int), hipMemcpyDeviceToHost, streams_[si]));
         HIP_CHECK(hipStreamSynchronize(streams_[si]));
-        HIP_CHECK(hipMemcpy(&new_k, ws.d_svd_info, sizeof(int), hipMemcpyDeviceToHost));
     } else {
         h_S_data = ws.h_svd_S.data();
         new_k = k;
