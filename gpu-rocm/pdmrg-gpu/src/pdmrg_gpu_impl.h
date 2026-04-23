@@ -2614,10 +2614,14 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
 
 template<typename Scalar>
 double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup, int n_polish, int n_recal) {
+    // Timer starts BEFORE env build — includes env build in total (timer_scope=include_env_build)
+    auto t_start = std::chrono::high_resolution_clock::now();
+
     build_initial_environments();
 
-    // Timer starts AFTER env build — measures sweep-to-convergence only
-    auto t_start = std::chrono::high_resolution_clock::now();
+    auto t_envs = std::chrono::high_resolution_clock::now();
+    double env_time = std::chrono::duration<double>(t_envs - t_start).count();
+    printf("  Environment build: %.3f s\n", env_time);
 
     // Warmup: single-site sweeps (cheaper eigsh: chi*d vs chi*d²)
     double warmup_energy = 0.0;
@@ -2758,6 +2762,7 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
            total_time > 0 ? 100.0 * warmup_sec / total_time : 0.0,
            total_time > 0 ? 100.0 * parallel_sec / total_time : 0.0,
            total_time > 0 ? 100.0 * polish_sec / total_time : 0.0);
+    printf("  env_build_sec: %.3f  timer_scope: include_env_build\n", env_time);
     report_timers();
 
     return energy_;

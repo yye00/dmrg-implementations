@@ -788,9 +788,15 @@ double DMRGGPUBase<Scalar>::sweep_right_to_left() {
 
 template<typename Scalar>
 double DMRGGPUBase<Scalar>::run(int n_sweeps) {
+    // Timer starts BEFORE env build — includes env build in total (timer_scope=include_env_build)
+    auto t_start = std::chrono::high_resolution_clock::now();
+
     build_initial_environments();
 
-    auto t_start = std::chrono::high_resolution_clock::now();
+    auto t_envs = std::chrono::high_resolution_clock::now();
+    double env_time = std::chrono::duration<double>(t_envs - t_start).count();
+    printf("  Environment build: %.3f s\n", env_time);
+
     double energy_prev = 0.0;
 
     for (int sweep = 0; sweep < n_sweeps; sweep++) {
@@ -806,6 +812,7 @@ double DMRGGPUBase<Scalar>::run(int n_sweeps) {
     double total_time = std::chrono::duration<double>(t_end - t_start).count();
     printf("Final energy: %.12f\n", energy_);
     printf("Total wall time: %.3f s\n", total_time);
+    printf("  env_build_sec: %.3f  timer_scope: include_env_build\n", env_time);
 
     return energy_;
 }

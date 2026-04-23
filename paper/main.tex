@@ -383,18 +383,18 @@ Results are reported per-flag in Section~\ref{sec:opt_ablation}.
 
 All GPU benchmarks were run on a single AMD Instinct MI300X accelerator (gfx942 architecture) with 304 compute units and 192~GB HBM3 memory providing 5.3~TB/s bandwidth.
 The peak FP64 throughput is 81.7~TFLOPS for matrix operations (MFMA instructions) and 40.9~TFLOPS for vector operations.
-The host CPU is an AMD EPYC processor.
+Host CPU on the MI300X system is an Intel Xeon Platinum 8470 (52 cores / 104 threads, 2 NUMA nodes, dual-socket). Host CPU on the H100 system is an Intel Xeon Platinum 8480C (56 cores / 112 threads, 2 NUMA nodes, dual-socket). Core counts and NUMA topology were captured by \texttt{lscpu} and \texttt{numactl --hardware} and are embedded in every result JSON's \texttt{provenance.host}.
 
 We deliberately restrict the GPU comparison to the MI300X.
 The natural NVIDIA counterpart, the H100, supports FP64 with significantly different hardware semantics: 33.5~TFLOPS FP64 vector and 67~TFLOPS FP64 tensor (the latter using a fused-MMA path with internal accumulation rules that differ from a fully native FP64 matrix unit) versus the MI300X's 81.7~TFLOPS native FP64 MFMA.
 Our preliminary H100 runs (in \texttt{benchmarks/paper\_results/h100/}, 18 matching configurations across two variants) show H100 wall times that are 0.18--1.65$\times$ those of the MI300X depending on $\chi$ and $L$, but disentangling native-vs-emulated FP64 contributions from algorithmic effects requires per-kernel profiling that is out of scope here.
 A controlled cross-vendor comparison is left to future work; the present study reports only single-vendor results to keep all measured speedups attributable to the algorithmic and software changes under investigation.
 
-The software environment consists of ROCm~7.2, rocBLAS (for GEMM), rocsolver (for GPU SVD, used in comparisons), and LAPACK via OpenBLAS~0.3.28 compiled from source.
-The system-provided OpenBLAS~0.3.20 was found to contain a bug in \texttt{dgesvd} that produced incorrect singular vectors; we compiled 0.3.28 as a workaround.
+The software environment consists of ROCm~7.2, rocBLAS (for GEMM), rocsolver (for GPU SVD, used in comparisons), and LAPACK via OpenBLAS.
+The exact OpenBLAS version and linkage are captured per-run by \texttt{ldd} and embedded in the result JSON's \texttt{provenance.rocm} field.
 All GPU code was compiled with \texttt{hipcc} (clang-based) targeting \texttt{gfx942}.
 
-CPU benchmarks used the quimb tensor network library \cite{Gray2018} (version 1.8) with cotengra \cite{Gray2021} for automatic contraction path optimization, backed by OpenBLAS with thread counts of 1, 2, 4, 8, and 12.
+CPU benchmarks used the quimb tensor network library \cite{Gray2018} (version 1.8) as a single-thread baseline (\texttt{OMP\_NUM\_THREADS=1}).
 
 \subsection{Benchmark methodology}
 \label{sec:methodology}
@@ -407,7 +407,7 @@ Reported times are from the internal ``Total wall time'' timer, which excludes o
 Correctness is validated against exact diagonalization energies for small systems ($L = 4$--$8$) and against converged quimb reference energies for larger systems, with a pass threshold of $|\Delta E| < 10^{-10}$.
 A total of 604 benchmark configurations were run for the main comparison (all implementations $\times$ all models $\times$ all sizes), plus 108 configurations for the GPU optimization scaling study.
 
-For CPU benchmarks, we report the best wall time across all thread counts (1, 2, 4, 8, 12) for each configuration, as the optimal thread count varies with problem size.
+For CPU benchmarks, we report the single-threaded wall time (\texttt{OMP\_NUM\_THREADS=1}) for each configuration.
 
 \subsection{Physics models}
 \label{sec:models}
@@ -450,11 +450,11 @@ We present the benchmark results in a sequence that traces a natural line of inq
 \label{sec:crossover}
 
 Table~\ref{tab:crossover} summarizes the win rates between GPU and CPU implementations across all converged benchmark configurations, stratified by bond dimension.
-A ``win'' is assigned to the fastest implementation for each $(L, \chi, \text{model})$ configuration, considering all GPU implementations and the best CPU result across thread counts.
+A ``win'' is assigned to the fastest implementation for each $(L, \chi, \text{model})$ configuration, considering all GPU implementations and the single-threaded CPU result (\texttt{OMP\_NUM\_THREADS=1}).
 
 \begin{table}[h]
 \centering
-\caption{Win rates by bond dimension. D1-GPU: single-site GPU DMRG; D2-GPU: two-site GPU DMRG; Q-D1, Q-D2: quimb single-/two-site with best thread count. All Newton--Schulz/Davidson variants achieve 0\% win rate and are omitted.}
+\caption{Win rates by bond dimension. D1-GPU: single-site GPU DMRG; D2-GPU: two-site GPU DMRG; Q-D1, Q-D2: quimb single-/two-site (\texttt{OMP\_NUM\_THREADS=1}). All Newton--Schulz/Davidson variants achieve 0\% win rate and are omitted.}
 \label{tab:crossover}
 \begin{tabular}{lcccc}
 \toprule
@@ -1012,7 +1012,7 @@ We acknowledge access to AMD Instinct MI300X hardware through Hot Aisle, Inc.\ f
 %% ============================================================
 
 Tables~\ref{tab:full_heisenberg}--\ref{tab:full_tfim} report wall times (seconds) for all converged benchmark configurations.
-For CPU implementations (Q-D1: quimb-dmrg1, Q-D2: quimb-dmrg2), the reported time is the best across thread counts (1, 2, 4, 8, 12).
+For CPU implementations (Q-D1: quimb-dmrg1, Q-D2: quimb-dmrg2), the reported time is the single-threaded run (\texttt{OMP\_NUM\_THREADS=1}).
 For GPU implementations (D1-GPU: dmrg-gpu, D2-GPU: dmrg2-gpu, PD-GPU: pdmrg-gpu with $P = 2$ segments), all runs use a single MI300X with CPU SVD.
 The fastest implementation for each configuration is shown in \textbf{bold}.
 A dash (---) indicates the implementation was not tested or did not converge for that configuration.
