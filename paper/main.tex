@@ -276,7 +276,7 @@ The intent was to replace the LAPACK SVD call with $\sim$10--20 GPU GEMMs, shift
 For single-site DMRG moving left-to-right, the MPS tensor $\theta$ is tall ($\chi_L d \times \chi_R$) and Newton--Schulz applies directly.
 For the reverse direction, $\theta$ is wide and we fall back to LAPACK SVD.
 Newton--Schulz was implemented in the CPU Python prototype (\texttt{cpu/pdmrg-opt/pdmrg/numerics/linalg\_utils.py}) but was not ported to HIP/rocBLAS for this study; GPU evaluation is left to future work.
-The numerical instability at high condition number (energy divergence $O(10^6)$--$O(10^{20})$ at $\chi \geq 128$ for the CPU prototype) motivates caution before a GPU port.
+Newton--Schulz is known to be sensitive to ill-conditioned inputs at high bond dimension; this numerical instability is a known concern for high-$\chi$ DMRG and motivates caution before a GPU port \cite{Schulz1933,Nakamura2020}.
 
 \subsection{Block-Davidson eigensolver}
 \label{sec:davidson}
