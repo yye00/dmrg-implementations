@@ -58,27 +58,58 @@ def git_info(repo_root=None):
 
 
 def host_info():
-    """Hostname, OS, Python version, CPU."""
+    """Hostname, OS, Python version, CPU (with lscpu/numactl for full picture)."""
     info = {
         "hostname":     socket.gethostname(),
         "fqdn":         socket.getfqdn(),
         "platform":     platform.platform(),
         "python":       sys.version.split()[0],
         "cpu":          platform.processor() or platform.machine(),
+        # platform.processor() returns 'x86_64' on Linux — useless for EPYC/Xeon
+        # distinction; capture full model name and topology instead.
+        "cpu_model":    _run(["sh", "-c",
+                              "lscpu | awk -F: '/Model name/ {print $2; exit}'"
+                              ]).strip(),
+        "lscpu":        _run(["lscpu"]),
+        "numactl":      _run(["numactl", "--hardware"]),
+        "meminfo":      _run(["sh", "-c",
+                              "grep -E 'MemTotal|HugePages' /proc/meminfo"]),
     }
     return info
 
 
 def gpu_info():
-    """Detect GPU (AMD or NVIDIA). Returns dict with vendor/model/driver."""
-    # Try ROCm first
-    rocm_out = _run(["rocm-smi", "--showproductname", "--csv"])
-    if rocm_out and "GPU" in rocm_out:
-        lines = [l for l in rocm_out.splitlines() if l.strip() and not l.startswith("device")]
+    """Detect GPU (AMD or NVIDIA). Returns dict with vendor/model/driver.
+
+    On VF (SR-IOV) the --showproductname --csv header is just
+    'device,Card series,...' with no 'GPU' token, so the old guard
+    `if 'GPU' in rocm_out` silently fell through to NVIDIA and returned
+    vendor='unknown'.  Fix: treat any non-empty rocm-smi stdout as AMD.
+    Also switch to --json for richer fields; on parse failure keep raw
+    stdout so the VF bytes are not lost.
+    """
+    import json as _json
+
+    # Try ROCm first (AMD / VF)
+    rocm_json = _run(["rocm-smi",
+                       "--showproductname", "--showmeminfo", "vram",
+                       "--showdriverversion", "--json"])
+    if rocm_json:
+        try:
+            parsed = _json.loads(rocm_json)
+        except Exception:
+            parsed = None
         return {
-            "vendor":       "AMD",
-            "rocm_smi":     rocm_out,
-            "count":        max(1, len(lines) - 1),  # minus header
+            "vendor":    "AMD",
+            "rocm_smi_json": parsed if parsed is not None else rocm_json,
+        }
+
+    # Fallback CSV probe (covers older ROCm that may not support --json)
+    rocm_csv = _run(["rocm-smi", "--showproductname", "--csv"])
+    if rocm_csv:
+        return {
+            "vendor":    "AMD",
+            "rocm_smi_csv": rocm_csv,
         }
 
     # Try NVIDIA
@@ -119,14 +150,25 @@ def binary_info(path):
     }
 
 
-def env_snapshot(prefixes=("DMRG_GPU_",), extra_keys=("OMP_NUM_THREADS",
-                                                        "OPENBLAS_NUM_THREADS",
-                                                        "MKL_NUM_THREADS",
-                                                        "HIP_VISIBLE_DEVICES",
-                                                        "CUDA_VISIBLE_DEVICES")):
-    """Snapshot of env vars relevant to the benchmark. Captures every var whose
-    name starts with any prefix (e.g. DMRG_GPU_OPT_*, DMRG_GPU_PROFILE) plus
-    the explicit extras."""
+def env_snapshot(prefixes=("DMRG_GPU_", "HIP_", "HSA_", "ROCM_",
+                            "OMP_", "OPENBLAS_", "MKL_", "BLIS_",
+                            "GOMP_", "KMP_", "LD_", "PATH"),
+                 extra_keys=("OMP_NUM_THREADS", "OMP_PLACES", "OMP_PROC_BIND",
+                             "OPENBLAS_NUM_THREADS",
+                             "MKL_NUM_THREADS",
+                             "GOMP_CPU_AFFINITY",
+                             "HIP_VISIBLE_DEVICES",
+                             "HIP_FORCE_DEV_KERNARG",
+                             "HSA_ENABLE_SDMA",
+                             "MIOPEN_FIND_MODE",
+                             "CUDA_VISIBLE_DEVICES")):
+    """Snapshot of env vars relevant to the benchmark.
+
+    The old prefix list `('DMRG_GPU_',)` captured nothing because no
+    benchmark script sets `DMRG_GPU_*` variables.  Extended to cover
+    all prefixes that actually appear in ROCm/HIP/OpenBLAS/OMP runtime
+    configurations used by the benchmark suite.
+    """
     snap = {}
     for k, v in os.environ.items():
         if any(k.startswith(p) for p in prefixes):
@@ -134,10 +176,35 @@ def env_snapshot(prefixes=("DMRG_GPU_",), extra_keys=("OMP_NUM_THREADS",
     for k in extra_keys:
         if k in os.environ:
             snap[k] = os.environ[k]
+    # NUMA binding info
+    snap["_numactl_show"] = _run(["numactl", "--show"])
     return snap
 
 
-def provenance_block(repo_root=None, script_argv=None):
+def rocm_versions(binary_path=None):
+    """Capture ROCm/HIP library versions for the benchmark environment.
+
+    Includes: /opt/rocm version file, dpkg package list for key libs,
+    hipconfig, and (if binary_path is given) ldd linkage for rocblas/rocsolver.
+    Embedded under provenance.rocm in the output JSON.
+    """
+    info = {
+        "rocm_version_file": _run(["sh", "-c",
+                                    "cat /opt/rocm/.info/version 2>/dev/null || "
+                                    "cat /opt/rocm/.info/version-dev 2>/dev/null"]),
+        "dpkg_rocm_libs":    _run(["sh", "-c",
+                                    "dpkg -l 2>/dev/null | "
+                                    "grep -E 'rocblas|rocsolver|hipblas|hipsolver' || true"]),
+        "hipconfig":         _run(["hipconfig", "--version"]),
+    }
+    if binary_path:
+        info["ldd_rocm"] = _run(["sh", "-c",
+                                   f"ldd {binary_path} 2>/dev/null | "
+                                   "grep -E 'rocblas|rocsolver' || true"])
+    return info
+
+
+def provenance_block(repo_root=None, script_argv=None, binary_path=None):
     """Full provenance block suitable for embedding at the top level of
     benchmark JSON output. Call once per run.
 
@@ -146,6 +213,8 @@ def provenance_block(repo_root=None, script_argv=None):
                    the calling script.
         script_argv: List of command-line args the benchmark script was
                      invoked with (sys.argv[1:] typically).
+        binary_path: Optional path to the benchmark binary; used by
+                     rocm_versions() to capture ldd linkage.
     """
     if repo_root is None:
         # Walk up from this file until we find a .git directory
@@ -160,6 +229,7 @@ def provenance_block(repo_root=None, script_argv=None):
         "git":             git_info(repo_root),
         "host":            host_info(),
         "gpu":             gpu_info(),
+        "rocm":            rocm_versions(binary_path),
         "env":             env_snapshot(),
         "script": {
             "path":      str(Path(sys.argv[0]).resolve()) if sys.argv else "",
