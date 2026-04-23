@@ -34,6 +34,8 @@ Next tick honors it. Typical latency: up to 30 min (one loop cycle).
 - [ ] note: booking Hot Aisle for Saturday 10am
 -->
 
+- [ ] merge #6
+- [ ] note: pre-authorized PR #6 merge; sandbox queue should drain B/C/E/I next.
 ## Processed
 
 <!-- Orchestrator appends here. Do not edit by hand. -->
