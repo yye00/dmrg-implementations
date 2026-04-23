@@ -191,7 +191,7 @@ void build_josephson_mpo(int L, int d, int D_mpo,
 // Heisenberg test (real)
 // ============================================================================
 int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
-                    int n_local, int n_warmup, bool gpu_svd,
+                    int n_local, int n_warmup, int n_polish, bool gpu_svd,
                     bool davidson, bool rsvd, bool quiet, bool batched_sweep,
                     bool chebyshev) {
     int d = 2;
@@ -230,7 +230,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
     build_heisenberg_mpo(L, D_mpo, h_mpo_tensors);
     pdmrg.set_mpo(h_mpo_tensors);
 
-    double energy = pdmrg.run(n_outer, n_local, n_warmup);
+    double energy = pdmrg.run(n_outer, n_local, n_warmup, n_polish);
 
     // Final energy already printed by run()
 
@@ -252,7 +252,7 @@ int test_heisenberg(int L, int chi_max, int n_outer, int n_segments,
 // TFIM test (real)
 // ============================================================================
 int test_tfim(int L, int chi_max, int n_outer, int n_segments,
-              int n_local, int n_warmup, bool gpu_svd,
+              int n_local, int n_warmup, int n_polish, bool gpu_svd,
               bool davidson, bool rsvd, double J, double h_field, bool quiet, bool batched_sweep,
               bool chebyshev) {
     int d = 2;
@@ -285,7 +285,7 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
     build_tfim_mpo(L, D_mpo, J, h_field, h_mpo_tensors);
     pdmrg.set_mpo(h_mpo_tensors);
 
-    double energy = pdmrg.run(n_outer, n_local, n_warmup);
+    double energy = pdmrg.run(n_outer, n_local, n_warmup, n_polish);
 
     // Final energy already printed by run()
     if (!quiet) printf("Energy per site: %.12f\n", energy / L);
@@ -298,7 +298,7 @@ int test_tfim(int L, int chi_max, int n_outer, int n_segments,
 // Josephson Junction test (complex128)
 // ============================================================================
 int test_josephson(int L, int chi_max, int n_outer, int n_segments,
-                   int n_local, int n_warmup, bool gpu_svd,
+                   int n_local, int n_warmup, int n_polish, bool gpu_svd,
                    bool davidson, bool rsvd, int n_max, double E_J, double E_C, double phi_ext,
                    bool quiet, bool batched_sweep, bool chebyshev) {
     int d = 2 * n_max + 1;
@@ -341,7 +341,7 @@ int test_josephson(int L, int chi_max, int n_outer, int n_segments,
     build_josephson_mpo(L, d, D_mpo, E_J, E_C, 0.0, n_max, phi_ext, h_mpo_tensors);
     pdmrg.set_mpo(h_mpo_tensors);
 
-    double energy = pdmrg.run(n_outer, n_local, n_warmup);
+    double energy = pdmrg.run(n_outer, n_local, n_warmup, n_polish);
 
     // Final energy already printed by run()
 
@@ -368,7 +368,8 @@ int main(int argc, char** argv) {
     int n_outer = 20;
     int n_segments = 2;
     int n_local = 2;
-    int n_warmup = 3;
+    int n_warmup = 1;  // CLAUDE.md compliant: n_warmup <= 2
+    int n_polish = 0;  // CLAUDE.md compliant: n_polish <= 2; 0 = skip polish phase
     bool gpu_svd = true;
     bool davidson = false;  // default: use Lanczos eigensolver
     bool rsvd = false;      // default: no randomized SVD
@@ -398,6 +399,7 @@ int main(int argc, char** argv) {
             if (std::string(argv[i]) == "--segments" && i+1 < argc) { n_segments = std::atoi(argv[++i]); continue; }
             if (std::string(argv[i]) == "--local-sweeps" && i+1 < argc) { n_local = std::atoi(argv[++i]); continue; }
             if (std::string(argv[i]) == "--warmup" && i+1 < argc) { n_warmup = std::atoi(argv[++i]); continue; }
+            if (std::string(argv[i]) == "--polish" && i+1 < argc) { n_polish = std::atoi(argv[++i]); continue; }
             if (std::string(argv[i]) == "--nmax" && i+1 < argc) { n_max = std::atoi(argv[++i]); continue; }
             if (std::string(argv[i]) == "--ej" && i+1 < argc) { E_J = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--ec" && i+1 < argc) { E_C = std::atof(argv[++i]); continue; }
@@ -412,15 +414,15 @@ int main(int argc, char** argv) {
 
     try {
         if (run_josephson) {
-            return test_josephson(L, chi_max, n_outer, n_segments, n_local, n_warmup,
+            return test_josephson(L, chi_max, n_outer, n_segments, n_local, n_warmup, n_polish,
                                   gpu_svd, davidson, rsvd, n_max, E_J, E_C, phi_ext,
                                   quiet, batched_sweep, chebyshev);
         } else if (run_tfim) {
-            return test_tfim(L, chi_max, n_outer, n_segments, n_local, n_warmup,
+            return test_tfim(L, chi_max, n_outer, n_segments, n_local, n_warmup, n_polish,
                              gpu_svd, davidson, rsvd, J_tfim, h_field,
                              quiet, batched_sweep, chebyshev);
         } else {
-            return test_heisenberg(L, chi_max, n_outer, n_segments, n_local, n_warmup,
+            return test_heisenberg(L, chi_max, n_outer, n_segments, n_local, n_warmup, n_polish,
                                    gpu_svd, davidson, rsvd, quiet, batched_sweep,
                                    chebyshev);
         }

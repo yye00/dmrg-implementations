@@ -3302,7 +3302,7 @@ double PDMRGGPUOpt<Scalar>::merge_and_optimize_boundaries(int parity) {
 // ============================================================================
 
 template<typename Scalar>
-double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup) {
+double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup, int n_polish) {
     const char* type_name = Traits::is_complex ? "complex128" : "float64";
     printf("=== PDMRG-GPU-OPT (MFMA-16 pad + %s, %s) ===\n",
            use_batched_sweep_ ? "cross-seg batched" : "per-seg streams", type_name);
@@ -3389,8 +3389,9 @@ double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_wa
     // environments left by parallel segment sweeps. Required for segments>1:
     // without it, energy plateaus at ~3.6e-5 above the two-site optimum.
     // K-consecutive stop filters transient plateaus from threading noise.
-    if (n_segments_ > 1) {
-        int n_polish = 10;
+    // n_polish is a CLI-overridable parameter (--polish); n_polish=0 cleanly skips
+    // the phase (no recalibration exists in this variant per ground truth).
+    if (n_segments_ > 1 && n_polish > 0) {
         int consecutive = 0;
         const int K = 3;
         build_initial_environments();
