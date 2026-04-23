@@ -219,7 +219,7 @@ def _rocm_smi_rep_postamble(pre, pinned_sclk_mhz=1900):
 # ─── GPU runner ──────────────────────────────────────────────────────────────
 
 def _parse_gpu_output(stdout):
-    energy, wall_time = None, None
+    energy, wall_time, env_build_sec, timer_scope = None, None, None, None
     for line in stdout.split("\n"):
         m = re.search(r"(?:Final|Ground state)\s+energy:\s+([-\d.eE+]+)", line)
         if m:
@@ -227,7 +227,13 @@ def _parse_gpu_output(stdout):
         m = re.search(r"(?:Total\s+)?[Ww]all\s+time:\s+([-\d.eE+]+)", line)
         if m:
             wall_time = float(m.group(1))
-    return energy, wall_time
+        m = re.search(r"env_build_sec:\s*([\d.eE+\-]+)", line)
+        if m:
+            env_build_sec = float(m.group(1))
+        m = re.search(r"timer_scope:\s*(\S+)", line)
+        if m:
+            timer_scope = m.group(1)
+    return energy, wall_time, env_build_sec, timer_scope
 
 
 def _build_gpu_cmd(impl, model, L, chi, sweeps,
@@ -293,12 +299,12 @@ def run_gpu(impl, model, L, chi, sweeps, warmup=True, timeout=None,
             return {"energy": None, "time": None, "success": False,
                     "error": (result.stderr or f"rc={result.returncode}")[-500:],
                     "cmd": cmd_rel}
-        energy, wt = _parse_gpu_output(result.stdout)
+        energy, wt, env_build_sec, timer_scope = _parse_gpu_output(result.stdout)
         if energy is None:
             return {"energy": None, "time": None, "success": False,
                     "error": f"No energy: {result.stdout[-300:]}",
                     "cmd": cmd_rel}
-        return {"energy": energy, "time": wt, "success": True, "cmd": cmd_rel}
+        return {"energy": energy, "time": wt, "env_build_sec": env_build_sec, "timer_scope": timer_scope, "success": True, "cmd": cmd_rel}
     except subprocess.TimeoutExpired:
         return {"energy": None, "time": None, "success": False,
                 "error": f"Timeout ({timeout}s)", "cmd": cmd_rel}
@@ -451,6 +457,7 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
         is_gpu = impl in GPU_IMPLS
         times = []
         energies = []
+        env_build_secs = []  # per-rep env_build_sec values (GPU only)
         rocm_states = []   # per-rep {pre, post, pin_rc, throttled, cotenant_changed}
         last_err = None
         last_cmd = None
@@ -483,6 +490,8 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
             if r.get("success"):
                 times.append(r["time"])
                 energies.append(r["energy"])
+                if is_gpu and r.get("env_build_sec") is not None:
+                    env_build_secs.append(r["env_build_sec"])
                 if is_gpu:
                     rocm_states.append({
                         "rep": rep,
@@ -522,6 +531,8 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
                 "rocm_states": rocm_states if is_gpu else None,
                 "any_throttled": any(s.get("throttled") for s in rocm_states) if rocm_states else None,
                 "any_cotenant_changed": any(s.get("cotenant_changed") for s in rocm_states) if rocm_states else None,
+                "timer_scope": "include_env_build" if is_gpu else None,
+                "env_build_sec": (sorted(env_build_secs)[len(env_build_secs) // 2] if env_build_secs else None),
             }
         else:
             row = {
