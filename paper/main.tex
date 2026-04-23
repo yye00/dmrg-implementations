@@ -1,7 +1,8 @@
 \documentclass[preprint,12pt]{elsarticle}
 
 \usepackage{lineno}
-\usepackage{hyperref}
+\usepackage[hyphens]{url}
+\usepackage[breaklinks=true]{hyperref}
 \usepackage{booktabs}
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx}
@@ -25,6 +26,14 @@
 \cortext[cor1]{Corresponding author.}
 \affiliation[inst1]{organization={}, city={}, country={}}
 
+\begin{highlights}
+\item Systematic benchmark: 11 DMRG implementations, 3 physics models, $L{=}8$--$128$, $\chi{=}20$--$256$.
+\item At $\chi{\leq}50$, a single CPU core outperforms the 304-CU MI300X in 93\% of cases.
+\item CPU LAPACK SVD consumes 97--98\% of per-sweep time at $\chi{=}256$, capping GPU speedups.
+\item Newton--Schulz, Block-Davidson, Chebyshev filtering: all fail at $\chi{\leq}256$.
+\item Randomized SVD wins 5--6$\times$ only in 2-site DMRG; HIP graph capture wins 1.2--1.8$\times$ in parallel DMRG.
+\end{highlights}
+
 \begin{abstract}
 We present a systematic performance study of eleven density matrix renormalization group (DMRG) implementations, ranging from Python/CPU to hand-tuned GPU kernels in HIP/C++ targeting the AMD Instinct MI300X.
 The implementations span single-site and two-site DMRG, real-space parallel DMRG with domain decomposition, and an additive two-level parallel variant (A2DMRG), tested across three physics models: the Heisenberg spin-$\frac{1}{2}$ chain ($d=2$, real), a Josephson junction array ($d=5$, complex), and the transverse-field Ising model at criticality ($d=2$, real).
@@ -47,6 +56,25 @@ DMRG \sep GPU computing \sep tensor networks \sep AMD MI300X \sep performance be
 \end{keyword}
 
 \end{frontmatter}
+
+%% ============================================================
+\begin{center}
+\textbf{PROGRAM SUMMARY}
+\end{center}
+\begingroup
+\raggedright
+\emph{Program Title:} \texttt{dmrg-implementations}\\
+\emph{CPC Library link to program files:} (to be added on acceptance)\\
+\emph{Developer's repository link:} \url{https://github.com/yye00/dmrg-implementations}\\
+\emph{Code Ocean capsule:} (not used)\\
+\emph{Licensing provisions:} MIT\\
+\emph{Programming language:} C++17 (\SI{\sim 12}{kLOC}), Python 3 (\SI{\sim 6}{kLOC}), MPI (mpi4py) for A2DMRG; GPU code in HIP/C++ targeting ROCm 7.2\\
+\emph{External libraries/dependencies:} rocBLAS, rocsolver, HIP (ROCm 7.2+); OpenBLAS 0.3.28+ (source-built), LAPACK; quimb 1.8, cotengra, NumPy; mpi4py for parallel Python\\
+\emph{Supplementary material:} none\\[0.5em]
+\emph{Nature of problem:} Ground-state computation of one-dimensional quantum lattice models via the density matrix renormalization group (DMRG). Per-bond work is dominated by tensor contractions (GEMM, $O(\chi^3 d^2)$) and singular value decompositions, with moderate bond dimensions $\chi \in [20, 256]$ straddling the CPU--GPU crossover.\\[0.5em]
+\emph{Solution method:} Eleven DMRG variants spanning single-site and two-site sweeps, domain-decomposition parallel DMRG \cite{Stoudenmire2013}, an additive two-level variant (A2DMRG) \cite{Grigori2025}, and three algorithmic alternatives designed to increase BLAS-3 utilization (Newton--Schulz polar decomposition, Block-Davidson eigensolver, Chebyshev-filtered subspace iteration). All GPU variants share a common env-var-gated ablation framework (six micro-optimizations: DEVICE\_K, LANCZOS\_GRAPH, RSVD, SPARSE\_MPO, FUSE\_LANCZOS, D\_PAD) so each flag's effect can be measured in isolation on the same binary. Benchmarks run across three physics models (Heisenberg chain, Josephson-junction array, transverse-field Ising) at system sizes up to $L=128$.\\[0.5em]
+\emph{Additional comments:} All results in this paper were generated on the AMD Instinct MI300X (gfx942, ROCm 7.2). Each result JSON embeds git commit SHA, binary SHA-256, runtime CLI, and environment variable snapshot for reproducibility.
+\endgroup
 
 %% ============================================================
 \section{Introduction}
@@ -285,7 +313,7 @@ The fundamental mismatch---a method designed for many eigenvalues applied to a s
 \emph{Hypothesis}: Batching GEMM calls across parallel segments reduces per-kernel launch overhead, the dominant cost at moderate $\chi$.
 
 For parallel DMRG, we implemented a lock-step sweep mode that batches GEMM calls across segments.
-Instead of each segment independently dispatching GEMMs on its own stream, segments with matching bond dimensions are grouped and their GEMMs are dispatched as a single \texttt{rocblas\_gemm\_batched} call.
+Instead of each segment independently dispatching GEMMs on its own stream, segments with matching bond dimensions are grouped and their GEMMs are dispatched as a single batched-GEMM call (\texttt{rocblas\_gemm\_\allowbreak batched}).
 This was intended to reduce per-kernel launch overhead by combining $P$ small GEMMs into one batched dispatch.
 Section~\ref{sec:opt_failure} reports that the lock-step synchronization serializes other operations, making this slower in 18 of 19 configurations.
 
@@ -326,7 +354,7 @@ The five algorithmic variants above are large-grain hypotheses: each replaces an
 A complementary question is whether smaller, BLAS-3-preserving optimizations of the existing baseline---targeting kernel launch overhead, memory traffic, or specific sub-bottlenecks---can move the needle without changing the algorithm.
 
 To answer this systematically, we built an env-var-gated ablation framework.
-Each of six independent optimizations is a runtime flag (\texttt{DMRG\_GPU\_OPT\_<NAME>=1}) wired into every \texttt{-gpu} and \texttt{-gpu-opt} variant via a shared \texttt{GpuOpts} struct, so the same binary reproduces baseline numerics with all flags off and exercises any combination otherwise.
+Each of six independent optimizations is a runtime flag (\texttt{DMRG\_GPU\_\allowbreak OPT\_<NAME>=1}) wired into every \texttt{-gpu} and \texttt{-gpu-opt} variant via a shared \texttt{GpuOpts} struct, so the same binary reproduces baseline numerics with all flags off and exercises any combination otherwise.
 The six flags target distinct mechanisms:
 
 \begin{itemize}
@@ -334,7 +362,7 @@ The six flags target distinct mechanisms:
 \item \textbf{LANCZOS\_GRAPH}: capture each variant's \texttt{apply\_heff} call as a HIP graph keyed on $(\text{site}, \chi_L, \chi_R)$ and replay on subsequent Lanczos iterations; amortizes per-kernel launch overhead across the inner loop.
 \item \textbf{RSVD}: Halko--Martinsson--Tropp randomized SVD for the bond-splitting step, replacing \texttt{rocsolver\_gesvd} with the chain $Y = A\Omega$, $Q = \mathrm{qr}(Y)$, $B = Q^H A$, small SVD of $B$, $U = Q\,U_\text{small}$.
 \item \textbf{SPARSE\_MPO}: detect zero rows and columns of the fused MPO matrix at construction time and compact the Step~1 / Step~3 batched GEMMs in \texttt{apply\_heff} accordingly.
-\item \textbf{FUSE\_LANCZOS}: replace the per-iteration sequential rocBLAS \texttt{axpy}+\texttt{axpy}+\texttt{memcpy}+\texttt{scal} chain with two fused kernels (one for $w := w - \alpha v_i - \beta v_{i-1}$, one for $v_{i+1} := w / \beta_i$).
+\item \textbf{FUSE\_LANCZOS}: replace the per-iteration rocBLAS axpy/memcpy/scal chain with two fused kernels (one for $w := w - \alpha v_i - \beta v_{i-1}$, the other for $v_{i+1} := w / \beta_i$).
 \item \textbf{D\_PAD}: round the MPO bond dimension up to the next multiple of 8 (zero-filling padded rows/columns of $W$) for MFMA-friendly GEMM shapes.
 \end{itemize}
 
@@ -738,24 +766,26 @@ Table~\ref{tab:opt_ablation} reports the speedup of each flag on its own (\emph{
 A speedup $> 1.05\times$ is highlighted; values within $\pm 5\%$ of unity are reported as ``--'' (within run-to-run noise).
 Crashes or correctness violations are marked $\dagger$.
 
-\begin{table*}[t]
+\begin{table}[t]
 \centering
-\caption{Per-flag speedup over the variant baseline at $\chi=128$ / $\chi=256$ on Josephson $L=32$, $n_\text{max}=2$.  Bold = $>1.05\times$ speedup; dash = within $\pm 5\%$ of baseline; n/a = flag inapplicable to that variant; $\dagger$ = crash, see text.  Sample: median of 3 repeats per cell.}
+\caption{Per-flag median speedup over the variant baseline on Josephson $L=32$, $n_\text{max}=2$, median of three repeats per cell.  Each cell shows $\chi=128\ /\ \chi=256$.  Bold = $>1.05\times$; em-dash = within $\pm 5\%$ of baseline; n/a = flag inapplicable; $\dagger$ = flag force-disabled at construction (Block-Davidson incompatibility, see text).}
 \label{tab:opt_ablation}
 \small
-\begin{tabular}{lcccccc}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l@{\hspace{4pt}}cccccc}
 \toprule
-Variant & DEVICE\_K & LANCZOS\_GRAPH & RSVD & SPARSE\_MPO & FUSE\_LANCZOS & D\_PAD \\
+ & \texttt{dmrg-} & \texttt{dmrg2-} & \texttt{pdmrg-} & \texttt{dmrg-} & \texttt{dmrg2-} & \texttt{pdmrg-} \\
+Flag & \texttt{gpu} & \texttt{gpu} & \texttt{gpu} & \texttt{gpu-opt} & \texttt{gpu-opt} & \texttt{gpu-opt} \\
 \midrule
-\texttt{dmrg-gpu}      & --/--             & --/--                              & --/--                            & --/--                              & --/--             & --/-- \\
-\texttt{dmrg2-gpu}     & --/1.02$\times$   & 0.99$\times$/0.81$\times$          & \textbf{5.49$\times$/6.29$\times$} & \textbf{1.15$\times$/1.31$\times$} & --/0.81$\times$   & \textbf{1.14$\times$}/-- \\
-\texttt{pdmrg-gpu}     & 1.01$\times$/--   & \textbf{1.18$\times$/1.77$\times$} & --/--                            & --/--                              & --/--             & --/-- \\
-\texttt{dmrg-gpu-opt}  & n/a               & $\dagger$                          & n/a                              & --/--                              & --/--             & --/-- \\
-\texttt{dmrg2-gpu-opt} & n/a               & $\dagger$                          & n/a                              & 0.95$\times$/--                    & --/--             & 1.01$\times$/-- \\
-\texttt{pdmrg-gpu-opt} & --/--             & 1.02$\times$/-- (Lanczos only)     & n/a                              & --/--                              & --/--             & --/-- \\
+\texttt{DEVICE\_K}      & --/--           & --/1.02         & 1.01/--                              & n/a          & n/a          & --/-- \\
+\texttt{LANCZOS\_GRAPH} & --/--           & 0.99/0.81       & \textbf{1.18}/\textbf{1.77}          & $\dagger$    & $\dagger$    & 1.02/-- \\
+\texttt{RSVD}           & --/--           & \textbf{5.49}/\textbf{6.29} & --/--                      & n/a          & n/a          & n/a   \\
+\texttt{SPARSE\_MPO}    & --/--           & \textbf{1.15}/\textbf{1.31} & --/--                      & --/--        & 0.95/--      & --/-- \\
+\texttt{FUSE\_LANCZOS}  & --/--           & --/0.81         & --/--                                & --/--        & --/--        & --/-- \\
+\texttt{D\_PAD}         & --/--           & \textbf{1.14}/--& --/--                                & --/--        & 1.01/--      & --/-- \\
 \bottomrule
 \end{tabular}
-\end{table*}
+\end{table}
 
 \begin{figure}[t]
 \centering
@@ -942,6 +972,12 @@ More broadly, our experience suggests that porting an algorithm to a GPU is not 
 All source code (11 implementations in Python, Python/MPI, and C++/HIP), benchmark scripts, and raw benchmark data are available at \url{https://github.com/yye00/dmrg-implementations}.
 
 %% ============================================================
+\section*{CRediT authorship contribution statement}
+%% ============================================================
+
+\textbf{Yaakoub El~Khamra}: Conceptualization, Methodology, Software, Validation, Formal analysis, Investigation, Data curation, Writing -- original draft, Writing -- review \& editing, Visualization.
+
+%% ============================================================
 \section*{Declaration of competing interest}
 %% ============================================================
 
@@ -959,8 +995,7 @@ Benchmark results are stored in JSON format in the \texttt{benchmarks/paper\_res
 \section*{Acknowledgments}
 %% ============================================================
 
-%% TODO: Add acknowledgments for compute access, funding, etc.
-We acknowledge access to AMD Instinct MI300X hardware for benchmarking.
+We acknowledge access to AMD Instinct MI300X hardware through Hot Aisle, Inc.\ for the benchmarking reported in this work.
 
 \bibliographystyle{elsarticle-num}
 \bibliography{refs}
