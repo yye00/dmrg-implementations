@@ -385,6 +385,11 @@ All GPU benchmarks were run on a single AMD Instinct MI300X accelerator (gfx942 
 The peak FP64 throughput is 81.7~TFLOPS for matrix operations (MFMA instructions) and 40.9~TFLOPS for vector operations.
 The host CPU is an AMD EPYC processor.
 
+We deliberately restrict the GPU comparison to the MI300X.
+The natural NVIDIA counterpart, the H100, supports FP64 with significantly different hardware semantics: 33.5~TFLOPS FP64 vector and 67~TFLOPS FP64 tensor (the latter using a fused-MMA path with internal accumulation rules that differ from a fully native FP64 matrix unit) versus the MI300X's 81.7~TFLOPS native FP64 MFMA.
+Our preliminary H100 runs (in \texttt{benchmarks/paper\_results/h100/}, 18 matching configurations across two variants) show H100 wall times that are 0.18--1.65$\times$ those of the MI300X depending on $\chi$ and $L$, but disentangling native-vs-emulated FP64 contributions from algorithmic effects requires per-kernel profiling that is out of scope here.
+A controlled cross-vendor comparison is left to future work; the present study reports only single-vendor results to keep all measured speedups attributable to the algorithmic and software changes under investigation.
+
 The software environment consists of ROCm~7.2, rocBLAS (for GEMM), rocsolver (for GPU SVD, used in comparisons), and LAPACK via OpenBLAS~0.3.28 compiled from source.
 The system-provided OpenBLAS~0.3.20 was found to contain a bug in \texttt{dgesvd} that produced incorrect singular vectors; we compiled 0.3.28 as a workaround.
 All GPU code was compiled with \texttt{hipcc} (clang-based) targeting \texttt{gfx942}.
