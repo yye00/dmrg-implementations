@@ -2402,9 +2402,14 @@ double PDMRGMultiGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
 
 template<typename Scalar>
 double PDMRGMultiGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup) {
+    // Timer starts BEFORE env build — includes env build in total (timer_scope=include_env_build)
+    auto t_start = std::chrono::high_resolution_clock::now();
+
     build_initial_environments();
 
-    auto t_start = std::chrono::high_resolution_clock::now();
+    auto t_envs = std::chrono::high_resolution_clock::now();
+    double env_time = std::chrono::duration<double>(t_envs - t_start).count();
+    printf("  Environment build: %.3f s\n", env_time);
 
     // Warmup: single-site sweeps on device 0 (full chain gathered there)
     double warmup_energy = 0.0;
@@ -2509,6 +2514,7 @@ double PDMRGMultiGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_
     double total_time = std::chrono::duration<double>(t_end - t_start).count();
     printf("Final energy: %.12f\n", energy_);
     printf("Total wall time: %.3f s (using %d GPUs)\n", total_time, n_devices_);
+    printf("  env_build_sec: %.3f  timer_scope: include_env_build\n", env_time);
 
     return energy_;
 }
