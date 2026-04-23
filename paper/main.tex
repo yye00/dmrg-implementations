@@ -669,6 +669,10 @@ First, the original paper reports theoretical per-processor FLOP counts, not wal
 Second, quantum chemistry Hamiltonians have all-to-all MPO structure that may favor the coarse-space correction more than the constant-$D$ MPOs of lattice models.
 Third, the rank-growth initialization strategy used in the original paper avoids the large compression ratios that degrade our cold-start results.
 
+Grigori and Hassan \cite{Grigori2025} targeted the \emph{large-$d$, large-bond-dimension} regime where the asymptotic FLOP advantage of the additive correction dominates.
+Our test points (Heisenberg $L \leq 64$, $\chi \leq 512$) sit at the small end of that regime; an unfavorable result here is consistent with their published crossover analysis and should not be read as a refutation of A2DMRG.
+We did not contact the original authors before submission; a corrected re-evaluation for the lattice-model regime will be considered for a follow-up note.
+
 Neither form of parallelism widens the GPU's competitive window.  Perhaps a different tactic---replacing the algorithms themselves with GPU-friendlier variants---can succeed where parallelism failed.
 
 \subsection{Algorithmic variants: can smarter algorithms help?}
@@ -898,6 +902,7 @@ A2DMRG \cite{Grigori2025} illustrates a subtler failure mode: the algorithm is m
 The underlying issue is that A2DMRG's additive (Jacobi-like) correction cannot compete with standard DMRG's multiplicative (Gauss--Seidel-like) sweep for sequential convergence rate.  Parallelism could compensate if the per-iteration cost were sufficiently reduced, but A2DMRG's linear combination phase inflates the bond dimension to $(L-1) \times \chi$, and the subsequent TT-SVD compression---an $O(L \chi^3)$ serial SVD chain---is both slow and lossy.  At $L = 32$, $\chi = 20$, the 31:1 compression ratio destroys the information that the parallel local solves produced.
 
 This is not merely an implementation issue.  The algorithm's design requires that the compression ratio grow linearly with $L$, creating a fundamental tension between system size and accuracy.  The original paper \cite{Grigori2025} operates in a regime ($d \leq 24$, rank-growth initialization) where this tension is manageable; our lattice-model tests expose the scaling limit.
+Within our tested regime A2DMRG was not competitive on wall-clock time; the regime where it was designed to win---large $d$, large $\chi$, many parallel processors---lies above our bond-dimension ceiling.
 
 \subsection{When would GPU DMRG win?}
 \label{sec:when_gpu_wins}
@@ -905,7 +910,9 @@ This is not merely an implementation issue.  The algorithm's design requires tha
 The three structural barriers---small-matrix overhead, SVD ceiling, and compression loss---point to the conditions under which GPU DMRG would provide clear advantages:
 
 \paragraph{Large bond dimensions ($\chi \gtrsim 1024$).}
-At large $\chi$, both the GEMM and SVD matrices exceed the size thresholds where GPU hardware reaches high occupancy.  Newton--Schulz's $30\times$ FLOP overhead would need to be offset by a $> 30\times$ GPU/CPU throughput ratio, which the MI300X can achieve only at $n \gtrsim 2048$.  The numerical stability of Newton--Schulz at large condition numbers remains a concern.
+Extrapolating sweep-time scaling from $\chi \in \{64, 128, 256, 512\}$, we \emph{conjecture} a CPU/GPU crossover near $\chi \sim 1024$ on the MI300X: both GEMM and SVD matrices would exceed the size thresholds where GPU hardware reaches high occupancy, and Newton--Schulz's $30\times$ FLOP overhead could in principle be offset by a $> 30\times$ GPU/CPU throughput ratio.
+We have not measured this regime; the conjecture rests on (i)~the empirical exponent fit and (ii)~the asymptotic $\chi^3$ GEMM/SVD argument, and should not be cited as a measured result.
+The numerical stability of Newton--Schulz at large condition numbers remains a separate open question.
 
 \paragraph{Multi-GPU parallelism.}
 The real-space parallel DMRG algorithm \cite{Stoudenmire2013} was designed for distributed-memory systems with one segment per processor.
