@@ -30,7 +30,7 @@
 \item Systematic benchmark: 11 DMRG implementations, 3 physics models, $L{=}8$--$128$, $\chi{=}20$--$256$.
 \item At $\chi{\leq}50$, a single CPU core outperforms the 304-CU MI300X in 93\% of cases.
 \item CPU LAPACK SVD consumes 97--98\% of per-sweep time at $\chi{=}256$, capping GPU speedups.
-\item Newton--Schulz, Block-Davidson, Chebyshev filtering: all fail at $\chi{\leq}256$.
+\item Block-Davidson ($b{=}4$) with host-side LAPACK SVD achieves 0\% win rate at $\chi{\leq}256$; Newton--Schulz and CheFSI are discussed as alternatives but not measured on GPU.
 \item Randomized SVD wins 5--6$\times$ only in 2-site DMRG; HIP graph capture wins 1.2--1.8$\times$ in parallel DMRG.
 \end{highlights}
 
@@ -44,8 +44,7 @@ In 27 of 29 CPU-win configurations (93\%), a \emph{single} CPU core already outp
 Two-site DMRG converges $3.3\times$ faster than single-site at large system sizes ($L = 100$, $\chi = 128$: 53~s vs.\ 177~s).
 
 We report extensive negative results on algorithmic optimizations designed to exploit the MI300X's BLAS-3 throughput.
-Newton--Schulz iterative polar decomposition, intended to replace SVD with GEMM-heavy iterations, achieves 0\% win rate across 50 configurations and diverges numerically at $\chi \geq 128$.
-Chebyshev-filtered subspace iteration, designed for computing many eigenvalues in density functional theory, is $1.9$--$11\times$ slower than Lanczos for DMRG's single ground state.
+A Block-Davidson ($b{=}4$) eigensolver variant, deployed with a host-side LAPACK SVD path, achieves 0\% win rate across all tested (model, $L$, $\chi$) cells; Newton--Schulz polar decomposition and Chebyshev-filtered subspace iteration are explored as CPU-prototype alternatives and discussed in \S\ref{sec:variants}, but were not measured on GPU in this study.
 Cross-segment batched GEMM dispatch is slower in 18 of 19 configurations tested.
 Profiling reveals the root cause: CPU LAPACK SVD consumes 97--98\% of per-sweep wall time at $\chi = 256$, and iterative GPU replacements cannot match LAPACK's optimized QR-iteration algorithm at these matrix sizes.
 All source code, benchmark scripts, and raw data are publicly available.
@@ -72,7 +71,7 @@ DMRG \sep GPU computing \sep tensor networks \sep AMD MI300X \sep performance be
 \emph{External libraries/dependencies:} rocBLAS, rocsolver, HIP (ROCm 7.2+); OpenBLAS 0.3.28+ (source-built), LAPACK; quimb 1.8, cotengra, NumPy; mpi4py for parallel Python\\
 \emph{Supplementary material:} none\\[0.5em]
 \emph{Nature of problem:} Ground-state computation of one-dimensional quantum lattice models via the density matrix renormalization group (DMRG). Per-bond work is dominated by tensor contractions (GEMM, $O(\chi^3 d^2)$) and singular value decompositions, with moderate bond dimensions $\chi \in [20, 256]$ straddling the CPU--GPU crossover.\\[0.5em]
-\emph{Solution method:} Eleven DMRG variants spanning single-site and two-site sweeps, domain-decomposition parallel DMRG \cite{Stoudenmire2013}, an additive two-level variant (A2DMRG) \cite{Grigori2025}, and three algorithmic alternatives designed to increase BLAS-3 utilization (Newton--Schulz polar decomposition, Block-Davidson eigensolver, Chebyshev-filtered subspace iteration). All GPU variants share a common env-var-gated ablation framework (six micro-optimizations: DEVICE\_K, LANCZOS\_GRAPH, RSVD, SPARSE\_MPO, FUSE\_LANCZOS, D\_PAD) so each flag's effect can be measured in isolation on the same binary. Benchmarks run across three physics models (Heisenberg chain, Josephson-junction array, transverse-field Ising) at system sizes up to $L=128$.\\[0.5em]
+\emph{Solution method:} Eleven DMRG variants spanning single-site and two-site sweeps, domain-decomposition parallel DMRG \cite{Stoudenmire2013}, an additive two-level variant (A2DMRG) \cite{Grigori2025}, and three algorithmic alternatives designed to increase BLAS-3 utilization (Block-Davidson eigensolver (with host-side LAPACK SVD)). All GPU variants share a common env-var-gated ablation framework (six micro-optimizations: DEVICE\_K, LANCZOS\_GRAPH, RSVD, SPARSE\_MPO, FUSE\_LANCZOS, D\_PAD) so each flag's effect can be measured in isolation on the same binary. Benchmarks run across three physics models (Heisenberg chain, Josephson-junction array, transverse-field Ising) at system sizes up to $L=128$.\\[0.5em]
 \emph{Additional comments:} All results in this paper were generated on the AMD Instinct MI300X (gfx942, ROCm 7.2). Each result JSON embeds git commit SHA, binary SHA-256, runtime CLI, and environment variable snapshot for reproducibility.
 \endgroup
 
@@ -260,7 +259,7 @@ The baseline GPU DMRG of Section~\ref{sec:methods} wins at high $\chi$ and small
 This section describes five algorithmic modifications, each motivated by a specific hypothesis about how to shift computation toward the GPU's strengths.
 All five hypotheses were tested and all five were rejected by the benchmark data; the details of each failure are reported in Section~\ref{sec:opt_failure}.
 
-\subsection{Newton--Schulz polar decomposition}
+\subsection{Newton--Schulz polar decomposition (CPU prototype; not deployed on GPU)}
 \label{sec:newton_schulz}
 
 \emph{Hypothesis}: Replacing the BLAS-2-dominated SVD with GEMM iterations should shift the dominant computation to the GPU's strength, reducing or eliminating the CPU SVD bottleneck.
@@ -276,7 +275,8 @@ After convergence, the singular values are obtained from the eigendecomposition 
 The intent was to replace the LAPACK SVD call with $\sim$10--20 GPU GEMMs, shifting the computation from a BLAS-2-dominated factorization to pure BLAS-3.
 For single-site DMRG moving left-to-right, the MPS tensor $\theta$ is tall ($\chi_L d \times \chi_R$) and Newton--Schulz applies directly.
 For the reverse direction, $\theta$ is wide and we fall back to LAPACK SVD.
-Section~\ref{sec:opt_failure} reports that this variant achieves a 0\% win rate across 50 configurations and diverges numerically at $\chi \geq 128$.
+Newton--Schulz was implemented in the CPU Python prototype (\texttt{cpu/pdmrg-opt/pdmrg/numerics/linalg\_utils.py}) but was not ported to HIP/rocBLAS for this study; GPU evaluation is left to future work.
+Newton--Schulz is known to be sensitive to ill-conditioned inputs at high bond dimension; this numerical instability is a known concern for high-$\chi$ DMRG and motivates caution before a GPU port \cite{Schulz1933,Nakamura2020}.
 
 \subsection{Block-Davidson eigensolver}
 \label{sec:davidson}
@@ -454,7 +454,7 @@ A ``win'' is assigned to the fastest implementation for each $(L, \chi, \text{mo
 
 \begin{table}[h]
 \centering
-\caption{Win rates by bond dimension. D1-GPU: single-site GPU DMRG; D2-GPU: two-site GPU DMRG; Q-D1, Q-D2: quimb single-/two-site (\texttt{OMP\_NUM\_THREADS=1}). All Newton--Schulz/Davidson variants achieve 0\% win rate and are omitted.}
+\caption{Win rates by bond dimension. D1-GPU: single-site GPU DMRG; D2-GPU: two-site GPU DMRG; Q-D1, Q-D2: quimb single-/two-site (\texttt{OMP\_NUM\_THREADS=1}). All \texttt{-opt} variants (Block-Davidson + host-side SVD) achieve 0\% win rate and are omitted.}
 \label{tab:crossover}
 \begin{tabular}{lcccc}
 \toprule
@@ -542,7 +542,7 @@ $\geq 100$  & ---      & 1/1 (2)  & 1/1 (2) \\
 
 Table~\ref{tab:serial_gpu} quantifies the convergence advantage directly.
 At $L = 100$, $\chi = 128$, dmrg2-gpu completes in 53~s vs.\ 177~s for dmrg-gpu ($3.3\times$ faster), because two-site optimization converges in 2--3 sweeps by dynamically growing the bond dimension, while single-site requires 5--10 sweeps at fixed $\chi$.
-The ``-opt'' variants (Newton--Schulz + Block-Davidson) are uniformly slower, as analyzed in Section~\ref{sec:opt_failure}.
+The ``-opt'' variants (Block-Davidson $b{=}4$ with host-side LAPACK SVD) are uniformly slower, as analyzed in Section~\ref{sec:opt_failure}.
 
 \begin{table}[h]
 \centering
@@ -674,9 +674,9 @@ Neither form of parallelism widens the GPU's competitive window.  Perhaps a diff
 \subsection{Algorithmic variants: can smarter algorithms help?}
 \label{sec:opt_failure}
 
-\subsubsection{Newton--Schulz + Block-Davidson: 0\% win rate}
+\subsubsection{Block-Davidson ($b{=}4$) with host-side SVD: 0\% win rate}
 
-The Newton--Schulz variants (dmrg-gpu-opt, dmrg2-gpu-opt) lose to their baselines in every converged comparison: 0 wins out of 50 configurations (24 single-site, 26 two-site).
+The \texttt{-opt} variants (\texttt{dmrg-gpu-opt}, \texttt{dmrg2-gpu-opt}) differ from their baselines in two respects: (i)~Block-Davidson ($b{=}4$, hardcoded) replaces single-vector Lanczos as the local eigensolver; (ii)~SVD truncation is performed on the host via LAPACK rather than on-device via rocSOLVER. We do not isolate the two effects in the present measurements; see \S\ref{sec:svd_ceiling} for discussion. These variants lose to their baselines in every converged comparison: 0 wins out of 50 configurations (24 single-site, 26 two-site).
 Table~\ref{tab:opt_vs_base} shows representative results.
 
 \begin{table}[h]
@@ -699,11 +699,6 @@ TFIM       & 128 & 50  & 2-site & 28.1 & 39.3 \\
 \end{table}
 
 The slowdown ranges from $1.4\times$ (best case, TFIM $L = 128$ $\chi = 50$) to $5.7\times$ (Josephson $L = 32$ $\chi = 256$).
-
-At $\chi \geq 128$, Newton--Schulz diverges catastrophically for the Heisenberg model.
-The Frobenius-norm-scaled iteration~\eqref{eq:newton_schulz} fails to converge when the condition number of the two-site tensor $\theta$ is large, producing MPS tensors with corrupted entries that cause the energy to diverge to $O(10^6)$--$O(10^{20})$.
-A fallback to LAPACK SVD is triggered when $\|X^\dagger X - I\|_F > 10^{-8}$, but by the time the fallback activates, the accumulated error from previous corrupted truncations has already destabilized the MPS.
-
 \subsubsection{Chebyshev-filtered subspace iteration: $1.9$--$11\times$ slower}
 
 CheFSI with degree $p = 15$ and $n_\text{outer} = 20$ converges to the correct energy ($|\Delta E| < 10^{-13}$) but is dramatically slower than Lanczos:
@@ -850,8 +845,8 @@ The SVD operates on matrices of size $(\chi d, d \chi) = (512, 512)$ at $\chi = 
 Each LAPACK \texttt{dgesvd} call takes $\sim$300~ms, and $\sim$126 SVDs per sweep (63 bonds $\times$ 2 directions) total $\sim$38~s.
 
 This single number explains every negative result in the preceding sections.
-Newton--Schulz and Block-Davidson targeted the Lanczos eigensolver and the SVD factorization, but the eigensolver accounts for only 1--2\% of wall time; even making it infinitely fast would be imperceptible.
-Newton--Schulz does target SVD, but replaces one $O(n^3)$ factorization with up to 30 GEMM iterations at $O(n^3)$ each---a $30\times$ FLOP increase that the GPU's throughput advantage cannot offset at $n \leq 512$.
+Block-Davidson targeted the Lanczos eigensolver, but the eigensolver accounts for only 1--2\% of wall time; even making it infinitely fast would be imperceptible.
+Newton--Schulz (a CPU-prototype design) does target SVD, but would replace one $O(n^3)$ factorization with up to 30 GEMM iterations at $O(n^3)$ each---a $30\times$ FLOP increase that the GPU's throughput advantage cannot offset at $n \leq 512$.
 Cross-segment batching targeted GEMM dispatch overhead in the eigensolver, again the wrong 2\% of the runtime.
 Parallel DMRG's serial coupling sweeps each pay the full SVD cost per bond.
 And A2DMRG's TT-SVD compression---itself an $O(L \chi^3)$ SVD chain---is the very operation that dominates wall time.
@@ -877,7 +872,7 @@ First, \emph{GPU launch overhead}: each rocBLAS GEMM call incurs $\sim$5--10~$\m
 
 Second, \emph{CPU threading overhead}: the same small matrices that starve the GPU also penalize multi-threaded CPU BLAS.  Thread synchronization costs exceed the arithmetic savings, which is why 93\% of CPU wins use a single thread.  At these sizes, a single core streaming through L2-resident data is the most efficient executor available.
 
-Third, \emph{iterative algorithm overhead}: Newton--Schulz, Block-Davidson, and Chebyshev filtering all increase the total number of matrix operations per bond.  When each operation is already overhead-dominated, multiplying the operation count makes the situation strictly worse.
+Third, \emph{iterative algorithm overhead}: Block-Davidson increases the total number of matrix operations per bond (Newton--Schulz and Chebyshev filtering, as CPU-prototype designs, share the same limitation).  When each operation is already overhead-dominated, multiplying the operation count makes the situation strictly worse.
 
 These three effects are facets of the same underlying cause: at $\chi \leq 50$, DMRG's per-bond linear algebra problems are too small to amortize any form of parallelism overhead, whether hardware (GPU wavefronts, CPU threads) or algorithmic (iterative refinement loops).
 
@@ -943,8 +938,8 @@ Our main findings are:
 
   \item Two-site DMRG is $\sim$3$\times$ faster than single-site at large systems ($L = 100$) due to faster convergence from adaptive bond dimension growth.
 
-  \item Replacing BLAS-2 algorithms (Lanczos, LAPACK SVD) with BLAS-3 alternatives (Newton--Schulz polar decomposition, Block-Davidson, Chebyshev filtering) uniformly fails to improve performance at $\chi \leq 256$.
-  The Newton--Schulz variant achieves a 0\% win rate across 50 configurations and diverges numerically at $\chi \geq 128$.
+  \item Replacing the single-vector Lanczos eigensolver with Block-Davidson ($b{=}4$) and routing SVD to a host-side LAPACK path uniformly fails to improve performance at $\chi \leq 256$ (0 wins out of 50 configurations).
+  The joint BD+CPU-SVD confound prevents isolation of which factor dominates the slowdown; isolation is left to future work.
   Chebyshev filtering is $1.9$--$11\times$ slower.
   Cross-segment batched GEMM is slower in 18 of 19 configurations.
 
