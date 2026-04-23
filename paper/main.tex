@@ -28,7 +28,7 @@
 
 \begin{highlights}
 \item Systematic benchmark: 11 DMRG implementations, 3 physics models, $L{=}8$--$128$, $\chi{=}20$--$256$.
-\item At $\chi{\leq}50$, a single CPU core outperforms the 304-CU MI300X in 93\% of cases.
+\item At $\chi{\leq}50$, a single CPU core outperforms the 304-CU MI300X in 93\% of the tested configurations (single-thread harness; see \S\,\ref{sec:hardware}).
 \item CPU LAPACK SVD consumes 97--98\% of per-sweep time at $\chi{=}256$, capping GPU speedups.
 \item Newton--Schulz, Block-Davidson, Chebyshev filtering: all fail at $\chi{\leq}256$.
 \item Randomized SVD wins 5--6$\times$ only in 2-site DMRG; HIP graph capture wins 1.2--1.8$\times$ in parallel DMRG.
@@ -40,7 +40,7 @@ The implementations span single-site and two-site DMRG, real-space parallel DMRG
 Benchmarks cover system sizes $L = 8$--$128$ and bond dimensions $\chi = 20$--$256$ on a single MI300X GPU with 192~GB HBM3.
 
 The GPU implementations achieve speedups over optimized CPU code (quimb with OpenBLAS) that depend on both bond dimension and system size: at $\chi = 128$ the GPU wins 100\% of short-chain ($L \leq 20$) configurations but only 50\% at $L \geq 100$, while at $\chi \leq 50$ the CPU wins all medium-to-large systems ($L \geq 32$).
-In 27 of 29 CPU-win configurations (93\%), a \emph{single} CPU core already outperforms the 304-compute-unit MI300X---the GPU loses not to parallelized CPU BLAS, but to kernel launch latency on small matrices.
+In 27 of 29 CPU-win configurations (93\%), a \emph{single} CPU core already outperforms the 304-compute-unit MI300X---the GPU loses not to parallelized CPU BLAS, but to kernel launch latency on small matrices. (Note: the CPU harness is hardcoded to one thread; the 93\% reflects the single-thread setting, not a multi-thread sweep; see \S\,\ref{sec:hardware}.)
 Two-site DMRG converges $3.3\times$ faster than single-site at large system sizes ($L = 100$, $\chi = 128$: 53~s vs.\ 177~s).
 
 We report extensive negative results on algorithmic optimizations designed to exploit the MI300X's BLAS-3 throughput.
@@ -468,7 +468,7 @@ $\chi$ & D1-GPU & D2-GPU & Q-D1 & Q-D2 \\
 \end{table}
 
 At $\chi = 20$--$50$, CPU implementations win the majority of configurations.
-A striking detail clarifies why: of all CPU wins across all $\chi$ values, 93\% are achieved with single-threaded OpenBLAS ($t = 1$).
+A striking detail clarifies why: of the 14 cells in which the CPU baseline beats the default GPU configuration, 13 (93\%) were measured at the single-thread setting that the harness actually exercises (\texttt{run\_mi300x\_challenge.py:382}). We do not have multi-thread sweep data; the apparent 93\% is an artifact of the single-thread harness, not evidence of BLAS contention. See limitations \S\,\ref{sec:limitations}.
 The individual GEMMs at $\chi = 50$ (matrices of size $\sim 50 \times 50$) fit entirely in CPU L2 cache, and call overhead dominates over arithmetic; additional threads add synchronization cost without meaningful parallelism.
 The GPU faces the same small-matrix problem from the opposite direction: kernel launch overhead ($\sim$5--10~$\mu$s per launch) across hundreds of launches per Lanczos iteration outweighs the compute.
 Both the CPU and GPU are bottlenecked by overhead, not by FLOPS---but the CPU's overhead is smaller.
@@ -875,7 +875,7 @@ At $\chi \leq 50$, three distinct overhead mechanisms conspire to make the GPU s
 
 First, \emph{GPU launch overhead}: each rocBLAS GEMM call incurs $\sim$5--10~$\mu$s of kernel dispatch latency, and a single Lanczos iteration requires hundreds of such calls.  At $\chi = 50$, the arithmetic per GEMM (a $50 \times 50$ multiply taking $\sim$0.25~$\mu$s at peak) is smaller than the launch overhead itself, so the GPU spends more time dispatching work than performing it.
 
-Second, \emph{CPU threading overhead}: the same small matrices that starve the GPU also penalize multi-threaded CPU BLAS.  Thread synchronization costs exceed the arithmetic savings, which is why 93\% of CPU wins use a single thread.  At these sizes, a single core streaming through L2-resident data is the most efficient executor available.
+Second, \emph{CPU threading overhead}: the same small matrices that starve the GPU would also penalize multi-threaded CPU BLAS if multiple threads were used. The CPU harness is hardcoded to a single thread (\texttt{OMP\_NUM\_THREADS=1}), so the 93\% single-thread statistic reflects the harness design rather than a measured multi-thread comparison. At these sizes, a single core streaming through L2-resident data is the most efficient executor available.
 
 Third, \emph{iterative algorithm overhead}: Newton--Schulz, Block-Davidson, and Chebyshev filtering all increase the total number of matrix operations per bond.  When each operation is already overhead-dominated, multiplying the operation count makes the situation strictly worse.
 
@@ -922,7 +922,7 @@ HIP graph capture of \texttt{apply\_heff} (Section~\ref{sec:opt_ablation}) yield
 For variants whose per-call work is already large enough to amortize launch latency---dmrg-gpu, dmrg2-gpu---the same flag is flat.
 This is the second instance of the broader pattern: micro-optimizations that target the measured local bottleneck of a specific variant pay off; those that attempt to redistribute work without addressing the bottleneck do not.
 
-The honest summary is that GPU DMRG at $\chi \leq 256$ is a solution in search of a problem large enough to justify it---except in two specific niches: two-site DMRG (where RSVD is binding) and segment-parallel pdmrg-gpu (where launch latency is binding).
+At $\chi \leq 256$ the arithmetic intensity of a single MPS update is too low to amortize host-device transfer and kernel launch overhead in our default Lanczos path; on this hardware (single MI300X, ROCm 7.2) and at this bond dimension, an optimized single-thread CPU stack remains competitive. We do not generalize beyond this regime: the ablation results in \S\,\ref{sec:opt_ablation} show that algorithmic changes (RSVD, LANCZOS\_GRAPH) already shift the crossover for specific variants, and \S\,\ref{sec:when_gpu_wins} outlines why we expect $\chi \gtrsim 1024$ to favour the GPU. Whether smaller-$\chi$ GPU DMRG is \emph{useful} depends on workload (e.g.\ parameter sweeps, time evolution) considerations outside this paper.
 
 
 %% ============================================================
@@ -938,7 +938,7 @@ Our main findings are:
   At $\chi = 128$, the GPU wins 100\% of short-chain ($L \leq 20$) configurations but only 71\% at $L = 32$--$64$ and 50\% at $L \geq 100$.
   At $\chi \leq 50$, the CPU wins all medium-to-large systems ($L \geq 32$).
 
-  \item When the CPU wins, it almost always wins with a single thread: 93\% of CPU victories use single-threaded OpenBLAS.
+  \item When the CPU wins, 93\% of CPU victories were measured at the single-thread setting that the harness hardcodes (\texttt{OMP\_NUM\_THREADS=1} throughout); we did not run a multi-thread sweep and cannot attribute this figure to BLAS contention. See limitations \S\,\ref{sec:limitations}.
   At $\chi \leq 50$, the matrices are small enough that thread synchronization overhead exceeds any parallel speedup, making a single core streaming through L2 cache the most efficient executor.
 
   \item Two-site DMRG is $\sim$3$\times$ faster than single-site at large systems ($L = 100$) due to faster convergence from adaptive bond dimension growth.
