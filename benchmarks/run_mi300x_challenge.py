@@ -132,6 +132,90 @@ ALL_IMPLS = sorted(GPU_IMPLS.keys()) + sorted(CPU_IMPLS)
 JOSEPHSON_NMAX = 2
 
 
+# ─── rocm-smi pinning harness ────────────────────────────────────────────────
+
+def _rocm_smi_capture():
+    """Capture GPU clock/thermal/process state via rocm-smi.  Returns a dict.
+    On VF the clock-pin commands will no-op; we log their return codes so
+    downstream analysis can detect non-pinned runs."""
+    result = {}
+    for flag, key in [
+        ('--showclocks --json',                    'clocks'),
+        ('--showtemp --showpower --showuse --json', 'thermals'),
+        ('--showpids --json',                       'pids'),
+    ]:
+        try:
+            r = subprocess.run(['rocm-smi'] + flag.split(),
+                               capture_output=True, text=True, timeout=10)
+            try:
+                result[key] = json.loads(r.stdout)
+            except json.JSONDecodeError:
+                result[key] = r.stdout.strip()
+        except Exception as exc:
+            result[key] = {'error': str(exc)}
+    return result
+
+
+def _rocm_smi_pin():
+    """Attempt to pin MI300X clocks (will silently no-op on VF).
+    Returns dict mapping command -> return code for auditability."""
+    pin_cmds = [
+        ['rocm-smi', '--setperfdeterminism', '1900'],
+        ['rocm-smi', '--setperflevel', 'manual'],
+        ['rocm-smi', '--setpowercap', '750'],
+    ]
+    rc_log = {}
+    for cmd in pin_cmds:
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            rc_log[' '.join(cmd)] = r.returncode
+        except Exception as exc:
+            rc_log[' '.join(cmd)] = str(exc)
+    return rc_log
+
+
+def _rocm_smi_rep_preamble():
+    """Pre-rep: capture baseline state, attempt clock pin.
+    Returns (pre_state_dict, pin_rc_dict)."""
+    pre = _rocm_smi_capture()
+    pin_rc = _rocm_smi_pin()
+    return pre, pin_rc
+
+
+def _rocm_smi_rep_postamble(pre, pinned_sclk_mhz=1900):
+    """Post-rep: capture final state, compute throttled + cotenant_changed flags.
+    Returns (post_state_dict, throttled_flag, cotenant_changed_flag)."""
+    post = _rocm_smi_capture()
+
+    # throttled: check if average observed SCLK < 97% of pinned target
+    throttled = False
+    try:
+        clocks_data = post.get('clocks', {})
+        if isinstance(clocks_data, dict):
+            for device_key, device_data in clocks_data.items():
+                if isinstance(device_data, dict):
+                    sclk_val = device_data.get('sclk', device_data.get('SCLK', ''))
+                    if isinstance(sclk_val, str) and 'Mhz' in sclk_val:
+                        obs_mhz = float(sclk_val.replace('Mhz','').strip())
+                        if obs_mhz < 0.97 * pinned_sclk_mhz:
+                            throttled = True
+                            break
+    except Exception:
+        throttled = None  # indeterminate
+
+    # cotenant_changed: compare PID sets
+    cotenant_changed = False
+    try:
+        pre_pids  = set(str(pre.get('pids',  {}) or {}).split())
+        post_pids = set(str(post.get('pids', {}) or {}).split())
+        cotenant_changed = (pre_pids != post_pids)
+    except Exception:
+        cotenant_changed = None  # indeterminate
+
+    return post, throttled, cotenant_changed
+
+
+
 # ─── GPU runner ──────────────────────────────────────────────────────────────
 
 def _parse_gpu_output(stdout):
@@ -367,9 +451,13 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
         is_gpu = impl in GPU_IMPLS
         times = []
         energies = []
+        rocm_states = []   # per-rep {pre, post, pin_rc, throttled, cotenant_changed}
         last_err = None
         last_cmd = None
         for rep in range(repeats):
+            # rocm-smi pre-rep: capture state and attempt clock pin (no-ops on VF)
+            rocm_pre, pin_rc = _rocm_smi_rep_preamble() if is_gpu else ({}, {})
+
             if is_gpu:
                 # Warmup on the first rep of each config only (saves time)
                 r = run_gpu(impl, model, L, chi, sweeps,
@@ -380,12 +468,33 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
                             pdmrg_recal=pdmrg_recal)
             else:
                 r = run_quimb(impl, model, L, chi, sweeps, threads=1)
+
+            # rocm-smi post-rep: capture state, compute throttled + cotenant_changed
+            if is_gpu:
+                rocm_post, throttled, cotenant_changed = _rocm_smi_rep_postamble(rocm_pre)
+                r["rocm_pre"]          = rocm_pre
+                r["rocm_post"]         = rocm_post
+                r["pin_rc"]            = pin_rc
+                r["throttled"]         = throttled
+                r["cotenant_changed"]  = cotenant_changed
+
             if r.get("cmd") is not None:
                 last_cmd = r["cmd"]
             if r.get("success"):
                 times.append(r["time"])
                 energies.append(r["energy"])
-                print(f"        rep {rep+1}/{repeats}: t={r['time']:.3f}s  E={r['energy']:.10f}",
+                if is_gpu:
+                    rocm_states.append({
+                        "rep": rep,
+                        "pre":              r.get("rocm_pre"),
+                        "post":             r.get("rocm_post"),
+                        "pin_rc":           r.get("pin_rc"),
+                        "throttled":        r.get("throttled"),
+                        "cotenant_changed": r.get("cotenant_changed"),
+                    })
+                throttle_tag = " THROTTLED" if r.get("throttled") else ""
+                cotenant_tag = " COTENANT_CHG" if r.get("cotenant_changed") else ""
+                print(f"        rep {rep+1}/{repeats}: t={r['time']:.3f}s  E={r['energy']:.10f}{throttle_tag}{cotenant_tag}",
                       flush=True)
             else:
                 last_err = r.get("error", "?")
@@ -410,6 +519,9 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
                 "repeats": repeats,
                 "successful_reps": len(times),
                 "cmd": last_cmd,        # exact argv that produced this row
+                "rocm_states": rocm_states if is_gpu else None,
+                "any_throttled": any(s.get("throttled") for s in rocm_states) if rocm_states else None,
+                "any_cotenant_changed": any(s.get("cotenant_changed") for s in rocm_states) if rocm_states else None,
             }
         else:
             row = {

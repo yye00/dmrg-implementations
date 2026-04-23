@@ -1012,7 +1012,7 @@ We acknowledge access to AMD Instinct MI300X hardware through Hot Aisle, Inc.\ f
 %% ============================================================
 
 Tables~\ref{tab:full_heisenberg}--\ref{tab:full_tfim} report wall times (seconds) for all converged benchmark configurations.
-For CPU implementations (Q-D1: quimb-dmrg1, Q-D2: quimb-dmrg2), the reported time is the best across thread counts (1, 2, 4, 8, 12).
+For CPU implementations (Q-D1: quimb-dmrg1, Q-D2: quimb-dmrg2), the reported time is the single-threaded run (\texttt{OMP\_NUM\_THREADS=1}).
 For GPU implementations (D1-GPU: dmrg-gpu, D2-GPU: dmrg2-gpu, PD-GPU: pdmrg-gpu with $P = 2$ segments), all runs use a single MI300X with CPU SVD.
 The fastest implementation for each configuration is shown in \textbf{bold}.
 A dash (---) indicates the implementation was not tested or did not converge for that configuration.
