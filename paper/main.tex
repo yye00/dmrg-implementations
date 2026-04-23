@@ -407,7 +407,7 @@ Reported times are from the internal ``Total wall time'' timer, which excludes o
 Correctness is validated against exact diagonalization energies for small systems ($L = 4$--$8$) and against converged quimb reference energies for larger systems, with a pass threshold of $|\Delta E| < 10^{-10}$.
 A total of 604 benchmark configurations were run for the main comparison (all implementations $\times$ all models $\times$ all sizes), plus 108 configurations for the GPU optimization scaling study.
 
-For CPU benchmarks, we report the best wall time across all thread counts (1, 2, 4, 8, 12) for each configuration, as the optimal thread count varies with problem size.
+For CPU benchmarks, we report the single-threaded wall time (\texttt{OMP\_NUM\_THREADS=1}) for each configuration.
 
 \subsection{Physics models}
 \label{sec:models}
@@ -450,11 +450,11 @@ We present the benchmark results in a sequence that traces a natural line of inq
 \label{sec:crossover}
 
 Table~\ref{tab:crossover} summarizes the win rates between GPU and CPU implementations across all converged benchmark configurations, stratified by bond dimension.
-A ``win'' is assigned to the fastest implementation for each $(L, \chi, \text{model})$ configuration, considering all GPU implementations and the best CPU result across thread counts.
+A ``win'' is assigned to the fastest implementation for each $(L, \chi, \text{model})$ configuration, considering all GPU implementations and the single-threaded CPU result (\texttt{OMP\_NUM\_THREADS=1}).
 
 \begin{table}[h]
 \centering
-\caption{Win rates by bond dimension. D1-GPU: single-site GPU DMRG; D2-GPU: two-site GPU DMRG; Q-D1, Q-D2: quimb single-/two-site with best thread count. All Newton--Schulz/Davidson variants achieve 0\% win rate and are omitted.}
+\caption{Win rates by bond dimension. D1-GPU: single-site GPU DMRG; D2-GPU: two-site GPU DMRG; Q-D1, Q-D2: quimb single-/two-site (\texttt{OMP\_NUM\_THREADS=1}). All Newton--Schulz/Davidson variants achieve 0\% win rate and are omitted.}
 \label{tab:crossover}
 \begin{tabular}{lcccc}
 \toprule
