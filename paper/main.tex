@@ -69,7 +69,7 @@ DMRG \sep GPU computing \sep tensor networks \sep AMD MI300X \sep performance be
 \emph{Code Ocean capsule:} (not used)\\
 \emph{Licensing provisions:} MIT\\
 \emph{Programming language:} C++17 (\SI{\sim 12}{kLOC}), Python 3 (\SI{\sim 6}{kLOC}), MPI (mpi4py) for A2DMRG; GPU code in HIP/C++ targeting ROCm 7.2\\
-\emph{External libraries/dependencies:} rocBLAS, rocsolver, HIP (ROCm 7.2+); OpenBLAS 0.3.28+ (source-built), LAPACK; quimb 1.8, cotengra, NumPy; mpi4py for parallel Python\\
+\emph{External libraries/dependencies:} rocBLAS, rocsolver, HIP (ROCm 7.2+); OpenBLAS 0.3.28+ (source-built), LAPACK; quimb 1.8, NumPy; mpi4py for parallel Python (cotengra is listed as a dependency but is not invoked by the runner; see \S\,\ref{sec:limitations})\\
 \emph{Supplementary material:} none\\[0.5em]
 \emph{Nature of problem:} Ground-state computation of one-dimensional quantum lattice models via the density matrix renormalization group (DMRG). Per-bond work is dominated by tensor contractions (GEMM, $O(\chi^3 d^2)$) and singular value decompositions, with moderate bond dimensions $\chi \in [20, 256]$ straddling the CPU--GPU crossover.\\[0.5em]
 \emph{Solution method:} Eleven DMRG variants spanning single-site and two-site sweeps, domain-decomposition parallel DMRG \cite{Stoudenmire2013}, an additive two-level variant (A2DMRG) \cite{Grigori2025}, and three algorithmic alternatives designed to increase BLAS-3 utilization (Newton--Schulz polar decomposition, Block-Davidson eigensolver, Chebyshev-filtered subspace iteration). All GPU variants share a common env-var-gated ablation framework (six micro-optimizations: DEVICE\_K, LANCZOS\_GRAPH, RSVD, SPARSE\_MPO, FUSE\_LANCZOS, D\_PAD) so each flag's effect can be measured in isolation on the same binary. Benchmarks run across three physics models (Heisenberg chain, Josephson-junction array, transverse-field Ising) at system sizes up to $L=128$.\\[0.5em]
@@ -81,13 +81,14 @@ DMRG \sep GPU computing \sep tensor networks \sep AMD MI300X \sep performance be
 \label{sec:intro}
 %% ============================================================
 
-The density matrix renormalization group (DMRG) \cite{White1992,White1993} is the method of choice for computing ground states of one-dimensional quantum many-body systems.
+The density matrix renormalization group (DMRG) \cite{White1992,White1993,Schollwoeck2005} is the method of choice for computing ground states of one-dimensional quantum many-body systems.
 In the modern tensor network formulation \cite{Schollwoeck2011,Orus2014}, DMRG variationally optimizes a matrix product state (MPS) by sweeping through the chain and solving local eigenvalue problems at each bond.
 The computational cost is dominated by tensor contractions (matrix--matrix multiplications) and singular value decompositions (SVDs), both of which scale as $O(\chi^3 d^2)$ per bond, where $\chi$ is the bond dimension and $d$ is the local Hilbert space dimension.
 
 Graphics processing units (GPUs) are natural candidates for accelerating DMRG, since the tensor contractions map directly to general matrix--matrix multiplication (GEMM), the workload for which modern GPUs achieve near-peak throughput.
 The AMD Instinct MI300X, with 304 compute units, 192~GB of HBM3 memory providing 5.3~TB/s bandwidth, and matrix fused multiply-add (MFMA) units delivering 81.7~TFLOPS of FP64 matrix throughput, represents a compelling target for the GEMM-dominated inner loop.
-Prior work has explored GPU acceleration of DMRG and related tensor network methods \cite{Nemes2014}, typically focusing on NVIDIA hardware with CUDA, but a systematic study of when GPU acceleration helps---and when it does not---has been lacking.
+The field has mature open-source DMRG libraries: ITensor \cite{Fishman2022}, TeNPy \cite{HauschildPollmann2018}, and Block2 \cite{Zhai2021} represent the production CPU and hybrid CPU/GPU ecosystem.
+Prior work has also explored GPU acceleration targeting NVIDIA hardware \cite{Nemes2014,Ganahl2023}, but a systematic study of the MI300X---and of when GPU acceleration helps or does not---has been lacking.
 
 Two questions are open.
 First, at what problem sizes does GPU acceleration become worthwhile?
@@ -170,7 +171,7 @@ At each bond $b$, the algorithm:
     H_\text{eff} |\theta\rangle = E |\theta\rangle
     \label{eq:local_eigenproblem}
   \end{equation}
-  for the ground-state energy $E$ and optimal local tensor $\theta$, using a Krylov eigensolver (Lanczos).
+  for the ground-state energy $E$ and optimal local tensor $\theta$, using a Krylov eigensolver (Lanczos \cite{Lanczos1950}).
   \item \emph{Restores canonical form}: decomposes the updated tensor via SVD or QR and shifts the canonical center to the next bond.
   \item \emph{Updates the environment}: incorporates the newly optimized tensor into $L_\text{env}$ (left sweep) or $R_\text{env}$ (right sweep) for the next bond.
 \end{enumerate}
@@ -283,7 +284,7 @@ Section~\ref{sec:opt_failure} reports that this variant achieves a 0\% win rate 
 
 \emph{Hypothesis}: BLAS-3 subspace projections should outperform the BLAS-1/2-dominated Lanczos iterations for the local eigenvalue problem.
 
-The Block-Davidson method \cite{Davidson1975,Liu1978} replaces Lanczos for the local eigenvalue problem~\eqref{eq:local_eigenproblem}.
+The Block-Davidson method \cite{Davidson1975} replaces Lanczos for the local eigenvalue problem~\eqref{eq:local_eigenproblem}.
 It maintains a subspace of block size $b = 4$ trial vectors, projects $H_\text{eff}$ into the subspace using GEMM, solves the small projected eigenproblem via LAPACK \texttt{dsyev}, and expands the subspace with preconditioned residual corrections.
 The maximum subspace dimension is 32, after which the method restarts from the best eigenvector.
 
@@ -912,6 +913,7 @@ The three structural barriers---small-matrix overhead, SVD ceiling, and compress
 \paragraph{Large bond dimensions ($\chi \gtrsim 1024$).}
 Extrapolating sweep-time scaling from $\chi \in \{64, 128, 256, 512\}$, we \emph{conjecture} a CPU/GPU crossover near $\chi \sim 1024$ on the MI300X: both GEMM and SVD matrices would exceed the size thresholds where GPU hardware reaches high occupancy, and Newton--Schulz's $30\times$ FLOP overhead could in principle be offset by a $> 30\times$ GPU/CPU throughput ratio.
 We have not measured this regime; the conjecture rests on (i)~the empirical exponent fit and (ii)~the asymptotic $\chi^3$ GEMM/SVD argument, and should not be cited as a measured result.
+Ganahl et al.~\cite{Ganahl2023} provide an independent data point on NVIDIA hardware at large $\chi$ using tensor processing units, confirming that a CPU/GPU crossover is real and architecture-portable.
 The numerical stability of Newton--Schulz at large condition numbers remains a separate open question.
 
 \paragraph{Multi-GPU parallelism.}
