@@ -30,7 +30,7 @@
 \item Systematic benchmark: 11 DMRG implementations, 3 physics models, $L{=}8$--$128$, $\chi{=}20$--$256$.
 \item At $\chi{\leq}50$, a single CPU core outperforms the 304-CU MI300X in 93\% of cases.
 \item CPU LAPACK SVD consumes 97--98\% of per-sweep time at $\chi{=}256$, capping GPU speedups.
-\item Newton--Schulz, Block-Davidson, Chebyshev filtering: all fail at $\chi{\leq}256$.
+\item Block-Davidson ($b{=}4$) with host-side LAPACK SVD achieves 0\% win rate at $\chi{\leq}256$; Newton--Schulz and CheFSI are discussed as alternatives but not measured on GPU.
 \item Randomized SVD wins 5--6$\times$ only in 2-site DMRG; HIP graph capture wins 1.2--1.8$\times$ in parallel DMRG.
 \end{highlights}
 
@@ -44,8 +44,7 @@ In 27 of 29 CPU-win configurations (93\%), a \emph{single} CPU core already outp
 Two-site DMRG converges $3.3\times$ faster than single-site at large system sizes ($L = 100$, $\chi = 128$: 53~s vs.\ 177~s).
 
 We report extensive negative results on algorithmic optimizations designed to exploit the MI300X's BLAS-3 throughput.
-Newton--Schulz iterative polar decomposition, intended to replace SVD with GEMM-heavy iterations, achieves 0\% win rate across 50 configurations and diverges numerically at $\chi \geq 128$.
-Chebyshev-filtered subspace iteration, designed for computing many eigenvalues in density functional theory, is $1.9$--$11\times$ slower than Lanczos for DMRG's single ground state.
+A Block-Davidson ($b{=}4$) eigensolver variant, deployed with a host-side LAPACK SVD path, achieves 0\% win rate across all tested (model, $L$, $\chi$) cells; Newton--Schulz polar decomposition and Chebyshev-filtered subspace iteration are explored as CPU-prototype alternatives and discussed in \S\ref{sec:variants}, but were not measured on GPU in this study.
 Cross-segment batched GEMM dispatch is slower in 18 of 19 configurations tested.
 Profiling reveals the root cause: CPU LAPACK SVD consumes 97--98\% of per-sweep wall time at $\chi = 256$, and iterative GPU replacements cannot match LAPACK's optimized QR-iteration algorithm at these matrix sizes.
 All source code, benchmark scripts, and raw data are publicly available.
@@ -72,7 +71,7 @@ DMRG \sep GPU computing \sep tensor networks \sep AMD MI300X \sep performance be
 \emph{External libraries/dependencies:} rocBLAS, rocsolver, HIP (ROCm 7.2+); OpenBLAS 0.3.28+ (source-built), LAPACK; quimb 1.8, cotengra, NumPy; mpi4py for parallel Python\\
 \emph{Supplementary material:} none\\[0.5em]
 \emph{Nature of problem:} Ground-state computation of one-dimensional quantum lattice models via the density matrix renormalization group (DMRG). Per-bond work is dominated by tensor contractions (GEMM, $O(\chi^3 d^2)$) and singular value decompositions, with moderate bond dimensions $\chi \in [20, 256]$ straddling the CPU--GPU crossover.\\[0.5em]
-\emph{Solution method:} Eleven DMRG variants spanning single-site and two-site sweeps, domain-decomposition parallel DMRG \cite{Stoudenmire2013}, an additive two-level variant (A2DMRG) \cite{Grigori2025}, and three algorithmic alternatives designed to increase BLAS-3 utilization (Newton--Schulz polar decomposition, Block-Davidson eigensolver, Chebyshev-filtered subspace iteration). All GPU variants share a common env-var-gated ablation framework (six micro-optimizations: DEVICE\_K, LANCZOS\_GRAPH, RSVD, SPARSE\_MPO, FUSE\_LANCZOS, D\_PAD) so each flag's effect can be measured in isolation on the same binary. Benchmarks run across three physics models (Heisenberg chain, Josephson-junction array, transverse-field Ising) at system sizes up to $L=128$.\\[0.5em]
+\emph{Solution method:} Eleven DMRG variants spanning single-site and two-site sweeps, domain-decomposition parallel DMRG \cite{Stoudenmire2013}, an additive two-level variant (A2DMRG) \cite{Grigori2025}, and three algorithmic alternatives designed to increase BLAS-3 utilization (Block-Davidson eigensolver (with host-side LAPACK SVD)). All GPU variants share a common env-var-gated ablation framework (six micro-optimizations: DEVICE\_K, LANCZOS\_GRAPH, RSVD, SPARSE\_MPO, FUSE\_LANCZOS, D\_PAD) so each flag's effect can be measured in isolation on the same binary. Benchmarks run across three physics models (Heisenberg chain, Josephson-junction array, transverse-field Ising) at system sizes up to $L=128$.\\[0.5em]
 \emph{Additional comments:} All results in this paper were generated on the AMD Instinct MI300X (gfx942, ROCm 7.2). Each result JSON embeds git commit SHA, binary SHA-256, runtime CLI, and environment variable snapshot for reproducibility.
 \endgroup
 
