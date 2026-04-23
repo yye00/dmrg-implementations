@@ -131,3 +131,59 @@ After repository reorganization:
 - **`benchmarks/paper_results/{mi300x,h100}/`** -- Publication-grade results tagged by architecture
 - **`reports/{mi300x,h100}/`** -- Timing report JSONs tagged by architecture
 - **`docs/`** -- GPU development prompts and reference docs
+
+---
+
+## Path B workflow (paper revision, Apr-May 2026)
+
+When working on Path B defects (paper rewrite + MI300X rebench campaign):
+
+1. **Facts**: cite `docs/PATH_B_GROUND_TRUTH.md` -- the locked inventory
+   produced by the I-1/I-2/I-3 audit, pinned to commit `6f45533`. Do NOT
+   re-audit code. If you find anything contradicting it, STOP and post a
+   comment on the "Path B execution tracker" issue.
+
+2. **Roles**: all work happens via the subagents in `.claude/agents/`. The
+   top-level session does not implement, review, or fix directly -- it
+   dispatches.
+   - `orchestrator` -- one supervisor tick: inspects PR state, dispatches the
+     next role for one cluster, updates the tracking issue.
+   - `implementer` -- takes a cluster brief, opens PR on
+     `claude/path-b-<cluster-id>`, labels `needs-review`. Respects bail-out.
+   - `reviewer` -- audits PR vs brief + ground truth, labels `review-clean` or
+     `review-blocked`. Checklist-driven, not taste-driven.
+   - `fixer` -- addresses reviewer comments in one follow-up commit, loops at
+     most 3 times then escalates with `human-review-required`.
+
+3. **Slash commands**:
+   - `/path-b-tick` -- one orchestrator tick.
+   - `/path-b-status` -- read-only status dump from the tracking issue.
+   - `/review-pr <n>` -- fire reviewer on PR `<n>`.
+   - `/fix-pr <n>` -- fire fixer on PR `<n>`.
+
+4. **Unattended operation**: compose with `/loop 30m /path-b-tick` for a
+   heartbeat-driven supervisor. PR review comments (agent or human) both
+   route through `review-blocked` -> fixer; the two feedback channels are
+   identical from the fixer's perspective.
+
+5. **Tracking**: the "Path B execution tracker" issue on
+   `yye00/dmrg-implementations` holds cluster state. One row per cluster,
+   status in {not_started, implementer_running, needs-review, review-clean,
+   review-blocked, waiting_gpu, human-review-required, merged}.
+
+6. **GPU authorization**: all MI300X-bound commands (`ssh hotaisle@...`,
+   `tmux send-keys -t test_remote ...`, `tmux attach -t test_remote`) are
+   denied by the `.claude/hooks/gpu_auth_guard.sh` PreToolUse hook unless
+   `PATH_B_GPU_AUTH=1` is exported in the shell that launched Claude Code.
+   Export only when a Hot Aisle window has been booked.
+
+7. **Branch convention**: Path B PRs live on `claude/path-b-<cluster-id>` and
+   merge into `main`. No long-lived integration branch. Do not push to any
+   existing feature branch (e.g., `claude/dmrg-gpu-concurrency-*`) -- those
+   are obsolete pre-fork snapshots.
+
+8. **Bail-out clause (all agents)**: if a brief contradicts ground truth, a
+   named file/line no longer exists, or a reviewer comment asks for
+   scope-creep or number-changes without statistical evidence -- STOP and
+   escalate. Do NOT silently re-interpret. This is the single most
+   important rule.

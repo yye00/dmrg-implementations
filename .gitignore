@@ -58,12 +58,21 @@ a2dmrg/venv/
 **/.vscode
 **/.claude
 **/.claude_settings.json
+# Allow repo-root .claude/ (shared agents, commands, hooks, settings) to be
+# tracked, but keep local-only overrides out.
+!/.claude/
+!/.claude/**
+/.claude/settings.local.json
+/.claude/**/settings.local.json
 **/.mcp.json
 **/HEAD
 **/hooks
 **/refs
 **/objects
 **/config
+# Re-allow the Path B hook script (matched by **/hooks above, but needs to be tracked).
+!/.claude/hooks/
+!/.claude/hooks/**
 **/*.egg-info/
 **/.pytest_cache/
 **/venv/
