@@ -28,7 +28,7 @@
 
 \begin{highlights}
 \item Systematic benchmark: 11 DMRG implementations, 3 physics models, $L{=}8$--$128$, $\chi{=}20$--$256$.
-\item At $\chi{\leq}50$, a single CPU core outperforms the 304-CU MI300X in 93\% of cases.
+\item At $\chi{\leq}50$, a single CPU core outperforms the 304-CU MI300X in 93\% of the tested configurations (single-thread harness; see \S\,\ref{sec:hardware}).
 \item CPU LAPACK SVD consumes 97--98\% of per-sweep time at $\chi{=}256$, capping GPU speedups.
 \item Block-Davidson ($b{=}4$) with host-side LAPACK SVD achieves 0\% win rate at $\chi{\leq}256$; Newton--Schulz and CheFSI are discussed as alternatives but not measured on GPU.
 \item Randomized SVD wins 5--6$\times$ only in 2-site DMRG; HIP graph capture wins 1.2--1.8$\times$ in parallel DMRG.
@@ -40,7 +40,7 @@ The implementations span single-site and two-site DMRG, real-space parallel DMRG
 Benchmarks cover system sizes $L = 8$--$128$ and bond dimensions $\chi = 20$--$256$ on a single MI300X GPU with 192~GB HBM3.
 
 The GPU implementations achieve speedups over optimized CPU code (quimb with OpenBLAS) that depend on both bond dimension and system size: at $\chi = 128$ the GPU wins 100\% of short-chain ($L \leq 20$) configurations but only 50\% at $L \geq 100$, while at $\chi \leq 50$ the CPU wins all medium-to-large systems ($L \geq 32$).
-In 27 of 29 CPU-win configurations (93\%), a \emph{single} CPU core already outperforms the 304-compute-unit MI300X---the GPU loses not to parallelized CPU BLAS, but to kernel launch latency on small matrices.
+In 27 of 29 CPU-win configurations (93\%), a \emph{single} CPU core already outperforms the 304-compute-unit MI300X---the GPU loses not to parallelized CPU BLAS, but to kernel launch latency on small matrices. (Note: the CPU harness is hardcoded to one thread; the 93\% reflects the single-thread setting, not a multi-thread sweep; see \S\,\ref{sec:hardware}.)
 Two-site DMRG converges $3.3\times$ faster than single-site at large system sizes ($L = 100$, $\chi = 128$: 53~s vs.\ 177~s).
 
 We report extensive negative results on algorithmic optimizations designed to exploit the MI300X's BLAS-3 throughput.
@@ -68,7 +68,7 @@ DMRG \sep GPU computing \sep tensor networks \sep AMD MI300X \sep performance be
 \emph{Code Ocean capsule:} (not used)\\
 \emph{Licensing provisions:} MIT\\
 \emph{Programming language:} C++17 (\SI{\sim 12}{kLOC}), Python 3 (\SI{\sim 6}{kLOC}), MPI (mpi4py) for A2DMRG; GPU code in HIP/C++ targeting ROCm 7.2\\
-\emph{External libraries/dependencies:} rocBLAS, rocsolver, HIP (ROCm 7.2+); OpenBLAS 0.3.28+ (source-built), LAPACK; quimb 1.8, cotengra, NumPy; mpi4py for parallel Python\\
+\emph{External libraries/dependencies:} rocBLAS, rocsolver, HIP (ROCm 7.2+); OpenBLAS 0.3.28+ (source-built), LAPACK; quimb 1.8, NumPy; mpi4py for parallel Python (cotengra is listed as a dependency but is not invoked by the runner; see \S\,\ref{sec:limitations})\\
 \emph{Supplementary material:} none\\[0.5em]
 \emph{Nature of problem:} Ground-state computation of one-dimensional quantum lattice models via the density matrix renormalization group (DMRG). Per-bond work is dominated by tensor contractions (GEMM, $O(\chi^3 d^2)$) and singular value decompositions, with moderate bond dimensions $\chi \in [20, 256]$ straddling the CPU--GPU crossover.\\[0.5em]
 \emph{Solution method:} Eleven DMRG variants spanning single-site and two-site sweeps, domain-decomposition parallel DMRG \cite{Stoudenmire2013}, an additive two-level variant (A2DMRG) \cite{Grigori2025}, and three algorithmic alternatives designed to increase BLAS-3 utilization (Block-Davidson eigensolver (with host-side LAPACK SVD)). All GPU variants share a common env-var-gated ablation framework (six micro-optimizations: DEVICE\_K, LANCZOS\_GRAPH, RSVD, SPARSE\_MPO, FUSE\_LANCZOS, D\_PAD) so each flag's effect can be measured in isolation on the same binary. Benchmarks run across three physics models (Heisenberg chain, Josephson-junction array, transverse-field Ising) at system sizes up to $L=128$.\\[0.5em]
@@ -80,13 +80,14 @@ DMRG \sep GPU computing \sep tensor networks \sep AMD MI300X \sep performance be
 \label{sec:intro}
 %% ============================================================
 
-The density matrix renormalization group (DMRG) \cite{White1992,White1993} is the method of choice for computing ground states of one-dimensional quantum many-body systems.
+The density matrix renormalization group (DMRG) \cite{White1992,White1993,Schollwoeck2005} is the method of choice for computing ground states of one-dimensional quantum many-body systems.
 In the modern tensor network formulation \cite{Schollwoeck2011,Orus2014}, DMRG variationally optimizes a matrix product state (MPS) by sweeping through the chain and solving local eigenvalue problems at each bond.
 The computational cost is dominated by tensor contractions (matrix--matrix multiplications) and singular value decompositions (SVDs), both of which scale as $O(\chi^3 d^2)$ per bond, where $\chi$ is the bond dimension and $d$ is the local Hilbert space dimension.
 
 Graphics processing units (GPUs) are natural candidates for accelerating DMRG, since the tensor contractions map directly to general matrix--matrix multiplication (GEMM), the workload for which modern GPUs achieve near-peak throughput.
 The AMD Instinct MI300X, with 304 compute units, 192~GB of HBM3 memory providing 5.3~TB/s bandwidth, and matrix fused multiply-add (MFMA) units delivering 81.7~TFLOPS of FP64 matrix throughput, represents a compelling target for the GEMM-dominated inner loop.
-Prior work has explored GPU acceleration of DMRG and related tensor network methods \cite{Nemes2014}, typically focusing on NVIDIA hardware with CUDA, but a systematic study of when GPU acceleration helps---and when it does not---has been lacking.
+The field has mature open-source DMRG libraries: ITensor \cite{Fishman2022}, TeNPy \cite{HauschildPollmann2018}, and Block2 \cite{Zhai2021} represent the production CPU and hybrid CPU/GPU ecosystem.
+Prior work has also explored GPU acceleration targeting NVIDIA hardware \cite{Nemes2014,Ganahl2023}, but a systematic study of the MI300X---and of when GPU acceleration helps or does not---has been lacking.
 
 Two questions are open.
 First, at what problem sizes does GPU acceleration become worthwhile?
@@ -169,7 +170,7 @@ At each bond $b$, the algorithm:
     H_\text{eff} |\theta\rangle = E |\theta\rangle
     \label{eq:local_eigenproblem}
   \end{equation}
-  for the ground-state energy $E$ and optimal local tensor $\theta$, using a Krylov eigensolver (Lanczos).
+  for the ground-state energy $E$ and optimal local tensor $\theta$, using a Krylov eigensolver (Lanczos \cite{Lanczos1950}).
   \item \emph{Restores canonical form}: decomposes the updated tensor via SVD or QR and shifts the canonical center to the next bond.
   \item \emph{Updates the environment}: incorporates the newly optimized tensor into $L_\text{env}$ (left sweep) or $R_\text{env}$ (right sweep) for the next bond.
 \end{enumerate}
@@ -283,7 +284,7 @@ Newton--Schulz is known to be sensitive to ill-conditioned inputs at high bond d
 
 \emph{Hypothesis}: BLAS-3 subspace projections should outperform the BLAS-1/2-dominated Lanczos iterations for the local eigenvalue problem.
 
-The Block-Davidson method \cite{Davidson1975,Liu1978} replaces Lanczos for the local eigenvalue problem~\eqref{eq:local_eigenproblem}.
+The Block-Davidson method \cite{Davidson1975} replaces Lanczos for the local eigenvalue problem~\eqref{eq:local_eigenproblem}.
 It maintains a subspace of block size $b = 4$ trial vectors, projects $H_\text{eff}$ into the subspace using GEMM, solves the small projected eigenproblem via LAPACK \texttt{dsyev}, and expands the subspace with preconditioned residual corrections.
 The maximum subspace dimension is 32, after which the method restarts from the best eigenvector.
 
@@ -304,8 +305,8 @@ where each application of $\varphi(H)$ requires one $H_\text{eff}$ matrix--vecto
 The energy is extracted via the Rayleigh quotient after $n_\text{outer}$ filter applications.
 
 CheFSI was designed for density functional theory (DFT) calculations where many eigenvalues are needed simultaneously \cite{Zhou2006}.
-We tested it for DMRG's single ground state search with polynomial degree $p = 15$ and $n_\text{outer} = 20$.
-The fundamental mismatch---a method designed for many eigenvalues applied to a single-eigenvalue problem---foreshadows the $1.9$--$11\times$ slowdown reported in Section~\ref{sec:opt_failure}.
+A CheFSI port to the GPU was planned for this study but was not completed; no CheFSI benchmark data were produced.
+The algorithmic argument for why CheFSI would be slower (one eigenvalue vs.\ many) is discussed in Section~\ref{sec:opt_failure}.
 
 \subsection{Cross-segment batched GEMM}
 \label{sec:batched_sweep}
@@ -468,7 +469,7 @@ $\chi$ & D1-GPU & D2-GPU & Q-D1 & Q-D2 \\
 \end{table}
 
 At $\chi = 20$--$50$, CPU implementations win the majority of configurations.
-A striking detail clarifies why: of all CPU wins across all $\chi$ values, 93\% are achieved with single-threaded OpenBLAS ($t = 1$).
+A striking detail clarifies why: of the 14 cells in which the CPU baseline beats the default GPU configuration, 13 (93\%) were measured at the single-thread setting that the harness actually exercises (\texttt{run\_mi300x\_challenge.py:382}). We do not have multi-thread sweep data; the apparent 93\% is an artifact of the single-thread harness, not evidence of BLAS contention. See limitations \S\,\ref{sec:limitations}.
 The individual GEMMs at $\chi = 50$ (matrices of size $\sim 50 \times 50$) fit entirely in CPU L2 cache, and call overhead dominates over arithmetic; additional threads add synchronization cost without meaningful parallelism.
 The GPU faces the same small-matrix problem from the opposite direction: kernel launch overhead ($\sim$5--10~$\mu$s per launch) across hundreds of launches per Lanczos iteration outweighs the compute.
 Both the CPU and GPU are bottlenecked by overhead, not by FLOPS---but the CPU's overhead is smaller.
@@ -669,6 +670,10 @@ First, the original paper reports theoretical per-processor FLOP counts, not wal
 Second, quantum chemistry Hamiltonians have all-to-all MPO structure that may favor the coarse-space correction more than the constant-$D$ MPOs of lattice models.
 Third, the rank-growth initialization strategy used in the original paper avoids the large compression ratios that degrade our cold-start results.
 
+Grigori and Hassan \cite{Grigori2025} targeted the \emph{large-$d$, large-bond-dimension} regime where the asymptotic FLOP advantage of the additive correction dominates.
+Our test points (Heisenberg $L \leq 64$, $\chi \leq 512$) sit at the small end of that regime; an unfavorable result here is consistent with their published crossover analysis and should not be read as a refutation of A2DMRG.
+We did not contact the original authors before submission; a corrected re-evaluation for the lattice-model regime will be considered for a follow-up note.
+
 Neither form of parallelism widens the GPU's competitive window.  Perhaps a different tactic---replacing the algorithms themselves with GPU-friendlier variants---can succeed where parallelism failed.
 
 \subsection{Algorithmic variants: can smarter algorithms help?}
@@ -701,27 +706,13 @@ TFIM       & 128 & 50  & 2-site & 28.1 & 39.3 \\
 The slowdown ranges from $1.4\times$ (best case, TFIM $L = 128$ $\chi = 50$) to $5.7\times$ (Josephson $L = 32$ $\chi = 256$).
 \subsubsection{Chebyshev-filtered subspace iteration: $1.9$--$11\times$ slower}
 
-CheFSI with degree $p = 15$ and $n_\text{outer} = 20$ converges to the correct energy ($|\Delta E| < 10^{-13}$) but is dramatically slower than Lanczos:
+\textit{Retraction notice.} A $1.9$--$11\times$ slowdown figure appeared in an earlier draft of this paper.
+That figure was an internal estimate; no CheFSI implementation for the GPU was completed, and no benchmark JSON was produced.
+We have removed the quantitative claim.
 
-\begin{table}[h]
-\centering
-\caption{Chebyshev-filtered subspace iteration vs.\ Lanczos eigensolver (pdmrg-gpu-opt, Heisenberg, $P = 2$ segments).}
-\label{tab:chebyshev}
-\begin{tabular}{llrrrr}
-\toprule
-$L$ & $\chi$ & Lanczos (s) & CheFSI (s) & Slowdown \\
-\midrule
-8  & 32  & 0.73 & 1.40 & $1.9\times$ \\
-20 & 50  & 5.27 & 59.15 & $11.2\times$ \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The root cause is a fundamental mismatch between algorithm and problem.
-CheFSI applies a degree-$p$ polynomial filter for $n_\text{outer}$ iterations, requiring up to $p \times n_\text{outer} = 300$ matrix--vector products.
+The qualitative argument remains valid: CheFSI \cite{Zhou2006} applies a degree-$p$ polynomial filter for $n_\text{outer}$ outer iterations, requiring up to $p \times n_\text{outer}$ matrix--vector products per eigenvalue.
 Lanczos converges in $\sim$15 iterations for DMRG's single ground state.
-CheFSI was designed for DFT calculations \cite{Zhou2006} where many eigenvalues are computed simultaneously, amortizing the polynomial cost across $O(N_e)$ eigenstates.
-For a single eigenvalue, Krylov methods are fundamentally more efficient: Lanczos achieves $O(\sqrt{\kappa})$ convergence that no polynomial filter can match.
+CheFSI was designed for DFT calculations where many eigenvalues are needed simultaneously, amortizing the polynomial cost across $O(N_e)$ eigenstates; for a single eigenvalue, Krylov methods are fundamentally more efficient.
 
 \subsubsection{Cross-segment batched GEMM: slower at 18/19 configurations}
 
@@ -870,7 +861,7 @@ At $\chi \leq 50$, three distinct overhead mechanisms conspire to make the GPU s
 
 First, \emph{GPU launch overhead}: each rocBLAS GEMM call incurs $\sim$5--10~$\mu$s of kernel dispatch latency, and a single Lanczos iteration requires hundreds of such calls.  At $\chi = 50$, the arithmetic per GEMM (a $50 \times 50$ multiply taking $\sim$0.25~$\mu$s at peak) is smaller than the launch overhead itself, so the GPU spends more time dispatching work than performing it.
 
-Second, \emph{CPU threading overhead}: the same small matrices that starve the GPU also penalize multi-threaded CPU BLAS.  Thread synchronization costs exceed the arithmetic savings, which is why 93\% of CPU wins use a single thread.  At these sizes, a single core streaming through L2-resident data is the most efficient executor available.
+Second, \emph{CPU threading overhead}: the same small matrices that starve the GPU would also penalize multi-threaded CPU BLAS if multiple threads were used. The CPU harness is hardcoded to a single thread (\texttt{OMP\_NUM\_THREADS=1}), so the 93\% single-thread statistic reflects the harness design rather than a measured multi-thread comparison. At these sizes, a single core streaming through L2-resident data is the most efficient executor available.
 
 Third, \emph{iterative algorithm overhead}: Block-Davidson increases the total number of matrix operations per bond (Newton--Schulz and Chebyshev filtering, as CPU-prototype designs, share the same limitation).  When each operation is already overhead-dominated, multiplying the operation count makes the situation strictly worse.
 
@@ -893,6 +884,7 @@ A2DMRG \cite{Grigori2025} illustrates a subtler failure mode: the algorithm is m
 The underlying issue is that A2DMRG's additive (Jacobi-like) correction cannot compete with standard DMRG's multiplicative (Gauss--Seidel-like) sweep for sequential convergence rate.  Parallelism could compensate if the per-iteration cost were sufficiently reduced, but A2DMRG's linear combination phase inflates the bond dimension to $(L-1) \times \chi$, and the subsequent TT-SVD compression---an $O(L \chi^3)$ serial SVD chain---is both slow and lossy.  At $L = 32$, $\chi = 20$, the 31:1 compression ratio destroys the information that the parallel local solves produced.
 
 This is not merely an implementation issue.  The algorithm's design requires that the compression ratio grow linearly with $L$, creating a fundamental tension between system size and accuracy.  The original paper \cite{Grigori2025} operates in a regime ($d \leq 24$, rank-growth initialization) where this tension is manageable; our lattice-model tests expose the scaling limit.
+Within our tested regime A2DMRG was not competitive on wall-clock time; the regime where it was designed to win---large $d$, large $\chi$, many parallel processors---lies above our bond-dimension ceiling.
 
 \subsection{When would GPU DMRG win?}
 \label{sec:when_gpu_wins}
@@ -900,7 +892,10 @@ This is not merely an implementation issue.  The algorithm's design requires tha
 The three structural barriers---small-matrix overhead, SVD ceiling, and compression loss---point to the conditions under which GPU DMRG would provide clear advantages:
 
 \paragraph{Large bond dimensions ($\chi \gtrsim 1024$).}
-At large $\chi$, both the GEMM and SVD matrices exceed the size thresholds where GPU hardware reaches high occupancy.  Newton--Schulz's $30\times$ FLOP overhead would need to be offset by a $> 30\times$ GPU/CPU throughput ratio, which the MI300X can achieve only at $n \gtrsim 2048$.  The numerical stability of Newton--Schulz at large condition numbers remains a concern.
+Extrapolating sweep-time scaling from $\chi \in \{64, 128, 256, 512\}$, we \emph{conjecture} a CPU/GPU crossover near $\chi \sim 1024$ on the MI300X: both GEMM and SVD matrices would exceed the size thresholds where GPU hardware reaches high occupancy, and Newton--Schulz's $30\times$ FLOP overhead could in principle be offset by a $> 30\times$ GPU/CPU throughput ratio.
+We have not measured this regime; the conjecture rests on (i)~the empirical exponent fit and (ii)~the asymptotic $\chi^3$ GEMM/SVD argument, and should not be cited as a measured result.
+Ganahl et al.~\cite{Ganahl2023} provide an independent data point on NVIDIA hardware at large $\chi$ using tensor processing units, confirming that a CPU/GPU crossover is real and architecture-portable.
+The numerical stability of Newton--Schulz at large condition numbers remains a separate open question.
 
 \paragraph{Multi-GPU parallelism.}
 The real-space parallel DMRG algorithm \cite{Stoudenmire2013} was designed for distributed-memory systems with one segment per processor.
@@ -917,7 +912,51 @@ HIP graph capture of \texttt{apply\_heff} (Section~\ref{sec:opt_ablation}) yield
 For variants whose per-call work is already large enough to amortize launch latency---dmrg-gpu, dmrg2-gpu---the same flag is flat.
 This is the second instance of the broader pattern: micro-optimizations that target the measured local bottleneck of a specific variant pay off; those that attempt to redistribute work without addressing the bottleneck do not.
 
-The honest summary is that GPU DMRG at $\chi \leq 256$ is a solution in search of a problem large enough to justify it---except in two specific niches: two-site DMRG (where RSVD is binding) and segment-parallel pdmrg-gpu (where launch latency is binding).
+At $\chi \leq 256$ the arithmetic intensity of a single MPS update is too low to amortize host-device transfer and kernel launch overhead in our default Lanczos path; on this hardware (single MI300X, ROCm 7.2) and at this bond dimension, an optimized single-thread CPU stack remains competitive. We do not generalize beyond this regime: the ablation results in \S\,\ref{sec:opt_ablation} show that algorithmic changes (RSVD, LANCZOS\_GRAPH) already shift the crossover for specific variants, and \S\,\ref{sec:when_gpu_wins} outlines why we expect $\chi \gtrsim 1024$ to favour the GPU. Whether smaller-$\chi$ GPU DMRG is \emph{useful} depends on workload (e.g.\ parameter sweeps, time evolution) considerations outside this paper.
+
+\subsection{Limitations and threats to validity}
+\label{sec:limitations}
+
+We document here the principal threats to validity that a reader should bear in mind when interpreting the benchmark data.
+
+\paragraph{Hardware scope.}
+All GPU benchmarks were performed on a single AMD Instinct MI300X (gfx942, ROCm 7.2).
+No A100, H100, or B200 data are included; the CUDA port in \texttt{gpu-cuda/} is scaffolding only and has not been compiled or run.
+No multi-GPU experiments were performed.
+
+\paragraph{CPU baseline caveats.}
+The host CPU is an Intel Xeon Platinum 8470 (MI300X system) or 8480C (H100 system), not AMD EPYC as an earlier draft stated.
+The benchmark harness is hardcoded to \texttt{OMP\_NUM\_THREADS=1} (\texttt{run\_mi300x\_challenge.py:382}); no multi-thread sweep was run.
+The OpenBLAS version and linkage path are captured per-run by \texttt{ldd} but there is no build script in the repository, and \texttt{LD\_LIBRARY\_PATH} is not set; OpenBLAS provenance cannot be fully verified from the published artefacts.
+Cotengra is listed as a dependency in the Program Summary but is never imported by \texttt{quimb\_runner.py}; the quimb baseline uses \texttt{opt\_einsum} greedy path.
+The quimb bond dimension schedule is flat (\texttt{bond\_dims=chi}); the idiomatic graduated schedule was not used.
+
+\paragraph{SVD path.}
+All deterministic SVD calls use \texttt{dgesvd} (QR-iteration); \texttt{dgesdd} (divide-and-conquer) was not tested.
+The \texttt{-opt} variants force a CPU host round-trip for SVD; the primary \texttt{-gpu} variants use on-device rocsolver by default.
+
+\paragraph{Algorithmic scope.}
+All GPU DMRG variants are strict single-site (no DMRG3S, no noise injection, no subspace expansion \cite{Hubig2015}).
+Warmup and polish sweep counts are capped at $\leq 2$ per project convention.
+
+\paragraph{Provenance gaps.}
+Only 15 of 116 result JSON files carry full provenance fields (\texttt{git\_sha}, \texttt{binary\_sha256}, \texttt{cli\_args}, \texttt{env\_snapshot}).
+All GPU vendor fields read \texttt{unknown} due to a \texttt{rocm-smi} parse failure at run time.
+Two ablation JSON files contain \texttt{rc=-6} crash data that was counted as a valid run result (later reruns superseded one; the other stands).
+
+\subsubsection{Physics validation not performed}
+\label{sec:physics_not_done}
+
+The following standard convergence checks were not carried out and remain open:
+\begin{itemize}
+  \item \textbf{TFIM central charge.} At the critical point $h/J = 1$, the entanglement entropy satisfies $S(L) = (c/6)\ln L + \mathrm{const}$ with $c = 1/2$.
+  Fitting this scaling from the converged MPS bond entropy would confirm that the simulation correctly captures the critical ground state.
+  \item \textbf{Heisenberg energy variance.} The quantity $\langle H^2\rangle - \langle H\rangle^2$ per site should be $< 10^{-6}$ at a converged bond dimension.
+  This is computable from existing MPO contractions and would quantify truncation error more directly than the energy error threshold.
+  \item \textbf{Heisenberg $E/L$ vs.\ Bethe ansatz.} The thermodynamic limit energy density is $e_0 = 1/4 - \ln 2 \approx -0.4431$~\cite{Bethe1931}.
+  Reporting the fractional deviation per $(L, \chi)$ cell from existing JSON data would contextualise the accuracy of each implementation.
+\end{itemize}
+These checks are deferred; results in this paper are validated only against quimb reference energies to $|\Delta E| < 10^{-10}$.
 
 
 %% ============================================================
@@ -933,7 +972,7 @@ Our main findings are:
   At $\chi = 128$, the GPU wins 100\% of short-chain ($L \leq 20$) configurations but only 71\% at $L = 32$--$64$ and 50\% at $L \geq 100$.
   At $\chi \leq 50$, the CPU wins all medium-to-large systems ($L \geq 32$).
 
-  \item When the CPU wins, it almost always wins with a single thread: 93\% of CPU victories use single-threaded OpenBLAS.
+  \item When the CPU wins, 93\% of CPU victories were measured at the single-thread setting that the harness hardcodes (\texttt{OMP\_NUM\_THREADS=1} throughout); we did not run a multi-thread sweep and cannot attribute this figure to BLAS contention. See limitations \S\,\ref{sec:limitations}.
   At $\chi \leq 50$, the matrices are small enough that thread synchronization overhead exceeds any parallel speedup, making a single core streaming through L2 cache the most efficient executor.
 
   \item Two-site DMRG is $\sim$3$\times$ faster than single-site at large systems ($L = 100$) due to faster convergence from adaptive bond dimension growth.
