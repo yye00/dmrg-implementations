@@ -1025,7 +1025,29 @@ The authors declare that they have no known competing financial interests or per
 
 The source code, benchmark scripts, and raw benchmark data are available at \url{https://github.com/yye00/dmrg-implementations}.
 The repository includes build instructions for ROCm~7.2 on AMD MI300X (gfx942).
-Benchmark results are stored in JSON format in the \texttt{benchmarks/paper\_results/} directory, comprising 604 entries in the main dataset (\texttt{results.json}) and 108 entries in the GPU optimization study (\texttt{gpu\_opt\_bench.json}).
+
+Benchmark results are stored in JSON format.
+The ablation study (Table~6) data reside under
+\texttt{benchmarks/data/gpu\_ablation/\textless{}campaign-tag\textgreater{}/\textless{}variant\textgreater{}/results.json},
+one file per variant per tagged campaign.
+Challenge-size results (Tables~2--5 and Tables~8--12) are under
+\texttt{benchmarks/paper\_results/mi300x/challenge/\textless{}campaign-tag\textgreater{}/}.
+The GPU-optimisation scaling study (Table~5) additionally uses
+\texttt{benchmarks/data/bench\_opt\_results.json}.
+A per-table index with sha256 checksums will be provided in
+\texttt{MANIFEST.json} at the repository root upon resubmission.
+
+\noindent\textbf{Note on provenance.}
+The files \texttt{paper\_results/mi300x/results.json} and
+\texttt{gpu\_opt\_bench.json} named in earlier drafts predate the
+provenance harness and do not embed \texttt{provenance.*} fields.
+Two ablation JSONs produced on 2026-04-20/21 from git commit
+\texttt{c26f0bd} contained crash-contaminated medians and have been
+moved to \texttt{benchmarks/data/gpu\_ablation/superseded/} with
+accompanying READMEs; they are not used for any table in this paper.
+Clean re-runs under a single campaign tag with the hardened harness
+(returncode filter, \texttt{data\_quality} gate) will replace those
+cells before resubmission.
 
 %% ============================================================
 \section*{Acknowledgments}

@@ -76,3 +76,6 @@ a2dmrg/venv/
 **/*.egg-info/
 **/.pytest_cache/
 **/venv/
+
+# LLM session staging areas — prevent recurrence of _diagnostic_logs/ escape
+_diagnostic_logs/
