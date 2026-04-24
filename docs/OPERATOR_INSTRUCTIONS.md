@@ -34,11 +34,10 @@ Next tick honors it. Typical latency: up to 30 min (one loop cycle).
 - [ ] note: booking Hot Aisle for Saturday 10am
 -->
 
-- [ ] merge #6
-
 ## Processed
 
 <!-- Orchestrator appends here. Do not edit by hand. -->
+- [x] merge #6 — PROCESSED 2026-04-24T14:32:26Z — MERGED: PR #6 (`review-clean`). Merge commit `cd162a2`. Cluster J → `merged`. paper/main.tex serialization constraint lifted; cluster I now unblocked.
 - [x] merge #6 — PROCESSED 2026-04-24T14:10:00Z — SKIPPED: PR #6 label is `needs-review`, not `review-clean`. Flagged on tracking issue. Will honor once reviewer clears.
 - [x] merge #6 — PROCESSED 2026-04-23T23:50:00Z — SKIPPED: PR #6 label is `needs-review`, not `review-clean`. Flagged on tracking issue. Will honor once reviewer clears.
 - [x] note: pre-authorized PR #6 merge; sandbox queue should drain B/C/E/I next. — PROCESSED 2026-04-23T23:50:00Z — comment posted on issue #2.
