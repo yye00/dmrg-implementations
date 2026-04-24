@@ -34,9 +34,9 @@ Next tick honors it. Typical latency: up to 30 min (one loop cycle).
 - [ ] note: booking Hot Aisle for Saturday 10am
 -->
 
-- [ ] merge #9
-
 ## Processed
+
+- [x] merge #9 — PROCESSED 2026-04-24T17:29:07Z — MERGED: PR #9 (`review-clean`). Merge commit `69ecf22`. Cluster C → `merged`. paper/main.tex serialization constraint lifted; E now eligible for dispatch.
 
 <!-- Orchestrator appends here. Do not edit by hand. -->
 - [x] merge #8 — PROCESSED 2026-04-24T17:02:25Z — MERGED: PR #8 (`review-clean`). Merge commit `bb7a879`. Cluster B → `merged`. paper/main.tex serialization constraint lifted; C and E now eligible for dispatch.
