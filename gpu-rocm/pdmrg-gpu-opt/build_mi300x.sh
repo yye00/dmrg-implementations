@@ -1,0 +1,43 @@
+#!/bin/bash
+# Build script for Optimized Parallel DMRG-GPU on MI300X
+set -e
+
+echo "=========================================="
+echo "Building PDMRG-GPU-OPT for MI300X"
+echo "=========================================="
+# Note: Lanczos is the default eigensolver; use --davidson for Block-Davidson (b=4).
+# SVD is CPU LAPACK only in this variant (no GPU rocsolver path).
+# ALWAYS pass --warmup N --polish N explicitly; do not rely on compiled-in defaults.
+
+export ROCM_PATH=/opt/rocm
+export PATH=$ROCM_PATH/bin:$PATH
+
+if ! command -v hipcc &> /dev/null; then
+    echo "ERROR: hipcc not found. Is ROCm installed?"
+    exit 1
+fi
+
+echo "hipcc: $(which hipcc)"
+echo ""
+
+rm -rf build
+mkdir build
+cd build
+
+cmake .. \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER=$ROCM_PATH/llvm/bin/clang++ \
+  -DCMAKE_C_COMPILER=$ROCM_PATH/llvm/bin/clang \
+  -DGPU_TARGETS=gfx942
+
+make -j8 pdmrg_gpu_opt
+
+echo ""
+echo "=========================================="
+echo "BUILD SUCCESSFUL"
+echo "=========================================="
+echo ""
+echo "Run: ./build/pdmrg_gpu_opt --warmup 1 --polish 0 [options]"
+echo "  Example: ./build/pdmrg_gpu_opt --L 32 --chi 64 --n_sweeps 20 --warmup 1 --polish 0"
+echo "  Davidson: ./build/pdmrg_gpu_opt --davidson --L 32 --chi 64 --n_sweeps 20 --warmup 1 --polish 0"
+echo ""
