@@ -297,19 +297,7 @@ However, this trades a lower iteration count for higher per-iteration overhead f
 \subsection{Chebyshev-filtered subspace iteration}
 \label{sec:chebyshev}
 
-\emph{Hypothesis}: Polynomial filtering can reduce eigenvalue iteration count by suppressing unwanted spectral components, and the filter application is a sequence of matrix--vector products that map well to the GPU.
-
-Chebyshev-filtered subspace iteration (CheFSI) \cite{Zhou2006} uses a polynomial filter to suppress unwanted eigenvalue components.
-Given spectral bounds $[\lambda_\text{min}, \lambda_\text{max}]$ from a short Lanczos run (10 steps), a degree-$p$ Chebyshev polynomial $T_p$ is applied via the three-term recurrence
-\begin{equation}
-  y_{k+1} = 2\varphi(H) y_k - y_{k-1}, \qquad \varphi(H) = \frac{2H - (\lambda_\text{max} + \lambda_\text{min})I}{\lambda_\text{max} - \lambda_\text{min}},
-\end{equation}
-where each application of $\varphi(H)$ requires one $H_\text{eff}$ matrix--vector product.
-The energy is extracted via the Rayleigh quotient after $n_\text{outer}$ filter applications.
-
-CheFSI was designed for density functional theory (DFT) calculations where many eigenvalues are needed simultaneously \cite{Zhou2006}.
-A CheFSI port to the GPU was planned for this study but was not completed; no CheFSI benchmark data were produced.
-The algorithmic argument for why CheFSI would be slower (one eigenvalue vs.\ many) is discussed in Section~\ref{sec:opt_failure}.
+Polynomial-filter methods (CheFSI \cite{Zhou2006}) were evaluated as candidates but not implemented in the present codebase; we do not report performance numbers.
 
 \subsection{Cross-segment batched GEMM}
 \label{sec:batched_sweep}
