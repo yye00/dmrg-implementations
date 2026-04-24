@@ -68,7 +68,7 @@ DMRG \sep GPU computing \sep tensor networks \sep AMD MI300X \sep performance be
 \emph{Code Ocean capsule:} (not used)\\
 \emph{Licensing provisions:} MIT\\
 \emph{Programming language:} C++17/HIP (\SI{\sim 32}{kLOC}), Python~3 (\SI{\sim 22}{kLOC}, excluding tests and virtual environments), MPI (mpi4py) for A2DMRG; GPU code in HIP/C++ targeting ROCm 7.2 (LOC counted via \texttt{find gpu-rocm cpu -name '*.cpp' -o -name '*.h' | grep -v build | xargs wc -l})\\
-\emph{External libraries/dependencies:} rocBLAS, rocsolver, HIP (ROCm 7.2+); OpenBLAS 0.3.28+ (source-built), LAPACK; quimb 1.8, NumPy; mpi4py for parallel Python (cotengra is listed as a dependency but is not invoked by the runner; see \S\,\ref{sec:limitations})\\
+\emph{External libraries/dependencies:} rocBLAS, rocsolver, HIP (ROCm 7.2+); OpenBLAS (version and linkage captured per-run via \texttt{ldd}; see provenance note in \S\,\ref{sec:limitations}), LAPACK; quimb 1.8, NumPy; mpi4py for parallel Python (cotengra is listed as a dependency but is not invoked by the runner; see \S\,\ref{sec:limitations})\\
 \emph{Supplementary material:} none\\[0.5em]
 \emph{Nature of problem:} Ground-state computation of one-dimensional quantum lattice models via the density matrix renormalization group (DMRG). Per-bond work is dominated by tensor contractions (GEMM, $O(\chi^3 d^2)$) and singular value decompositions, with moderate bond dimensions $\chi \in [20, 256]$ straddling the CPU--GPU crossover.\\[0.5em]
 \emph{Solution method:} Eleven DMRG variants spanning single-site and two-site sweeps, domain-decomposition parallel DMRG \cite{Stoudenmire2013}, an additive two-level variant (A2DMRG) \cite{Grigori2025}, and three algorithmic alternatives designed to increase BLAS-3 utilization (Block-Davidson eigensolver (with host-side LAPACK SVD)). All GPU variants share a common env-var-gated ablation framework (six micro-optimizations: DEVICE\_K, LANCZOS\_GRAPH, RSVD, SPARSE\_MPO, FUSE\_LANCZOS, D\_PAD) so each flag's effect can be measured in isolation on the same binary. Benchmarks run across three physics models (Heisenberg chain, Josephson-junction array, transverse-field Ising) at system sizes up to $L=128$.\\[0.5em]
@@ -387,10 +387,13 @@ Our preliminary H100 runs (in \texttt{benchmarks/paper\_results/h100/}, 18 match
 A controlled cross-vendor comparison is left to future work; the present study reports only single-vendor results to keep all measured speedups attributable to the algorithmic and software changes under investigation.
 
 The software environment consists of ROCm~7.2, rocBLAS (for GEMM), rocsolver (for GPU SVD, used in comparisons), and LAPACK via OpenBLAS.
-The exact OpenBLAS version and linkage are captured per-run by \texttt{ldd} and embedded in the result JSON's \texttt{provenance.rocm} field.
+The exact OpenBLAS version and linkage are captured per-run by \texttt{ldd} in the result JSONs that carry provenance fields; however, the primary paper result files (\texttt{paper\_results/mi300x/results.json}, \texttt{gpu\_opt\_bench.json}) predate the provenance harness and do not embed this information (see \S\,\ref{sec:limitations}).
 All GPU code was compiled with \texttt{hipcc} (clang-based) targeting \texttt{gfx942}.
 
 CPU benchmarks used the quimb tensor network library \cite{Gray2018} (version 1.8) as a single-thread baseline (\texttt{OMP\_NUM\_THREADS=1}).
+The quimb runner uses a flat bond-dimension schedule (\texttt{bond\_dims=chi}, not graduated), absolute cutoff \texttt{1e-14}, and convergence tolerance \texttt{tol=1e-11}.
+Cotengra path optimisation is \emph{not} invoked; the runner uses \texttt{opt\_einsum} greedy path selection, which is quimb's default.
+These choices bias quimb towards conservatively low memory usage but may inflate wall time relative to an idiomatically tuned quimb run; a tuned comparison (graduated schedule, cotengra paths) is left for future work.
 
 \subsection{Benchmark methodology}
 \label{sec:methodology}
