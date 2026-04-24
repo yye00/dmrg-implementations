@@ -187,6 +187,10 @@ Whether this fraction is large enough to overcome launch overhead at moderate $\
 In \emph{single-site} DMRG, one MPS tensor is optimized at a time, giving an eigensolve on a vector of dimension $\chi d$.
 The bond dimension is fixed throughout the sweep, which is efficient but can trap the optimization in local minima if the initial bond dimension profile is poor.
 
+The single-site implementation in this work is the \emph{strict} variant: local eigensolve followed by exact SVD truncation, with no density-matrix perturbation.
+The Hubig--McCulloch--Schollw{\"o}ck--Wolf DMRG3S extension~\cite{Hubig2015} restores the ability to grow Schmidt sectors at fixed bond dimension via a noise term $\alpha \sum_a (H_a|\psi\rangle)(H_a|\psi\rangle)^\dagger$; we do not implement it here.
+Consequently, our single-site results should be read as a lower bound on what an expansion-augmented single-site DMRG would achieve, and the convergence-sweep counts reported in Section~\ref{sec:single_vs_two} reflect this limitation.
+
 \subsection{Two-site DMRG}
 \label{sec:two_site}
 
@@ -553,6 +557,8 @@ $L$ & $\chi$ & dmrg-gpu & dmrg2-gpu & dmrg-gpu-opt & dmrg2-gpu-opt \\
 \end{table}
 
 The practical recommendation is: use single-site dmrg-gpu at $\chi \geq 50$ for most problems; switch to two-site dmrg2-gpu when convergence is slow ($L \geq 64$ with small $d$) or when $\chi \leq 20$ and the system is not tiny.
+Note that these sweep-count comparisons reflect the \emph{strict} single-site variant (no DMRG3S subspace expansion); the advantage may shrink or invert under a DMRG3S-capable implementation, which typically converges in a sweep count comparable to two-site~\cite{Hubig2015}.
+Practitioners using a DMRG3S-capable code should re-evaluate before adopting this recommendation.
 Parallel DMRG (pdmrg-gpu) never wins on a single GPU.
 
 Given that the GPU's advantage is confined to a narrow parameter window, can parallelism widen that window by distributing work across segments or processors?
@@ -992,6 +998,9 @@ These negative results delineate the boundary between problem regimes where GPU 
 At moderate bond dimensions ($\chi \leq 256$), LAPACK's optimized SVD and the Lanczos algorithm's efficiency for single-eigenvalue problems make them difficult targets.
 The regime where BLAS-3 replacements would be expected to help---$\chi \gtrsim 1024$ on multi-GPU systems---remains to be explored.
 More broadly, our experience suggests that porting an algorithm to a GPU is not merely a matter of mapping operations to hardware: the structure of the algorithm itself---how much serial factorization it requires, how small its inner matrices are, how lossy its compression steps become---determines whether the port can ever pay off.
+
+\paragraph{Future directions.}
+DMRG3S subspace expansion on GPU: implementing the Hubig--McCulloch--Schollw{\"o}ck--Wolf noise term~\cite{Hubig2015} in HIP kernels would allow strict single-site to grow Schmidt sectors without switching to two-site, potentially closing the convergence-sweep gap and broadening the parameter window where single-site is competitive.
 
 All source code (11 implementations in Python, Python/MPI, and C++/HIP), benchmark scripts, and raw benchmark data are available at \url{https://github.com/yye00/dmrg-implementations}.
 
