@@ -34,6 +34,8 @@ Next tick honors it. Typical latency: up to 30 min (one loop cycle).
 - [ ] note: booking Hot Aisle for Saturday 10am
 -->
 
+- [ ] gpu-unlock
+
 ## Processed
 
 - [x] merge #10 — PROCESSED 2026-04-24T17:50:00Z — MERGED: PR #10 (`review-clean`). Merge commit `26753726`. Cluster E → `merged`. Wave-1 sandbox-scope complete: 8/10 clusters merged; F+H remain `waiting_gpu` (GPU-gated).
