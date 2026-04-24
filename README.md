@@ -10,7 +10,7 @@ This repository contains **in-house MPI-parallel DMRG implementations** validate
 
 - **PDMRG**: Parallel two-site DMRG with MPI domain decomposition and boundary merge protocol
 - **A2DMRG**: Additive two-level DMRG with parallel warmup and coarse-space correction
-- **PDMRG-OPT**: ⚠️ **Specification only** — GEMM-optimized CPU implementation (see `pdmrg_gpu_opt.md`)
+- **PDMRG-OPT**: CPU-level GEMM-optimized PDMRG variant; 1032 LOC in `cpu/pdmrg-opt/pdmrg/dmrg.py` (see `pdmrg_gpu_opt.md` for design notes)
 - **PDMRG-GPU**: 🔬 **Experimental** — GPU-accelerated implementation using hipTensor/rocBLAS (see `gpu-rocm/pdmrg-gpu/`)
 - **DMRG-GPU**: GPU-native single-site DMRG using rocBLAS/rocSOLVER on AMD MI300X (see `gpu-rocm/dmrg-gpu/`)
 
@@ -80,9 +80,9 @@ All implementations achieve machine precision agreement (ΔE < 1e-14) on correct
 
 ⚠️ **Important**: Both PDMRG and A2DMRG have documented correctness caveats that affect benchmark interpretation:
 
-1. **np=1 Early Return Behavior**: When running with a single MPI process (`np=1`) and warmup enabled, both PDMRG and A2DMRG return the serial warmup energy **without executing the parallel algorithm**. This means "PDMRG np=1" and "A2DMRG np=1" benchmark results actually measure quimb DMRG2 performance.
+1. **np=1 Early Return Behavior (CPU Python only)**: When running with a single MPI process (`np=1`) and warmup enabled, the CPU Python PDMRG (`cpu/pdmrg/`) returns the serial warmup energy without executing the parallel algorithm — effectively measuring quimb DMRG2. This does NOT apply to the C++ GPU variants (`gpu-rocm/`).
 
-2. **PDMRG Boundary Merge Optimization Disabled**: The boundary merge optimization path is permanently disabled due to an unresolved "H_eff spurious eigenvalue problem." Impact on performance is undocumented.
+2. **PDMRG Boundary Merge Optimization**: The boundary merge runs unconditionally in the C++ GPU variants when `n_segments >= 2` (see `gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h` lines 2679, 2691). The earlier claim that it was "disabled" was incorrect.
 
 3. **A2DMRG Canonicalization Policy**: Canonicalization is intentionally skipped to preserve bond dimension structure required for coarse-space linear combination. This is a design decision, not a bug.
 
@@ -101,40 +101,43 @@ All benchmark results should follow the metadata schema defined in [`BENCHMARK_M
 
 ## Quick Start
 
+### Quick Start (MI300X GPU)
+
+```bash
+# 1. Build all 6 GPU variants
+./gpu-rocm/build_all.sh
+
+# 2. Smoke test: single-site DMRG, L=16, chi=64 (< 2 min)
+cd benchmarks/scripts
+python run_mi300x_challenge.py --variant dmrg-gpu --quick
+
+# 3. Full benchmark grid (several GPU-hours)
+python run_mi300x_challenge.py --variant dmrg-gpu
+```
+
+Benchmark outputs land in `benchmarks/results/mi300x/<timestamp>/`.
+
+### Reproducing the Paper
+
+```bash
+make -C paper figures   # regenerates fig6_ablation.pdf
+make -C paper           # builds main.pdf
+```
+
+See `REPRODUCIBILITY.md` for binary SHAs and commit pins (Tables 4–7).
+
 ### Requirements
 
-- Python 3.13+ (tested with 3.13 and 3.14)
-- MPI (OpenMPI or MPICH)
-- NumPy, SciPy
-- quimb (tensor network library)
-- mpi4py (for parallel runs)
+- **GPU**: AMD Instinct MI300X (gfx942) with ROCm 7.2+
+- **Python**: 3.11+ with `uv` or `pip`; `uv sync` or `pip install -e .` from `pyproject.toml`
+- **C++ build**: hipcc (from ROCm), CMake 3.21+, LAPACK
 
-### Running Benchmarks
+### Known Divergences from Paper
 
-```bash
-# Short correctness benchmark (L=12)
-python benchmarks/heisenberg_benchmark.py
-
-# Long benchmark (L=48, 50 sweeps)
-python benchmarks/heisenberg_long_benchmark.py
-
-# Josephson junction correctness test (complex128)
-python cpu/a2dmrg/benchmarks/josephson_correctness_benchmark.py
-```
-
-**Note:** A2DMRG speedup benefits appear at larger system sizes (L > 20). At L=12, cotengra contraction overhead may dominate, making it slower than PDMRG in wall time.
-
-### Running DMRG Simulations
-
-Each implementation has its own virtual environment:
-
-```bash
-# PDMRG
-cpu/pdmrg/venv/bin/python run_pdmrg_np1.py
-
-# A2DMRG
-cpu/a2dmrg/venv/bin/python run_a2dmrg_np1.py
-```
+For a full list of discrepancies between the paper text and code reality, see the audit appendix (`docs/PATH_B_GROUND_TRUTH.md`). Key ones:
+- The quimb runner is hardcoded to 1 CPU thread; the "1/2/4/8/12 thread sweep" in §3.1 was not produced by any script in this repo.
+- cotengra is listed as a dependency but is never invoked by the benchmark runner.
+- CPU vendor in §3.1 should be Intel Xeon Platinum 8470, not AMD EPYC.
 
 ## Development
 

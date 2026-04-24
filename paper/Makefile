@@ -12,8 +12,10 @@ $(MAIN).pdf: $(MAIN).tex refs.bib
 	$(LATEX) $(MAIN)
 	$(LATEX) $(MAIN)
 
-figures:
-	cd scripts && python generate_figures.py
+figures: figures/fig6_ablation.pdf
+
+figures/fig6_ablation.pdf: ../benchmarks/scripts/generate_ablation_figure.py
+	cd ../benchmarks/scripts && python generate_ablation_figure.py --out ../../paper/figures/fig6_ablation.pdf
 
 clean:
 	rm -f $(MAIN).pdf $(MAIN).aux $(MAIN).bbl $(MAIN).blg \
