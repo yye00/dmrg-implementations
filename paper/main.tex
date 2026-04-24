@@ -67,7 +67,7 @@ DMRG \sep GPU computing \sep tensor networks \sep AMD MI300X \sep performance be
 \emph{Developer's repository link:} \url{https://github.com/yye00/dmrg-implementations}\\
 \emph{Code Ocean capsule:} (not used)\\
 \emph{Licensing provisions:} MIT\\
-\emph{Programming language:} C++17 (\SI{\sim 12}{kLOC}), Python 3 (\SI{\sim 6}{kLOC}), MPI (mpi4py) for A2DMRG; GPU code in HIP/C++ targeting ROCm 7.2\\
+\emph{Programming language:} C++17/HIP (\SI{\sim 32}{kLOC}), Python~3 (\SI{\sim 22}{kLOC}, excluding tests and virtual environments), MPI (mpi4py) for A2DMRG; GPU code in HIP/C++ targeting ROCm 7.2 (LOC counted via \texttt{find gpu-rocm cpu -name '*.cpp' -o -name '*.h' | grep -v build | xargs wc -l})\\
 \emph{External libraries/dependencies:} rocBLAS, rocsolver, HIP (ROCm 7.2+); OpenBLAS 0.3.28+ (source-built), LAPACK; quimb 1.8, NumPy; mpi4py for parallel Python (cotengra is listed as a dependency but is not invoked by the runner; see \S\,\ref{sec:limitations})\\
 \emph{Supplementary material:} none\\[0.5em]
 \emph{Nature of problem:} Ground-state computation of one-dimensional quantum lattice models via the density matrix renormalization group (DMRG). Per-bond work is dominated by tensor contractions (GEMM, $O(\chi^3 d^2)$) and singular value decompositions, with moderate bond dimensions $\chi \in [20, 256]$ straddling the CPU--GPU crossover.\\[0.5em]
@@ -1139,5 +1139,25 @@ The full results reinforce the narrative developed in Sections~\ref{sec:results}
   When the GPU wins (e.g., $L = 32$, $\chi = 128$), it is always D1-GPU.
   D2-GPU is competitive at $L = 64$, $\chi = 128$ (22.80~s vs.\ 24.01~s for D1-GPU) but does not win---the two-site SVD cost ($d^2 \chi$ matrices) pushes it further into the SVD-dominated regime.
 \end{itemize}
+
+%% ============================================================
+\section*{Declaration of generative AI and AI-assisted technologies in the writing process}
+%% ============================================================
+
+During the preparation of this work the author(s) used Anthropic Claude (models Opus~4.6/4.7) for
+(a)~drafting and revising portions of the manuscript prose, including the rewrite captured in
+commit \texttt{40af7bf} and the CPC submission preparation (\texttt{bb8bcd0}); and
+(b)~generating, refactoring, and reviewing source code in the \texttt{gpu-rocm/} and \texttt{cpu/} trees.
+Approximately 38\% of the 113 git commits in the public repository (43 commits) were authored by an
+AI assistant operating under human direction; all such commits were reviewed and accepted by the
+human author(s) before merge.
+After using these tools, the author(s) reviewed and edited the content as needed and take(s) full
+responsibility for the content of the publication.
+
+%% ============================================================
+\section*{Acknowledgements}
+%% ============================================================
+
+The author(s) thank Anthropic Claude for code-generation and editorial assistance.
 
 \end{document}

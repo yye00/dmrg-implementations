@@ -1,0 +1,10 @@
+DMRG Implementations
+Copyright (c) 2024-2026 Yaakoub El Khamra
+
+This software incorporates or depends on:
+  - quimb         Apache-2.0   https://github.com/jcmgray/quimb
+  - OpenBLAS      BSD-3-Clause https://github.com/OpenMathLib/OpenBLAS
+  - rocBLAS/rocSOLVER  MIT     https://github.com/ROCm/rocBLAS
+  - hipBLAS       MIT          https://github.com/ROCm/hipBLAS
+  - pybind11      BSD-3-Clause https://github.com/pybind/pybind11
+All listed licenses are compatible with this project's MIT license.
