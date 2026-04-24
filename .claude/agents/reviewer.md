@@ -30,7 +30,8 @@ Every item must pass.
 ### 3. Commit hygiene
 - Commits are grouped per sub-cluster per the brief.
 - Commit messages state WHY, not just WHAT.
-- No merge commits. No force-pushes after PR open (compare first-parent history against current HEAD).
+- No merge commits that COMBINE implementer sub-cluster work. Merge commits produced by pulling `origin/main` into the feature branch to resolve conflicts ARE permitted when the operator authorized the resolution (look for an operator instruction in `docs/OPERATOR_INSTRUCTIONS.md` Processed section, or a PR comment from the operator). If in doubt, ask in the review body rather than blocking.
+- No force-pushes after PR open EXCEPT as part of operator-authorized rebase-based conflict resolution. A force-push you see in the ref log without an operator authorization IS a flag.
 
 ### 4. Citation / reference integrity (paper clusters only)
 - Every new `\cite{key}` resolves to an entry in `paper/refs.bib`.
