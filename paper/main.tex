@@ -67,7 +67,7 @@ DMRG \sep GPU computing \sep tensor networks \sep AMD MI300X \sep performance be
 \emph{Developer's repository link:} \url{https://github.com/yye00/dmrg-implementations}\\
 \emph{Code Ocean capsule:} (not used)\\
 \emph{Licensing provisions:} MIT\\
-\emph{Programming language:} C++17 (\SI{\sim 12}{kLOC}), Python 3 (\SI{\sim 6}{kLOC}), MPI (mpi4py) for A2DMRG; GPU code in HIP/C++ targeting ROCm 7.2\\
+\emph{Programming language:} C++17/HIP (\SI{\sim 32}{kLOC}), Python~3 (\SI{\sim 22}{kLOC}, excluding tests and virtual environments), MPI (mpi4py) for A2DMRG; GPU code in HIP/C++ targeting ROCm 7.2 (LOC counted via \texttt{find gpu-rocm cpu -name '*.cpp' -o -name '*.h' | grep -v build | xargs wc -l})\\
 \emph{External libraries/dependencies:} rocBLAS, rocsolver, HIP (ROCm 7.2+); OpenBLAS 0.3.28+ (source-built), LAPACK; quimb 1.8, NumPy; mpi4py for parallel Python (cotengra is listed as a dependency but is not invoked by the runner; see \S\,\ref{sec:limitations})\\
 \emph{Supplementary material:} none\\[0.5em]
 \emph{Nature of problem:} Ground-state computation of one-dimensional quantum lattice models via the density matrix renormalization group (DMRG). Per-bond work is dominated by tensor contractions (GEMM, $O(\chi^3 d^2)$) and singular value decompositions, with moderate bond dimensions $\chi \in [20, 256]$ straddling the CPU--GPU crossover.\\[0.5em]
