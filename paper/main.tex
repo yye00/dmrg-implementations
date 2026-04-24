@@ -387,7 +387,7 @@ Our preliminary H100 runs (in \texttt{benchmarks/paper\_results/h100/}, 18 match
 A controlled cross-vendor comparison is left to future work; the present study reports only single-vendor results to keep all measured speedups attributable to the algorithmic and software changes under investigation.
 
 The software environment consists of ROCm~7.2, rocBLAS (for GEMM), rocsolver (for GPU SVD, used in comparisons), and LAPACK via OpenBLAS.
-The exact OpenBLAS version and linkage are captured per-run by \texttt{ldd} and embedded in the result JSON's \texttt{provenance.rocm} field.
+The exact OpenBLAS version and linkage are captured per-run by \texttt{ldd} in the result JSONs that carry provenance fields; however, the primary paper result files (\texttt{paper\_results/mi300x/results.json}, \texttt{gpu\_opt\_bench.json}) predate the provenance harness and do not embed this information (see \S\,\ref{sec:limitations}).
 All GPU code was compiled with \texttt{hipcc} (clang-based) targeting \texttt{gfx942}.
 
 CPU benchmarks used the quimb tensor network library \cite{Gray2018} (version 1.8) as a single-thread baseline (\texttt{OMP\_NUM\_THREADS=1}).
