@@ -222,7 +222,10 @@ The pointer arrays for batched GEMMs are computed by lightweight GPU kernels (ty
 
 The Lanczos eigensolver runs entirely on the GPU using device-pointer mode for all rocBLAS reductions (\texttt{dot}, \texttt{nrm2}), eliminating implicit stream synchronizations.
 Only the final tridiagonal eigensolve (a $k \times k$ problem with $k \approx 15$--$50$) is performed on the CPU via LAPACK \texttt{dstev}.
-SVD is performed on the CPU via LAPACK \texttt{dgesvd} (QR-iteration based; or \texttt{zgesvd} for complex), as profiling showed this to be faster than GPU rocsolver for $\chi \leq 256$ (see Section~\ref{sec:svd_bottleneck}).
+SVD path differs by variant family.
+The primary \texttt{-gpu} variants (\texttt{dmrg-gpu}, \texttt{dmrg2-gpu}, \texttt{pdmrg-gpu}) perform SVD on the GPU via \texttt{rocsolver\_gesvd\_auto}, with an optional randomized-SVD path (\texttt{opts\_.rsvd}); the interior SVD for \texttt{pdmrg-gpu} also uses GPU rocsolver, while the segment-boundary merge uses a CPU \texttt{accurate\_svd} for numerical stability.
+The \texttt{-opt} variants (\texttt{dmrg-gpu-opt}, \texttt{dmrg2-gpu-opt}, \texttt{pdmrg-gpu-opt}) route SVD to the CPU via LAPACK \texttt{dgesvd} / \texttt{zgesvd} (QR-iteration based); this choice is motivated by profiling which showed GPU rocsolver provides only a 13\% improvement over CPU LAPACK at $\chi = 256$ and is slower at $\chi \leq 128$ (see Section~\ref{sec:svd_bottleneck}).
+Thus §\ref{sec:svd_bottleneck}'s 97--98\% CPU-SVD figure and Table~\ref{tab:svd_profile} describe the \texttt{-opt} SVD path; the primary \texttt{-gpu} variants use GPU rocsolver by default.
 
 This three-step GEMM structure is the operation we hoped would be the GPU's strength.
 At $\chi = 128$ with $d = 2$, the individual GEMMs are $128 \times 128$---large enough to occupy the MI300X's compute units.
