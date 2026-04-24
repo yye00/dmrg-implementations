@@ -391,6 +391,9 @@ The exact OpenBLAS version and linkage are captured per-run by \texttt{ldd} and 
 All GPU code was compiled with \texttt{hipcc} (clang-based) targeting \texttt{gfx942}.
 
 CPU benchmarks used the quimb tensor network library \cite{Gray2018} (version 1.8) as a single-thread baseline (\texttt{OMP\_NUM\_THREADS=1}).
+The quimb runner uses a flat bond-dimension schedule (\texttt{bond\_dims=chi}, not graduated), absolute cutoff \texttt{1e-14}, and convergence tolerance \texttt{tol=1e-11}.
+Cotengra path optimisation is \emph{not} invoked; the runner uses \texttt{opt\_einsum} greedy path selection, which is quimb's default.
+These choices bias quimb towards conservatively low memory usage but may inflate wall time relative to an idiomatically tuned quimb run; a tuned comparison (graduated schedule, cotengra paths) is left for future work.
 
 \subsection{Benchmark methodology}
 \label{sec:methodology}
