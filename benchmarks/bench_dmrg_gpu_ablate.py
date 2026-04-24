@@ -216,13 +216,29 @@ def run_bench(binary: str, reps: int, out_dir: Path, model: str = "josephson"):
                       f"wall={res['wall_s']:.2f}s E={res['energy']}")
                 if res["returncode"] != 0 or res["energy"] is None:
                     print(f"    FAILED:\n{res['stderr_tail']}")
+                    # Invalidate timing so crashes cannot pollute the median.
+                    # rc=-6 (SIGABRT) may print "Total wall time:" before abort;
+                    # without this guard the value passes the is-not-None filter.
+                    res["wall_s"] = None
+                    res["valid"] = False
+                else:
+                    res["valid"] = True
                 reps_data.append(res)
-            walls = [r["wall_s"] for r in reps_data if r["wall_s"] is not None]
+            walls = [r["wall_s"] for r in reps_data
+                     if r.get("valid") and r["wall_s"] is not None]
+            n_attempted = len(reps_data)
+            n_valid = len(walls)
             median_wall = statistics.median(walls) if walls else None
+            data_quality = "OK" if n_valid == n_attempted else (
+                "DEGRADED" if n_valid >= (n_attempted + 1) // 2 else "FAILED"
+            )
             results.append({
                 "problem": prob["label"],
                 "config": label,
                 "flags": flags,
+                "n_reps_attempted": n_attempted,
+                "n_reps_valid": n_valid,
+                "data_quality": data_quality,
                 "reps": reps_data,
                 "median_wall_s": median_wall,
             })
@@ -243,6 +259,15 @@ def run_bench(binary: str, reps: int, out_dir: Path, model: str = "josephson"):
         r = run_one(binary, prob, list(OPT_FLAGS), profile=True, model=model)
         profile_runs[prob["label"]] = r
 
+    # Warn if any group has majority-failed reps.
+    degraded = [r for r in results if r.get("data_quality") not in ("OK", None)]
+    overall_quality = "DEGRADED" if degraded else "OK"
+    if degraded:
+        print(f"\nWARNING: {len(degraded)} group(s) have data_quality != OK:")
+        for r in degraded:
+            print(f"  {r['problem']} / {r['config']}: {r['data_quality']} "
+                  f"({r['n_reps_valid']}/{r['n_reps_attempted']} valid)")
+
     payload = {
         "timestamp": datetime.utcnow().isoformat(),
         "binary": str(binary),
@@ -251,6 +276,7 @@ def run_bench(binary: str, reps: int, out_dir: Path, model: str = "josephson"):
         "problems": BENCH_CONFIGS,
         "opt_flags": OPT_FLAGS,
         "reps": reps,
+        "data_quality": overall_quality,
         "results": results,
         "profile_runs_all_on": profile_runs,
     }
@@ -328,6 +354,10 @@ def main():
                     help="skip the correctness gate (NOT recommended)")
     ap.add_argument("--model", default="josephson", choices=["josephson", "heisenberg"],
                     help="physics model to benchmark (default josephson).")
+    ap.add_argument("--manifest", default=None,
+                    help="Path to campaign_manifest.json. If provided, the binary sha256 "
+                         "is verified against the manifest entry before any run starts. "
+                         "Aborts if sha256 does not match (binary-drift guard).")
     args = ap.parse_args()
 
     stamp = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
@@ -343,13 +373,45 @@ def main():
                 sys.exit(2)
             binaries.append((name, p))
 
+    # Binary-drift guard: verify sha256 against campaign manifest if provided.
+    manifest_data = None
+    if args.manifest:
+        manifest_path = Path(args.manifest)
+        if not manifest_path.exists():
+            print(f"ERROR: --manifest {manifest_path} does not exist.", file=sys.stderr)
+            sys.exit(1)
+        import hashlib
+        manifest_data = json.loads(manifest_path.read_text())
+
     for impl_name, binary in binaries:
+        # Check binary sha256 against manifest.
+        if manifest_data:
+            import hashlib
+            actual_sha = hashlib.sha256(binary.read_bytes()).hexdigest()
+            expected_sha = (manifest_data.get("variants", {}).get(impl_name, {}).get("sha256")
+                            or manifest_data.get("variants", {}).get("custom", {}).get("sha256"))
+            if expected_sha and actual_sha != expected_sha:
+                print(f"ERROR: binary SHA256 mismatch for {impl_name}:", file=sys.stderr)
+                print(f"  expected: {expected_sha}", file=sys.stderr)
+                print(f"  actual:   {actual_sha}", file=sys.stderr)
+                print("Aborting to prevent binary-drift contamination.", file=sys.stderr)
+                sys.exit(1)
+            elif expected_sha:
+                print(f"  SHA256 verified for {impl_name}: {actual_sha[:16]}...")
+
         print(f"\n{'='*60}")
         print(f"  Variant: {impl_name}  ({binary})")
         print(f"{'='*60}\n")
         if not args.skip_correctness:
             correctness_gate(str(binary), model=args.model)
-        out_dir = Path(args.out) / stamp / impl_name
+        # Honor --out if it looks like a direct directory (not a root to append stamp).
+        # When called from run_paper_rebench.sh, --out is already the final dir.
+        out_path = Path(args.out)
+        if args.binary:
+            # Direct binary path: write directly to --out.
+            out_dir = out_path
+        else:
+            out_dir = out_path / stamp / impl_name
         payload = run_bench(str(binary), args.reps, out_dir, model=args.model)
         print_markdown(payload)
         print(f"\nresults → {out_dir / 'results.json'}")
