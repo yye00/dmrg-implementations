@@ -34,6 +34,9 @@ Next tick honors it. Typical latency: up to 30 min (one loop cycle).
 - [ ] note: booking Hot Aisle for Saturday 10am
 -->
 
+- [ ] merge #11
+- [ ] note: PR #12 (H) will need a rebase onto post-#11 main to drop its duplicate crash-filter commit 1 before reviewer re-runs. Do NOT auto-dispatch reviewer on PR #12 until after the operator force-pushes the rebased claude/path-b-H branch.
+
 
 ## Processed
 
