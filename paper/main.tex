@@ -30,7 +30,7 @@
 \item Systematic benchmark: 11 DMRG implementations, 3 physics models, $L{=}8$--$128$, $\chi{=}20$--$256$.
 \item At $\chi{\leq}50$, a single CPU core outperforms the 304-CU MI300X in 93\% of the tested configurations (single-thread harness; see \S\,\ref{sec:hardware}).
 \item CPU LAPACK SVD consumes 97--98\% of per-sweep time at $\chi{=}256$, capping GPU speedups.
-\item Block-Davidson ($b{=}4$) with host-side LAPACK SVD achieves 0\% win rate at $\chi{\leq}256$; Newton--Schulz and CheFSI are discussed as alternatives but not measured on GPU.
+\item Block-Davidson ($b{=}4$) with host-side LAPACK SVD achieves 0\% win rate at $\chi{\leq}256$; Newton--Schulz is discussed as an alternative but not measured on GPU; CheFSI was not implemented.
 \item Randomized SVD wins 5--6$\times$ only in 2-site DMRG; HIP graph capture wins 1.2--1.8$\times$ in parallel DMRG.
 \end{highlights}
 
@@ -44,7 +44,7 @@ In 27 of 29 CPU-win configurations (93\%), a \emph{single} CPU core already outp
 Two-site DMRG converges $3.3\times$ faster than single-site at large system sizes ($L = 100$, $\chi = 128$: 53~s vs.\ 177~s).
 
 We report extensive negative results on algorithmic optimizations designed to exploit the MI300X's BLAS-3 throughput.
-A Block-Davidson ($b{=}4$) eigensolver variant, deployed with a host-side LAPACK SVD path, achieves 0\% win rate across all tested (model, $L$, $\chi$) cells; Newton--Schulz polar decomposition and Chebyshev-filtered subspace iteration are explored as CPU-prototype alternatives and discussed in \S\ref{sec:variants}, but were not measured on GPU in this study.
+A Block-Davidson ($b{=}4$) eigensolver variant, deployed with a host-side LAPACK SVD path, achieves 0\% win rate across all tested (model, $L$, $\chi$) cells; Newton--Schulz polar decomposition is discussed as a CPU-prototype alternative in \S\ref{sec:variants}, but was not measured on GPU in this study; CheFSI was not implemented.
 Cross-segment batched GEMM dispatch is slower in 18 of 19 configurations tested.
 Profiling reveals the root cause: CPU LAPACK SVD consumes 97--98\% of per-sweep wall time at $\chi = 256$, and iterative GPU replacements cannot match LAPACK's optimized QR-iteration algorithm at these matrix sizes.
 All source code, benchmark scripts, and raw data are publicly available.
@@ -222,7 +222,10 @@ The pointer arrays for batched GEMMs are computed by lightweight GPU kernels (ty
 
 The Lanczos eigensolver runs entirely on the GPU using device-pointer mode for all rocBLAS reductions (\texttt{dot}, \texttt{nrm2}), eliminating implicit stream synchronizations.
 Only the final tridiagonal eigensolve (a $k \times k$ problem with $k \approx 15$--$50$) is performed on the CPU via LAPACK \texttt{dstev}.
-SVD is performed on the CPU via LAPACK \texttt{dgesvd} (QR-iteration based; or \texttt{zgesvd} for complex), as profiling showed this to be faster than GPU rocsolver for $\chi \leq 256$ (see Section~\ref{sec:svd_bottleneck}).
+SVD path differs by variant family.
+The primary \texttt{-gpu} variants (\texttt{dmrg-gpu}, \texttt{dmrg2-gpu}, \texttt{pdmrg-gpu}) perform SVD on the GPU via \texttt{rocsolver\_gesvd\_auto}, with an optional randomized-SVD path (\texttt{opts\_.rsvd}); the interior SVD for \texttt{pdmrg-gpu} also uses GPU rocsolver, while the segment-boundary merge uses a CPU \texttt{accurate\_svd} for numerical stability.
+The \texttt{-opt} variants (\texttt{dmrg-gpu-opt}, \texttt{dmrg2-gpu-opt}, \texttt{pdmrg-gpu-opt}) route SVD to the CPU via LAPACK \texttt{dgesvd} / \texttt{zgesvd} (QR-iteration based); this choice is motivated by profiling which showed GPU rocsolver provides only a 13\% improvement over CPU LAPACK at $\chi = 256$ and is slower at $\chi \leq 128$ (see Section~\ref{sec:svd_bottleneck}).
+The 97--98\% CPU-SVD figure in Section~\ref{sec:svd_bottleneck} and Table~\ref{tab:profile} most likely describe the \texttt{-opt} SVD path (the profiled variant is unverified; see table caption), while the primary \texttt{-gpu} variants use GPU rocsolver by default.
 
 This three-step GEMM structure is the operation we hoped would be the GPU's strength.
 At $\chi = 128$ with $d = 2$, the individual GEMMs are $128 \times 128$---large enough to occupy the MI300X's compute units.
@@ -294,19 +297,7 @@ However, this trades a lower iteration count for higher per-iteration overhead f
 \subsection{Chebyshev-filtered subspace iteration}
 \label{sec:chebyshev}
 
-\emph{Hypothesis}: Polynomial filtering can reduce eigenvalue iteration count by suppressing unwanted spectral components, and the filter application is a sequence of matrix--vector products that map well to the GPU.
-
-Chebyshev-filtered subspace iteration (CheFSI) \cite{Zhou2006} uses a polynomial filter to suppress unwanted eigenvalue components.
-Given spectral bounds $[\lambda_\text{min}, \lambda_\text{max}]$ from a short Lanczos run (10 steps), a degree-$p$ Chebyshev polynomial $T_p$ is applied via the three-term recurrence
-\begin{equation}
-  y_{k+1} = 2\varphi(H) y_k - y_{k-1}, \qquad \varphi(H) = \frac{2H - (\lambda_\text{max} + \lambda_\text{min})I}{\lambda_\text{max} - \lambda_\text{min}},
-\end{equation}
-where each application of $\varphi(H)$ requires one $H_\text{eff}$ matrix--vector product.
-The energy is extracted via the Rayleigh quotient after $n_\text{outer}$ filter applications.
-
-CheFSI was designed for density functional theory (DFT) calculations where many eigenvalues are needed simultaneously \cite{Zhou2006}.
-A CheFSI port to the GPU was planned for this study but was not completed; no CheFSI benchmark data were produced.
-The algorithmic argument for why CheFSI would be slower (one eigenvalue vs.\ many) is discussed in Section~\ref{sec:opt_failure}.
+Polynomial-filter methods (CheFSI \cite{Zhou2006}) were evaluated as candidates but not implemented in the present codebase; we do not report performance numbers.
 
 \subsection{Cross-segment batched GEMM}
 \label{sec:batched_sweep}
@@ -704,16 +695,6 @@ TFIM       & 128 & 50  & 2-site & 28.1 & 39.3 \\
 \end{table}
 
 The slowdown ranges from $1.4\times$ (best case, TFIM $L = 128$ $\chi = 50$) to $5.7\times$ (Josephson $L = 32$ $\chi = 256$).
-\subsubsection{Chebyshev-filtered subspace iteration: $1.9$--$11\times$ slower}
-
-\textit{Retraction notice.} A $1.9$--$11\times$ slowdown figure appeared in an earlier draft of this paper.
-That figure was an internal estimate; no CheFSI implementation for the GPU was completed, and no benchmark JSON was produced.
-We have removed the quantitative claim.
-
-The qualitative argument remains valid: CheFSI \cite{Zhou2006} applies a degree-$p$ polynomial filter for $n_\text{outer}$ outer iterations, requiring up to $p \times n_\text{outer}$ matrix--vector products per eigenvalue.
-Lanczos converges in $\sim$15 iterations for DMRG's single ground state.
-CheFSI was designed for DFT calculations where many eigenvalues are needed simultaneously, amortizing the polynomial cost across $O(N_e)$ eigenstates; for a single eigenvalue, Krylov methods are fundamentally more efficient.
-
 \subsubsection{Cross-segment batched GEMM: slower at 18/19 configurations}
 
 The batched sweep mode (Section~\ref{sec:batched_sweep}) was tested across 19 configurations with $L = 20$--$100$, $\chi = 50$--$256$, and $P = 2$--$16$ segments.
@@ -819,7 +800,7 @@ Profiling of dmrg2-gpu at $L = 64$, $\chi = 256$ reveals where the wall time act
 
 \begin{table}[h]
 \centering
-\caption{Per-sweep wall-time breakdown for dmrg2-gpu, Heisenberg $L = 64$, $\chi = 256$.}
+\caption{Per-sweep wall-time breakdown, Heisenberg $L = 64$, $\chi = 256$. Note: the profiled variant and SVD path (CPU LAPACK vs.\ GPU rocsolver) are unverified; backing JSON for this configuration is not available in the repository. These numbers should be treated as illustrative until re-profiled.}
 \label{tab:profile}
 \begin{tabular}{lrr}
 \toprule
@@ -842,9 +823,14 @@ Cross-segment batching targeted GEMM dispatch overhead in the eigensolver, again
 Parallel DMRG's serial coupling sweeps each pay the full SVD cost per bond.
 And A2DMRG's TT-SVD compression---itself an $O(L \chi^3)$ SVD chain---is the very operation that dominates wall time.
 
-GPU SVD via rocsolver provides a modest 13\% improvement at $\chi = 256$ ($L = 64$: 124~s vs.\ 142~s for 3 sweeps), but paradoxically makes parallel DMRG \emph{slower} because the smaller effective bond dimensions within segments ($\chi_\text{eff} \approx 50$--$60$) put the GPU SVD in a regime where its overhead exceeds the CPU's.
+\paragraph{SVD path choice.}
+At $\chi = 256$ ($L = 64$, Heisenberg, 3 sweeps), GPU rocsolver provides a modest 13\% wall-time improvement over CPU LAPACK (124~s vs.\ 142~s).
+Below $\chi \leq 128$, rocsolver is \emph{slower} than LAPACK because kernel-launch and memory-management overhead exceeds the compute savings; the crossover is estimated near $\chi \approx 300$--$500$.
+This asymmetry motivates the variant-family design choice: the \texttt{-opt} variants route SVD to CPU LAPACK (host round-trip via \texttt{dgesvd}/\texttt{zgesvd}), accepting the marginal 13\% penalty at $\chi = 256$ to avoid the regression at smaller bond dimensions.
+The primary \texttt{-gpu} variants retain on-device rocsolver because their use-cases target high-$\chi$ workloads where the penalty is small and RSVD (\texttt{opts\_.rsvd}) can reduce it further.
+Note: the 124~s and 142~s figures come from the same profile run as Table~\ref{tab:profile}; the profiled variant and SVD path are unverified pending re-profiling (see table caption).
 
-The profiling picture is unambiguous: at moderate bond dimensions, DMRG on a GPU is not a compute-bound problem.  It is an SVD-bound problem, and the SVD runs on the CPU.
+The profiling picture is unambiguous: at moderate bond dimensions, DMRG on a GPU is not a compute-bound problem.  It is an SVD-bound problem, and the SVD path choice determines whether the CPU or the GPU pays that cost.
 
 
 %% ============================================================
@@ -863,7 +849,7 @@ First, \emph{GPU launch overhead}: each rocBLAS GEMM call incurs $\sim$5--10~$\m
 
 Second, \emph{CPU threading overhead}: the same small matrices that starve the GPU would also penalize multi-threaded CPU BLAS if multiple threads were used. The CPU harness is hardcoded to a single thread (\texttt{OMP\_NUM\_THREADS=1}), so the 93\% single-thread statistic reflects the harness design rather than a measured multi-thread comparison. At these sizes, a single core streaming through L2-resident data is the most efficient executor available.
 
-Third, \emph{iterative algorithm overhead}: Block-Davidson increases the total number of matrix operations per bond (Newton--Schulz and Chebyshev filtering, as CPU-prototype designs, share the same limitation).  When each operation is already overhead-dominated, multiplying the operation count makes the situation strictly worse.
+Third, \emph{iterative algorithm overhead}: Block-Davidson increases the total number of matrix operations per bond (Newton--Schulz, as a CPU-prototype design, shares the same limitation).  When each operation is already overhead-dominated, multiplying the operation count makes the situation strictly worse.
 
 These three effects are facets of the same underlying cause: at $\chi \leq 50$, DMRG's per-bond linear algebra problems are too small to amortize any form of parallelism overhead, whether hardware (GPU wavefronts, CPU threads) or algorithmic (iterative refinement loops).
 
@@ -874,7 +860,7 @@ At $\chi \geq 128$, the GPU's GEMM throughput does overcome launch overhead for 
 
 The ceiling is structural.  DMRG requires a full SVD (all singular values and vectors) at every bond to truncate the MPS, and LAPACK's QR-iteration algorithm \cite{Anderson1999} performs this in a single $O(n^3)$ pass with low constant factors.  Any iterative replacement must either match this efficiency---difficult, since QR-iteration exploits dense matrix structure that iterative methods do not---or accept a higher total FLOP count and rely on hardware throughput to compensate.  Newton--Schulz attempts the latter strategy but requires up to 30 GEMM iterations, a $\sim$30$\times$ FLOP increase, and at $n = \chi d \leq 512$ the matrices remain below the $\sim$2048 threshold where the MI300X's MFMA units reach peak occupancy.
 
-GPU SVD via rocsolver follows the same QR-iteration algorithm as LAPACK but adds device overhead (kernel launches, memory management) that exceeds the compute savings at $\chi \leq 256$.  The 13\% improvement observed at $\chi = 256$ suggests that the crossover for GPU SVD lies near $\chi \approx 300$--$500$.
+GPU SVD via rocsolver follows the same QR-iteration algorithm as LAPACK but adds device overhead (kernel launches, memory management) that exceeds the compute savings at $\chi \leq 256$; the measured 13\% improvement at $\chi = 256$ and the crossover estimate are discussed in the SVD path choice paragraph of Section~\ref{sec:svd_bottleneck}.
 
 \subsection{The A2DMRG paradox}
 \label{sec:a2dmrg_paradox}
@@ -979,7 +965,6 @@ Our main findings are:
 
   \item Replacing the single-vector Lanczos eigensolver with Block-Davidson ($b{=}4$) and routing SVD to a host-side LAPACK path uniformly fails to improve performance at $\chi \leq 256$ (0 wins out of 50 configurations).
   The joint BD+CPU-SVD confound prevents isolation of which factor dominates the slowdown; isolation is left to future work.
-  Chebyshev filtering is $1.9$--$11\times$ slower.
   Cross-segment batched GEMM is slower in 18 of 19 configurations.
 
   \item A systematic ablation of six GPU micro-optimizations across all six \texttt{-gpu} and \texttt{-gpu-opt} variants finds two real wins and four flat outcomes (Section~\ref{sec:opt_ablation}).
