@@ -1140,4 +1140,24 @@ The full results reinforce the narrative developed in Sections~\ref{sec:results}
   D2-GPU is competitive at $L = 64$, $\chi = 128$ (22.80~s vs.\ 24.01~s for D1-GPU) but does not win---the two-site SVD cost ($d^2 \chi$ matrices) pushes it further into the SVD-dominated regime.
 \end{itemize}
 
+%% ============================================================
+\section*{Declaration of generative AI and AI-assisted technologies in the writing process}
+%% ============================================================
+
+During the preparation of this work the author(s) used Anthropic Claude (models Opus~4.6/4.7) for
+(a)~drafting and revising portions of the manuscript prose, including the rewrite captured in
+commit \texttt{40af7bf} and the CPC submission preparation (\texttt{bb8bcd0}); and
+(b)~generating, refactoring, and reviewing source code in the \texttt{gpu-rocm/} and \texttt{cpu/} trees.
+Approximately 38\% of the 113 git commits in the public repository (43 commits) were authored by an
+AI assistant operating under human direction; all such commits were reviewed and accepted by the
+human author(s) before merge.
+After using these tools, the author(s) reviewed and edited the content as needed and take(s) full
+responsibility for the content of the publication.
+
+%% ============================================================
+\section*{Acknowledgements}
+%% ============================================================
+
+The author(s) thank Anthropic Claude for code-generation and editorial assistance.
+
 \end{document}
