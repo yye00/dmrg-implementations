@@ -1,6 +1,6 @@
 # Cover Letter — Computer Physics Communications
 
-**Manuscript:** GPU-Accelerated DMRG on AMD MI300X: Systematic Benchmarking and Lessons from Failed Optimizations
+**Manuscript:** GPU-Accelerated DMRG on AMD MI300X: Systematic Benchmarking and Analytical Bounds on Failed Optimizations
 
 **Author:** Yaakoub El Khamra (corresponding)
 
@@ -32,10 +32,13 @@ characteristics that match the CPC audience:
 1. **Publicly released code**, eleven DMRG variants, with build instructions
    for ROCm 7.2 on MI300X (gfx942).
 2. **Systematic negative results** on several algorithmic hypotheses
-   (Newton-Schulz polar decomposition for SVD replacement; Block-Davidson
-   eigensolver; Chebyshev-filtered subspace iteration; cross-segment batched
-   GEMM dispatch; A2DMRG additive parallelism). Each hypothesis is documented
-   and disproved with its own benchmark evidence.
+   (Newton-Schulz polar decomposition; Block-Davidson eigensolver; Chebyshev-
+   filtered subspace iteration; cross-segment batched GEMM dispatch; A2DMRG
+   additive parallelism). Each is addressed with a closed-form analytical
+   work-multiplier bound at the bond-dimension scale of interest
+   (chi ≤ 256), and confirmed by measurement where benchmarked at the
+   headline statistical level. The analytical-then-empirical framing makes
+   these predicted negative results rather than empirical surprises.
 3. **Two narrowly-applicable positive results** on GPU micro-optimizations
    (randomized SVD in two-site DMRG: 5-6x; HIP graph capture in segment-
    parallel DMRG: 1.2-1.8x). Both wins target the locally-binding bottleneck
@@ -53,9 +56,16 @@ characteristics that match the CPC audience:
   to kernel launch latency on matrices small enough to fit in L2 cache.
 - CPU LAPACK SVD consumes 97-98% of per-sweep wall time at chi = 256, imposing
   a ceiling no eigensolver or environment-update optimization can breach.
-- Newton-Schulz polar decomposition achieves a 0% win rate across 50
-  configurations and diverges numerically at chi ≥ 128. Chebyshev filtering
-  is 1.9-11x slower. Cross-segment batched GEMM is slower in 18/19 configs.
+- Three prototyped algorithmic substitutions (Block-Davidson + host-side
+  SVD; cross-segment batched GEMM; Chebyshev-filtered subspace iteration)
+  fail to improve over the baselines at chi ≤ 256, predictably so from
+  closed-form work-multiplier bounds (alpha gtrsim 3-4) before measurement.
+  Block-Davidson + host SVD: 0 wins out of 50 configurations, 1.4-5.7x
+  slowdowns. Cross-segment batched GEMM: slower in 18/19 configs. Chebyshev
+  filter: not benchmarked at the headline statistical level on the basis of
+  the analytical bound (alpha ~ m ≥ 4). Newton-Schulz polar decomposition
+  is discussed as a CPU-prototype alternative only and was not measured on
+  GPU in this study.
 - Of six GPU micro-optimizations tested uniformly across all variants, only
   two deliver robust wins — and only in the specific variants where they
   target the measured bottleneck.
@@ -73,12 +83,15 @@ manuscript for the formal statement.
 
 ### Reproducibility statement
 
-Every benchmark result JSON includes the git commit SHA, binary SHA-256,
-runtime arguments, and the relevant environment variable snapshot. The
-repository build (including a fixed OpenBLAS 0.3.28 workaround for a known
-singular-vector bug in 0.3.20) is documented. An ablation harness with
-correctness gate (|Delta E| < 5e-10 vs. flags-off baseline) is included and
-runs on any rebuilt binary.
+Every benchmark result JSON produced by the post-revision harness embeds
+the git commit SHA, binary SHA-256, runtime arguments, and a relevant
+environment-variable snapshot (some pre-revision JSONs predate this
+provenance instrumentation; this is disclosed in the manuscript's
+Limitations section). The repository documents the build process per
+variant, including the OpenBLAS singular-vector issue that motivated
+upgrading away from 0.3.20. An ablation harness with correctness gate
+(|Delta E| < 5e-10 vs. flags-off baseline) is included and runs on any
+rebuilt binary.
 
 Thank you for your consideration.
 

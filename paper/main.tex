@@ -228,8 +228,9 @@ The Lanczos eigensolver runs entirely on the GPU using device-pointer mode for a
 Only the final tridiagonal eigensolve (a $k \times k$ problem with $k \approx 15$--$50$) is performed on the CPU via LAPACK \texttt{dstev}.
 SVD path differs by variant family.
 The primary \texttt{-gpu} variants (\texttt{dmrg-gpu}, \texttt{dmrg2-gpu}, \texttt{pdmrg-gpu}) perform SVD on the GPU via \texttt{rocsolver\_gesvd\_auto}, with an optional randomized-SVD path (\texttt{opts\_.rsvd}); the interior SVD for \texttt{pdmrg-gpu} also uses GPU rocsolver, while the segment-boundary merge uses a CPU \texttt{accurate\_svd} for numerical stability.
-The \texttt{-opt} variants (\texttt{dmrg-gpu-opt}, \texttt{dmrg2-gpu-opt}, \texttt{pdmrg-gpu-opt}) route SVD to the CPU via LAPACK \texttt{dgesvd} / \texttt{zgesvd} (QR-iteration based); this choice is motivated by profiling which showed GPU rocsolver provides only a 13\% improvement over CPU LAPACK at $\chi = 256$ and is slower at $\chi \leq 128$ (see Section~\ref{sec:svd_bottleneck}).
-The 97--98\% CPU-SVD figure in Section~\ref{sec:svd_bottleneck} and Table~\ref{tab:profile} most likely describe the \texttt{-opt} SVD path (the profiled variant is unverified; see table caption), while the primary \texttt{-gpu} variants use GPU rocsolver by default.
+The \texttt{-opt} variants are heterogeneous in their SVD path: \texttt{dmrg-gpu-opt} and \texttt{dmrg2-gpu-opt} are the bundle of Block-Davidson eigensolver + host-side LAPACK SVD (\texttt{dgesvd} / \texttt{zgesvd}, QR-iteration based) discussed in Section~\ref{sec:opt_failure}; \texttt{pdmrg-gpu-opt} defaults to GPU rocsolver SVD like its baseline counterpart and exposes a \texttt{--cpu-svd} flag for opt-in host-side SVD (not benchmarked at the headline statistical level in this paper).
+The host-side SVD bundle is motivated by profiling which showed GPU rocsolver provides only a 13\% improvement over CPU LAPACK at $\chi = 256$ and is slower at $\chi \leq 128$ (see Section~\ref{sec:svd_bottleneck}).
+The 97--98\% CPU-SVD figure in Section~\ref{sec:svd_bottleneck} and Table~\ref{tab:profile} pertains to a \texttt{-opt} variant with the host-side path (the precise variant is unverified; see table caption); the primary \texttt{-gpu} variants and \texttt{pdmrg-gpu-opt} use GPU rocsolver by default.
 
 This three-step GEMM structure is the operation we hoped would be the GPU's strength.
 At $\chi = 128$ with $d = 2$, the individual GEMMs are $128 \times 128$---large enough to occupy the MI300X's compute units.
@@ -858,8 +859,8 @@ And A2DMRG's TT-SVD compression---itself an $O(L \chi^3)$ SVD chain---is the ver
 \paragraph{SVD path choice.}
 At $\chi = 256$ ($L = 64$, Heisenberg, 3 sweeps), GPU rocsolver provides a modest 13\% wall-time improvement over CPU LAPACK (124~s vs.\ 142~s).
 Below $\chi \leq 128$, rocsolver is \emph{slower} than LAPACK because kernel-launch and memory-management overhead exceeds the compute savings; the crossover is estimated near $\chi \approx 300$--$500$.
-This asymmetry motivates the variant-family design choice: the \texttt{-opt} variants route SVD to CPU LAPACK (host round-trip via \texttt{dgesvd}/\texttt{zgesvd}), accepting the marginal 13\% penalty at $\chi = 256$ to avoid the regression at smaller bond dimensions.
-The primary \texttt{-gpu} variants retain on-device rocsolver because their use-cases target high-$\chi$ workloads where the penalty is small and RSVD (\texttt{opts\_.rsvd}) can reduce it further.
+This asymmetry motivates the variant-family design choice: \texttt{dmrg-gpu-opt} and \texttt{dmrg2-gpu-opt} (the Block-Davidson bundle) route SVD to CPU LAPACK (host round-trip via \texttt{dgesvd}/\texttt{zgesvd}), accepting the marginal 13\% penalty at $\chi = 256$ to avoid the regression at smaller bond dimensions.
+The primary \texttt{-gpu} variants retain on-device rocsolver because their use-cases target high-$\chi$ workloads where the penalty is small and RSVD (\texttt{opts\_.rsvd}) can reduce it further; \texttt{pdmrg-gpu-opt} retains the same on-device rocsolver default and exposes the host-side path only as an opt-in flag.
 Note: the 124~s and 142~s figures come from the same profile run as Table~\ref{tab:profile}; the profiled variant and SVD path are unverified pending re-profiling (see table caption).
 
 The profiling picture is unambiguous: at moderate bond dimensions, DMRG on a GPU is not a compute-bound problem.  It is an SVD-bound problem, and the SVD path choice determines whether the CPU or the GPU pays that cost.
@@ -951,7 +952,7 @@ The quimb bond dimension schedule is flat (\texttt{bond\_dims=chi}); the idiomat
 
 \paragraph{SVD path.}
 All deterministic SVD calls use \texttt{dgesvd} (QR-iteration); \texttt{dgesdd} (divide-and-conquer) was not tested.
-The \texttt{-opt} variants force a CPU host round-trip for SVD; the primary \texttt{-gpu} variants use on-device rocsolver by default.
+The Block-Davidson \texttt{-opt} variants (\texttt{dmrg-gpu-opt}, \texttt{dmrg2-gpu-opt}) force a CPU host round-trip for SVD by design; the primary \texttt{-gpu} variants and \texttt{pdmrg-gpu-opt} use on-device rocsolver by default.
 
 \paragraph{Algorithmic scope.}
 All GPU DMRG variants are strict single-site (no DMRG3S, no noise injection, no subspace expansion \cite{Hubig2015}).

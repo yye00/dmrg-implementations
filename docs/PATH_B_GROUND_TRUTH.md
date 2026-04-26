@@ -95,3 +95,50 @@ the paper or reviewers, as of commit `6f45533` on `main`.
 - dmrg-gpu-opt: device_k NOT wired, rsvd NOT wired, lanczos_graph force-disabled (Block-Davidson incompat).
 - dmrg2-gpu-opt: same as dmrg-gpu-opt.
 - pdmrg-gpu-opt: device_k NOT wired through GpuOpts (uses local `use_rsvd_`), rsvd NOT wired through GpuOpts, lanczos_graph force-disabled when --davidson.
+
+---
+
+## 2026-04-26 — SUPERSEDED
+
+This file is the original I-1/I-2/I-3 audit pinned to commit `6f45533` and
+is preserved for historical reference. It is **no longer the authoritative
+source of truth** for Path B work.
+
+**Authority transfer**: see [`docs/PATH_B_FINISHING_PLAN.md`](PATH_B_FINISHING_PLAN.md)
+(commit `e3cc252`, updated `dd5fd80`) for the current paper-scope and the
+status of each cluster.
+
+**Known errors at the original pin** (per the 2026-04-26 corrective audit;
+all five errors are paper-irrelevant under the current scope, but they
+matter for any future re-audit of the `-gpu-opt` code):
+
+1. "No CheFSI code exists" — actually ~210 LOC in `pdmrg-gpu-opt`,
+   CLI-reachable via `--chebyshev`. The Cluster B retraction stands on data
+   grounds (no clean N=10 measurements) but the rationale was wrong.
+   The current paper acknowledges the prototype and gives the analytical
+   work-multiplier bound ($\alpha_\text{Cheb} \sim m \geq 4$) as the
+   reason for not benchmarking at N=10.
+2. "No batched-sweep code exists" — actually ~270 LOC in `pdmrg-gpu-opt`,
+   CLI flag `--batched-sweep`, with 19 paired runs in
+   `gpu_opt_bench.json` showing 1.3–9.7× slowdown. The paper's "slower in
+   18/19" claim has real backing.
+3. "pdmrg-gpu-opt SVD = CPU LAPACK only" — actually GPU rocsolver default
+   with opt-in `--cpu-svd`. Affects §2.6 / §5.6 framing in the paper;
+   corrected in the dd5fd80 follow-up.
+4. "n_warmup=3, n_polish=10 hardcoded" — likely already CLAUDE.md-compliant
+   at commit `6f45533`; the Cluster D `--polish` CLI override added in
+   PR #5 may have been a no-op against the actual baseline. Harmless if so.
+5. "device_k NOT wired in pdmrg-gpu-opt" — IS wired (per audit, lines 1346
+   + 2456 of `pdmrg_gpu_opt_impl.h`). Affects ablation interpretation for
+   pdmrg-gpu-opt; immaterial under the current paper scope (the §6.6
+   ablation table stands as-is because the two real wins are on baseline
+   variants).
+
+**Future work on `-gpu-opt` variants**: do NOT trust this file for
+`-opt` code structure. Run a fresh inventory pass at the head commit and
+re-pin.
+
+**Why no re-pin now**: under the current paper scope (baseline `-gpu`
+variants only, with `-gpu-opt` closed by analytical bounds in §6.4), the
+five errors are individually moot or addressed in-text. Re-pinning would
+add audit overhead without changing any deliverable.

@@ -46,12 +46,12 @@ All implementations achieve machine precision agreement (ΔE < 1e-14) on correct
 │   ├── pdmrg-opt/               #   PDMRG with GEMM optimizations
 │   └── a2dmrg/                  #   Additive two-level DMRG
 ├── gpu-rocm/                    # AMD MI300X GPU implementations (C++/HIP)
-│   ├── dmrg-gpu/                #   Single-site DMRG (rocBLAS/rocSOLVER)
-│   ├── dmrg-gpu-opt/            #   Optimized single-site DMRG
-│   ├── dmrg2-gpu/               #   Two-site DMRG
-│   ├── dmrg2-gpu-opt/           #   Optimized two-site DMRG
-│   ├── pdmrg-gpu/               #   Parallel DMRG on GPU (hipTensor)
-│   └── pdmrg-gpu-opt/           #   Optimized parallel DMRG on GPU
+│   ├── dmrg-gpu/                #   Single-site DMRG (rocBLAS/rocSOLVER)  [paper baseline]
+│   ├── dmrg-gpu-opt/            #   Block-Davidson + host-side LAPACK SVD prototype †
+│   ├── dmrg2-gpu/               #   Two-site DMRG  [paper baseline]
+│   ├── dmrg2-gpu-opt/           #   Block-Davidson + host-side LAPACK SVD prototype †
+│   ├── pdmrg-gpu/               #   Parallel DMRG on GPU (hipTensor)  [paper baseline]
+│   └── pdmrg-gpu-opt/           #   Parallel + batched-sweep + Chebyshev prototype †
 ├── gpu-cuda/                    # NVIDIA H100 GPU implementations (planned)
 │   ├── README.md                #   Porting status
 │   └── (empty subdirs)          #   Mirrors gpu-rocm/ structure
@@ -68,6 +68,8 @@ All implementations achieve machine precision agreement (ΔE < 1e-14) on correct
 ├── IMPLEMENTATION_MATRIX.md     # Comprehensive implementation taxonomy
 └── pdmrg_gpu_opt.md             # PDMRG-OPT CPU optimization specification
 ```
+
+**† Experimental `-opt` prototypes.** These three variants are not benchmarked at the headline statistical level used in the published paper. Per the analytical work-multiplier bounds in `paper/main.tex` §6.4 (Block-Davidson $\alpha \in [3,6]$; cross-segment batched GEMM requires $P \gg 16$ to win; Chebyshev filter $\alpha \sim m \geq 4$), they are not competitive with the baselines in the $\chi \le 256$ regime studied. The code is preserved for follow-up evaluation in the regimes where each optimization is naturally indicated; see `docs/PATH_B_FINISHING_PLAN.md` for the full rationale.
 
 ### Architecture Split
 
