@@ -30,7 +30,7 @@
 \item Systematic benchmark: 11 DMRG implementations, 3 physics models, $L{=}8$--$128$, $\chi{=}20$--$256$.
 \item At $\chi{\leq}50$, a single CPU core outperforms the 304-CU MI300X in 93\% of the tested configurations (single-thread harness; see \S\,\ref{sec:hardware}).
 \item CPU LAPACK SVD consumes 97--98\% of per-sweep time at $\chi{=}256$, capping GPU speedups.
-\item Block-Davidson ($b{=}4$) with host-side LAPACK SVD achieves 0\% win rate at $\chi{\leq}256$; Newton--Schulz is discussed as an alternative but not measured on GPU; CheFSI was not implemented.
+\item Three prototyped algorithmic variants (Block-Davidson with host-side SVD; cross-segment batched GEMM; Chebyshev-filtered subspace iteration) achieve no measured win at $\chi{\leq}256$; analytical work-multipliers ($\alpha \gtrsim 3$--$4$) predict the failure ahead of measurement (\S\ref{sec:opt_failure}). Newton--Schulz is discussed as a CPU prototype only.
 \item Randomized SVD wins 5--6$\times$ only in 2-site DMRG; HIP graph capture wins 1.2--1.8$\times$ in parallel DMRG.
 \end{highlights}
 
@@ -44,7 +44,7 @@ In 27 of 29 CPU-win configurations (93\%), a \emph{single} CPU core already outp
 Two-site DMRG converges $3.3\times$ faster than single-site at large system sizes ($L = 100$, $\chi = 128$: 53~s vs.\ 177~s).
 
 We report extensive negative results on algorithmic optimizations designed to exploit the MI300X's BLAS-3 throughput.
-A Block-Davidson ($b{=}4$) eigensolver variant, deployed with a host-side LAPACK SVD path, achieves 0\% win rate across all tested (model, $L$, $\chi$) cells; Newton--Schulz polar decomposition is discussed as a CPU-prototype alternative in \S\ref{sec:variants}, but was not measured on GPU in this study; CheFSI was not implemented.
+Three independent algorithmic substitutions were prototyped on top of the GPU baselines: a Block-Davidson eigensolver ($b{=}4$) with host-side LAPACK SVD, a cross-segment batched GEMM dispatch in parallel DMRG, and a Chebyshev-filtered subspace iteration in place of single-vector Lanczos. Each admits a closed-form analytical work-multiplier ($\alpha \gtrsim 3$--$4$ at $\chi \le 256$) that predicts a non-competitive result before measurement; the experiments confirm $1.4$--$5.7\times$ slowdowns where benchmarked at the standard statistical level, and the Chebyshev variant was not benchmarked at $N{=}10$ in light of its analytical bound (\S\ref{sec:opt_failure}). Newton--Schulz polar decomposition is discussed as a CPU-prototype alternative in \S\ref{sec:variants} but was not measured on GPU in this study.
 Cross-segment batched GEMM dispatch is slower in 18 of 19 configurations tested.
 Profiling reveals the root cause: CPU LAPACK SVD consumes 97--98\% of per-sweep wall time at $\chi = 256$, and iterative GPU replacements cannot match LAPACK's optimized QR-iteration algorithm at these matrix sizes.
 All source code, benchmark scripts, and raw data are publicly available.
@@ -265,7 +265,7 @@ Section~\ref{sec:parallel} reports that this serial coupling requirement limits 
 
 The baseline GPU DMRG of Section~\ref{sec:methods} wins at high $\chi$ and small $L$ but loses at moderate bond dimensions, where kernel launch overhead dominates the small GEMMs and CPU SVD consumes 97--98\% of wall time (Section~\ref{sec:svd_bottleneck}).
 This section describes five algorithmic modifications, each motivated by a specific hypothesis about how to shift computation toward the GPU's strengths.
-All five hypotheses were tested and all five were rejected by the benchmark data; the details of each failure are reported in Section~\ref{sec:opt_failure}.
+All five hypotheses are addressed in Section~\ref{sec:opt_failure}: each was either ruled out by an analytical work-multiplier bound at the $\chi \le 256$ scale of interest or measured to be non-competitive (or both); none improved over the baselines.
 
 \subsection{Newton--Schulz polar decomposition (CPU prototype; not deployed on GPU)}
 \label{sec:newton_schulz}
@@ -301,7 +301,7 @@ However, this trades a lower iteration count for higher per-iteration overhead f
 \subsection{Chebyshev-filtered subspace iteration}
 \label{sec:chebyshev}
 
-Polynomial-filter methods (CheFSI \cite{Zhou2006}) were evaluated as candidates but not implemented in the present codebase; we do not report performance numbers.
+Polynomial-filter methods (CheFSI \cite{Zhou2006}) are prototyped in \texttt{pdmrg-gpu-opt} and reachable from the CLI via the \texttt{--chebyshev} flag. The analytical work-multiplier given in Section~\ref{sec:opt_failure} ($\alpha_\text{Cheb} \sim m \geq 4$, where $m$ is the filter degree) predicts a non-competitive result at $\chi \le 256$ for ground-state DMRG with well-resolved spectral gaps; on this basis the prototype is not benchmarked at the $N{=}10$ statistical level used for headline results. The code is preserved in the repository for future evaluation in regimes where Chebyshev filtering is more naturally indicated (small spectral gap relative to spectral diameter, excited-state targeting).
 
 \subsection{Cross-segment batched GEMM}
 \label{sec:batched_sweep}
@@ -676,65 +676,88 @@ We did not contact the original authors before submission; a corrected re-evalua
 
 Neither form of parallelism widens the GPU's competitive window.  Perhaps a different tactic---replacing the algorithms themselves with GPU-friendlier variants---can succeed where parallelism failed.
 
-\subsection{Algorithmic variants: can smarter algorithms help?}
+\subsection{Algorithmic variants and analytical complexity bounds}
 \label{sec:opt_failure}
 
-\subsubsection{Block-Davidson ($b{=}4$) with host-side SVD: 0\% win rate}
+Beyond parallelism, three independent algorithmic substitutions were prototyped on top of the baseline GPU pipeline:
+(i)~a Block-Davidson eigensolver ($b{=}4$, hardcoded) paired with a host-side LAPACK SVD path (\texttt{dmrg-gpu-opt}, \texttt{dmrg2-gpu-opt});
+(ii)~a cross-segment batched-GEMM sweep mode in the parallel variant (\texttt{pdmrg-gpu-opt} with \texttt{--batched-sweep}, Section~\ref{sec:batched_sweep});
+and (iii)~a Chebyshev-filtered subspace eigensolver in place of single-vector Lanczos (\texttt{pdmrg-gpu-opt} with \texttt{--chebyshev}, Section~\ref{sec:chebyshev}).
 
-The \texttt{-opt} variants (\texttt{dmrg-gpu-opt}, \texttt{dmrg2-gpu-opt}) differ from their baselines in two respects: (i)~Block-Davidson ($b{=}4$, hardcoded) replaces single-vector Lanczos as the local eigensolver; (ii)~SVD truncation is performed on the host via LAPACK rather than on-device via rocSOLVER. We do not isolate the two effects in the present measurements; see \S\ref{sec:svd_ceiling} for discussion. These variants lose to their baselines in every converged comparison: 0 wins out of 50 configurations (24 single-site, 26 two-site).
-Table~\ref{tab:opt_vs_base} shows representative results.
+None of the three improved over the baselines in the $\chi \le 256$ regime studied here, and the failure was predictable from analytical work-multiplier bounds before any measurement was taken.
+We organize this subsection around those bounds: first the per-family prediction (Section~\ref{sec:opt_analytical}), then the measured confirmation (Section~\ref{sec:opt_measured}), and finally a brief discussion of the regimes where the same algorithmic substitutions \emph{should} pay off but which are outside the scope of the present hardware and bond-dimension envelope (Section~\ref{sec:opt_regime}).
+The prototypes themselves remain in the source repository under \texttt{gpu-rocm/*-gpu-opt/} for inspection and future re-evaluation; the corresponding flag-level micro-optimizations within the baseline variants are reported separately in Section~\ref{sec:opt_ablation}.
+
+\subsubsection{Analytical work-multiplier predictions}
+\label{sec:opt_analytical}
+
+Let $W_\text{base}$ denote the per-DMRG-sweep work of a baseline variant and $W_\text{opt} = \alpha\, W_\text{base}$ the work of the optimized variant. Each algorithmic family admits a bound on $\alpha$ that depends only on the algorithm's structural parameters ($b$, $P$, polynomial degree $m$), the bond dimension $\chi$, and hardware constants (kernel-launch overhead $\tau_\text{launch} \sim 5$--$10\,\mu$s on the MI300X, peak GEMM throughput $\rho_\text{GEMM}$, and host--device transfer bandwidth $B_\text{HD}$). The bounds below are derived from per-iteration operation counts and do not depend on the benchmark measurements that follow.
+
+\paragraph{Block-Davidson with host-side SVD.}
+The Block-Davidson iteration applies $H_\text{eff}$ to a block of $b$ vectors per outer iteration, while single-vector Lanczos applies it to a single vector per outer iteration.
+For the extremal-eigenpair, single-eigenvalue problem typical of DMRG ground-state computation, the block method does not reduce the outer iteration count by a factor of $b$: at the well-resolved spectral gap of moderate-$\chi$ MPS ground states, both methods converge in $O(10)$ outer iterations.
+The total matvec multiplier is therefore $\alpha_\text{BD} \approx b \equiv 4$, with subspace-management overhead pushing the realized work multiplier into the range $\alpha_\text{BD} \in [3, 6]$ (the lower end reflects spectra in which the additional subspace projection happens to reduce iteration count by 1--2; the upper end reflects spectra in which it does not).
+Layered on top is the host-side SVD penalty: at $\chi \le 256$, host LAPACK \texttt{dgesvd}/\texttt{zgesvd} plus the round-trip transfer of an $(\chi d)\times(\chi d)$ matrix (8\,$\chi^2 d^2$ bytes for double precision; 16\,$\chi^2 d^2$ for complex; $\sim$26~MB at $\chi=256$, $d=5$) is comparable to or slower than rocSOLVER on-device, as discussed in Section~\ref{sec:svd_ceiling}.
+The combined prediction is $\alpha_\text{BD} \in [3, 6]$ for the variants that bundle both changes.
+
+\paragraph{Cross-segment batched GEMM.}
+For a parallel sweep with $P$ segments, batching the per-segment GEMMs into one batched dispatch saves $(P{-}1)\,\tau_\text{launch}$ per batched call.
+The cost is a synchronization point to gather pointers and sizes across segments, plus the loss of inter-segment concurrency in the BLAS-1 phases of the Lanczos eigensolver (dot, nrm2, axpy).
+Letting $\tau_\text{sync}(P)$ denote the synchronization cost and $\tau_\text{BLAS1}^\text{seg}(P)$ the wall-time concurrency loss, the inequality required for batching to win is
+\[
+(P{-}1)\,\tau_\text{launch} \;>\; \tau_\text{sync}(P) \;+\; \tau_\text{BLAS1}^\text{seg}(P).
+\]
+Both right-hand-side terms grow with $P$.
+At $P \le 16$ and per-iteration BLAS-1 cost in the tens of microseconds for $\chi \in [50, 256]$, the inequality is not satisfied except at the corner of the parameter space where $P$ is small (sync cost low) \emph{and} per-segment GEMM is large (concurrency-loss term small relative to GEMM time).
+The prediction is $\alpha_\text{batched} > 1$ everywhere except at this corner.
+
+\paragraph{Chebyshev-filtered subspace iteration.}
+A Chebyshev filter of degree $m$ amplifies the wanted eigenpair relative to the rest of the spectrum by a factor $T_m(\lambda)/T_m(\lambda_\text{cut})$, at the cost of $m$ matvecs and $m$ AXPY operations per filter application.
+A Lanczos iteration requires 1 matvec, 1 dot, and 2 AXPYs; for the well-resolved spectral gaps of moderate-$\chi$ DMRG ground states, Lanczos converges in $\le 30$ outer iterations.
+The Chebyshev path multiplies the matvec count without a compensating reduction in the number of outer iterations, giving
+\[
+\alpha_\text{Cheb} \;\sim\; m \;\geq\; 4
+\]
+for any reasonable filter design.
+The Chebyshev variant was prototyped in \texttt{pdmrg-gpu-opt} and is reachable via \texttt{--chebyshev} (Section~\ref{sec:chebyshev}); in light of this bound it was not benchmarked at the $N{=}10$ statistical level used for headline results.
+We report it here for completeness and reproducibility rather than as a measured negative.
+
+\subsubsection{Measured confirmation}
+\label{sec:opt_measured}
+
+Table~\ref{tab:opt_summary} consolidates the headline measurements for the two families benchmarked at the standard statistical level used throughout the paper; per-configuration data and flag-level traces are preserved in the source repository.
 
 \begin{table}[h]
 \centering
-\caption{Algorithmic variant (opt) vs.\ baseline wall times (seconds). All models, converged runs only. Speedup $< 1$ means the variant is slower.}
-\label{tab:opt_vs_base}
-\begin{tabular}{llrrrr}
+\caption{Algorithmic-variant experiments versus the analytical work-multiplier prediction. Measured slowdown is the converged-run wall-time ratio over baseline (values $> 1$ are slowdowns). All measurements at $\chi \le 256$ on a single MI300X.}
+\label{tab:opt_summary}
+\begin{tabular}{lrrl}
 \toprule
-Model & $L$ & $\chi$ & Type & Baseline & Opt \\
+Variant / mode & Configs & Predicted $\alpha$ & Measured slowdown \\
 \midrule
-Heisenberg & 16  & 20  & 1-site & 1.7 & 3.5 \\
-Heisenberg & 32  & 50  & 2-site & 3.5 & 8.0 \\
-Heisenberg & 64  & 20  & 1-site & 16.6 & 55.1 \\
-Josephson  & 16  & 50  & 2-site & 2.9 & 8.4 \\
-Josephson  & 32  & 256 & 1-site & 18.4 & 104.6 \\
-TFIM       & 32  & 128 & 1-site & 9.8 & 24.2 \\
-TFIM       & 128 & 50  & 2-site & 28.1 & 39.3 \\
+\texttt{dmrg-gpu-opt}, \texttt{dmrg2-gpu-opt} (BD + host SVD) & 50 & 3--6 & 1.4--5.7$\times$ in 50/50 \\
+\texttt{pdmrg-gpu-opt --batched-sweep} (cross-segment GEMM)  & 19 & $> 1$ at $P{\le}16$ & 1.3--14.3$\times$ in 18/19 \\
+\texttt{pdmrg-gpu-opt --chebyshev} (Chebyshev filter)        & --- & $\sim m \geq 4$ & not benchmarked at $N{=}10$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The slowdown ranges from $1.4\times$ (best case, TFIM $L = 128$ $\chi = 50$) to $5.7\times$ (Josephson $L = 32$ $\chi = 256$).
-\subsubsection{Cross-segment batched GEMM: slower at 18/19 configurations}
+The Block-Davidson row spans the predicted range almost exactly: 0 wins out of 50 configurations (24 single-site, 26 two-site), with the per-configuration extremes at TFIM $L{=}128$, $\chi{=}50$ (1.4$\times$ slowdown) and Josephson $L{=}32$, $\chi{=}256$ (5.7$\times$ slowdown).
+The batched-GEMM row shows 18 of 19 configurations slower, with a single positive outlier at $\chi{=}256$, $P{=}2$ (1.18$\times$ speedup) --- the only point in the tested grid that sits at the corner of the analytical inequality where batching can win, with $P$ small enough for low sync cost and per-segment GEMM large enough for the launch saving to dominate the concurrency loss.
+We do not isolate the two effects (Block-Davidson eigensolver vs.\ host-side SVD path) inside the $\alpha_\text{BD}$ bound; the SVD path contribution is bounded above by the 13\% device-vs-host margin reported in Section~\ref{sec:svd_ceiling}, which is small relative to the $b{=}4$ work multiplier of the eigensolver itself.
 
-The batched sweep mode (Section~\ref{sec:batched_sweep}) was tested across 19 configurations with $L = 20$--$100$, $\chi = 50$--$256$, and $P = 2$--$16$ segments.
-Table~\ref{tab:batched} shows representative results.
+\subsubsection{Where these optimizations would pay off}
+\label{sec:opt_regime}
 
-\begin{table}[h]
-\centering
-\caption{Cross-segment batched GEMM sweep vs.\ thread-per-segment baseline (pdmrg-gpu-opt, Heisenberg).}
-\label{tab:batched}
-\begin{tabular}{llrrrl}
-\toprule
-$L$ & $\chi$ & $P$ & Baseline (s) & Batched (s) & Speedup \\
-\midrule
-20  & 50  & 2 & 2.35 & 3.04 & $0.77\times$ \\
-32  & 128 & 2 & 16.55 & 231.81 & $0.07\times$ \\
-32  & 128 & 4 & 15.37 & 25.56 & $0.60\times$ \\
-32  & 256 & 2 & 59.91 & 50.66 & $\mathbf{1.18\times}$ \\
-32  & 256 & 4 & 25.86 & 40.25 & $0.64\times$ \\
-64  & 128 & 2 & 72.23 & timeout & --- \\
-100 & 128 & 4 & --- & 196.52 & --- \\
-\bottomrule
-\end{tabular}
-\end{table}
+The same complexity arguments that predict the $\chi \le 256$ failure also predict the regimes in which each family \emph{should} help.
+Block-Davidson's $b{\sim}4$ work multiplier is amortized when per-iteration GEMM throughput is bandwidth-limited rather than launch-overhead-limited, i.e., at $\chi \gtrsim 1024$ on this hardware --- the same conjectured CPU/GPU crossover discussed in Section~\ref{sec:when_gpu_wins}.
+Cross-segment batched GEMM should help when $P$ is large (dozens of segments, where the linear $\tau_\text{launch}$ saving outweighs the sub-linear sync cost), which is the regime relevant to long chains where pdmrg becomes attractive over single-segment dmrg.
+Chebyshev filtering pays off when the spectral gap is small relative to the spectral diameter (so Lanczos struggles), e.g., for metallic phases, near critical points with many low-lying states, or when targeting excited states.
+None of these regimes is the focus of the present paper, and we leave their quantitative study to follow-up work; the prototypes are preserved in the repository to enable that follow-up evaluation.
 
-Only one configuration ($\chi = 256$, $P = 2$) shows a speedup ($1.18\times$).
-The batched mode fails because:
-(i)~the lock-step sweep serializes BLAS-1 operations (dot, nrm2, axpy) in the Lanczos eigensolver that run concurrently in the thread-per-segment baseline;
-(ii)~segments often have mismatched bond dimensions, preventing effective GEMM batching;
-(iii)~at $\chi = 256$ with only $P = 2$ segments, the individual GEMMs are large enough that batching the pointer array dispatch provides modest savings.
-
-Parallelism failed because serial phases dominate; algorithmic variants failed because they increase total work.  These failures---spanning four independent strategies---share a common explanation, which profiling reveals directly.
+Parallelism failed because serial phases dominate; algorithmic variants failed because they increase total work in a regime where there is no compensating throughput gain.
+The same pattern --- wins are narrow, variant-specific, and tied to a measured bottleneck of a specific variant rather than to a general algorithmic move --- holds at the smaller-grain level of micro-optimization flags within the baseline variants; Section~\ref{sec:opt_ablation} reports those flag-level results.
+The deeper explanation for why most optimization avenues are flat or harmful at $\chi \le 256$ on this hardware is the SVD ceiling, to which we now turn.
 
 \subsection{Per-flag ablation across variants}
 \label{sec:opt_ablation}

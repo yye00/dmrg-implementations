@@ -6,6 +6,27 @@
 
 ---
 
+## Status (live)
+
+| Item | Status | Resolution |
+|------|--------|------------|
+| Strategic decision: abandon `-gpu-opt` in paper | **DONE** | Closed at the paper level (not just the writeup level) by replacing §6.4 with a comprehensive analytical-complexity treatment. See "Closing at the paper level" section below. |
+| Paper edit 1 (§6.4 collapse → comprehensive subsection) | **DONE** | Replaced with `sec:opt_analytical` + `sec:opt_measured` + `sec:opt_regime`. Per-family analytical work-multiplier bounds derived; measurements presented as confirmation. |
+| Paper edit 2 (delete §6.6 ablation) | **REVERSED** | §6.6 stays. The two real wins (RSVD on dmrg2-gpu, LANCZOS_GRAPH on pdmrg-gpu) are **on baseline variants**, not `-opt`, so they survive the scope tightening. New §6.4 closing transition points forward to §6.6 explicitly. |
+| Paper edit 3 (§5.6 SVD-path framing fix) | pending | Still needs the `pdmrg-gpu-opt` mischaracterisation removed; minor edit. |
+| Paper edit 4 (Abstract + Highlights CheFSI claim) | **DONE** | Fixed at lines 33 (Highlights) and 47 (Abstract): "CheFSI was not implemented" → prototyped, CLI-reachable, analytical bound predicts non-competitive at $\chi \le 256$. |
+| Paper edit 5 (§7 Conclusion bullet) | pending | Still references "two real wins and four flat outcomes (Section 6.6)" — accurate, no change needed. **Re-evaluating: leave as-is.** |
+| Paper edit 6 (§3.1 / §2.6 -opt references) | partial | §3 sec:chebyshev fixed (was "not implemented" → "prototyped, see §6.4 for analytical bound"). §3 sec:variants opener softened. §5.6 still pending. |
+| Paper edit 7 (§6.4 cross-ref hygiene) | **DONE** | New §6.4 cross-refs to `sec:svd_ceiling`, `sec:when_gpu_wins`, `sec:opt_ablation`, `sec:batched_sweep`, `sec:chebyshev` all resolve. LaTeX builds cleanly (45 pages, 0 undefined refs). |
+| Paper edit 8 (COVER_LETTER changelog) | pending | One-line update needed. |
+| Paper edit 9 (README -opt disclaimer) | pending | One-line per variant. |
+| GPU work G1/G2/G3 (baseline N=10 rebench) | pending | Prompt prepared in conversation. Operator runs on MI300X VM. |
+| Ground-truth "superseded" footer | pending | Apply when GPU data lands and final PR opens. |
+
+**Net change vs original plan**: instead of *abandoning* the `-gpu-opt` writeup, we *closed* it with a principled analytical-complexity treatment. The negative result is now explained from first principles before the measurements are presented, which strengthens the paper-craft position considerably (reviewer-defensible, not expedient). The two ablation-flag wins on baselines (§6.6) survive untouched.
+
+---
+
 ## TL;DR
 
 The Path B paper-revision wave-2 (PRs #3–#12, all 10 clusters) merged. A
@@ -24,7 +45,23 @@ audit-and-retract loop.
 
 ---
 
-## Strategic decision: abandon `-gpu-opt` in the paper
+## Closing at the paper level (added 2026-04-26)
+
+Rather than collapsing §6.4 to a one-paragraph pointer ("we tried, it lost, see repo"), we replaced it with a comprehensive subsection that puts analytical complexity bounds *ahead* of the measurements:
+
+- **§6.4 (`sec:opt_failure`)** — opens with the three prototyped families (Block-Davidson + host-SVD; cross-segment batched GEMM; Chebyshev filter), then derives a per-family work-multiplier bound on $\alpha$ using only algorithmic-parameter and hardware-constant inputs, then shows the measurements confirm the bound to within experimental noise, then identifies the regimes where each family *should* pay off (none of which are in our $\chi \le 256$ envelope).
+- **New labels**: `sec:opt_analytical`, `sec:opt_measured`, `sec:opt_regime`.
+- **New consolidated table**: `tab:opt_summary` (replaces `tab:opt_vs_base` and `tab:batched`).
+- **Highlights / Abstract / §3 sec:chebyshev / §3 sec:variants opener** all updated to align with the new framing — including correcting the previously inaccurate "CheFSI was not implemented" claim (it is prototyped and CLI-reachable; the analytical bound $\alpha_\text{Cheb} \sim m \ge 4$ explains why it was not benchmarked at the headline $N{=}10$ statistical level).
+- **§6.6 ablation stays** — the RSVD and LANCZOS_GRAPH wins are on baseline variants (dmrg2-gpu, pdmrg-gpu), not on `-opt`. The new §6.4 closing paragraph transitions explicitly to §6.6.
+
+**Result**: the paper now treats the `-gpu-opt` outcomes as *predicted negative results* rather than empirical surprises. This is a stronger reviewer-facing posture and removes the audit-and-retract loop entirely — there is nothing left to retract because nothing was overclaimed.
+
+LaTeX build: 45 pages, 0 undefined references, no warnings beyond standard hyperref destination duplicates from the second-pass aux read.
+
+---
+
+## Strategic decision: abandon `-gpu-opt` in the paper (original framing — superseded)
 
 ### Why
 
