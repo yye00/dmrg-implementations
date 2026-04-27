@@ -10,16 +10,27 @@
 /**
  * GPU-native two-site DMRG — NAIVE BASELINE
  *
- * Unoptimized reference implementation of two-site DMRG on GPU.
- * Differences from DMRG2GPU (dmrg2-gpu):
- *   - No fused two-site MPO (d_WW): apply_heff contracts W_left and W_right
- *     in separate steps via single GEMM calls.
- *   - No gemm_batched: per-(w,s) single rocBLAS gemm in for-loops.
- *   - No device-pointer-mode Lanczos: host-pointer mode throughout, CPU
- *     LAPACK dstev for the tridiagonal eigenproblem.
- *   - No custom kernels (except the complex-conjugate helper needed for
- *     correctness of the bra contraction on complex envs).
- *   - rocSOLVER gesvd followed by host-side truncation + host-side scaling.
+ * Competent first-pass GPU implementation of two-site DMRG. All linear
+ * algebra runs on device (rocBLAS GEMM/GEMV/AXPY/DOT/NRM2 in device-pointer
+ * mode, rocSOLVER `dsteqr` for the Lanczos tridiagonal eigensolve,
+ * rocSOLVER `gesvd_auto` for the SVD, device-side truncation kernels for
+ * S-scaling and column extraction). The two-site fused MPO (WW) is computed
+ * once per bond at set_mpo() time (host computation, single H2D upload —
+ * outside the timed sweep region) and reused across all Lanczos iterations,
+ * matching the natural choice a first-pass implementer would make.
+ *
+ * Compared to DMRG2GPU (the optimized variant), this baseline omits:
+ *   - dual-stream pipelining (apply_heff vs env_update overlap),
+ *   - HIP graph capture for the Lanczos inner loop,
+ *   - randomized SVD (RSVD),
+ *   - batched GEMM and the GpuOpts ablation framework,
+ *   - sparse-MPO compaction,
+ *   - D_PAD MFMA-friendly padding,
+ *   - the on-device WW precompute kernel (uses host-side compute then H2D).
+ * The baseline uses single-GEMM-per-pair patterns where the optimized variant
+ * uses gemm_batched, a single rocBLAS handle on a single stream, and the
+ * standard non-fused Lanczos kernels. It is naive in algorithmic structure
+ * but does not waste time on CPU work that has a one-line GPU equivalent.
  *
  * Hard-coded defaults: tolerances, Lanczos iteration counts, and algorithm
  * choices are baked in — there is no CLI or API for toggling optimizations.
@@ -61,9 +72,15 @@ private:
     std::vector<Scalar*> d_L_envs_;
     std::vector<Scalar*> d_R_envs_;
 
-    // W_left / W_right matrices for single-site env updates AND apply_heff
+    // W_left / W_right matrices for single-site env updates
     std::vector<Scalar*> d_W_left_;
     std::vector<Scalar*> d_W_right_;
+
+    // Two-site fused MPO (WW), precomputed on device at set_mpo() time.
+    // d_WW_[bond] has shape (D*d², D*d²) for each adjacent (site, site+1) pair.
+    // Computing this once at startup eliminates the per-Lanczos-iteration
+    // host roundtrip pattern that would otherwise dominate the inner loop.
+    std::vector<Scalar*> d_WW_;
 
     std::vector<int> L_env_alloc_chi_;
     std::vector<int> R_env_alloc_chi_;
@@ -86,25 +103,42 @@ private:
     int theta_size_max_;
     int max_lanczos_iter_;
 
-    // Host-side Lanczos tridiagonal (CPU LAPACK dstev)
-    std::vector<double> h_alpha_;
-    std::vector<double> h_beta_;
-    std::vector<double> h_steqr_work_;
-    std::vector<double> h_steqr_Z_;
+    // Device-pointer-mode scratch for rocBLAS BLAS-1 results (one scalar each).
+    Scalar*   d_dot_result_;      // <v_i | w>          (per Lanczos iter)
+    RealType* d_nrm2_result_;     // ||w||              (per Lanczos iter)
+    RealType* d_inv_nrm_;         // 1/||w||            (computed by inv_real_kernel)
+    Scalar*   d_neg_alpha_;       // -alpha_i           (axpy multiplier)
+    Scalar*   d_neg_overlap_;     // -<v_j | w>         (reorth axpy multiplier)
+    Scalar*   d_neg_beta_scalars_;// -beta_i (per iter, indexed array)
 
-    // SVD workspace
+    // Per-iteration alpha/beta arrays on device.
+    RealType* d_alpha_dev_;       // [max_lanczos_iter_]
+    RealType* d_beta_dev_;        // [max_lanczos_iter_]
+
+    // rocSOLVER dsteqr workspaces — fully on-device tridiagonal eigensolve.
+    double*      d_steqr_D_;      // diagonal (overwritten with eigenvalues)
+    double*      d_steqr_E_;      // subdiagonal (overwritten)
+    double*      d_steqr_C_;      // eigenvector matrix (max_iter × max_iter)
+    rocblas_int* d_steqr_info_;   // rocsolver info output
+
+    // SVD workspace (pre-allocated at max size). Truncation runs on device via
+    // extract_cols_kernel and scale_rows_by_diag_kernel from common/scalar_traits.h.
+    // Only the singular-value vector S is read back to host (small: <= chi_max
+    // doubles per call) for the truncation-rank decision.
     Scalar* d_svd_A_;
     Scalar* d_svd_U_;
     RealType* d_svd_S_;
     Scalar* d_svd_Vh_;
+    Scalar* d_svd_work_;          // device scratch for S*Vh (or U*S)
     RealType* d_svd_E_;
     int* d_svd_info_;
 
-    // Host workspace for SVD results (copied back from GPU)
-    std::vector<Scalar> h_svd_U_, h_svd_Vh_, h_svd_tmp_;
+    // Tiny host buffer used only for the truncation-rank decision (one D2H
+    // of the singular values per SVD; <= chi_max * 8 bytes, control-flow scalar).
     std::vector<RealType> h_svd_S_;
 
     // Core algorithm
+    void precompute_WW();         // host-side WW build at set_mpo() time
     void build_initial_environments();
     void update_left_env(int site);
     void update_right_env(int site);
