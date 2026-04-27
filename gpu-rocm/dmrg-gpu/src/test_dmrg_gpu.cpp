@@ -558,7 +558,8 @@ int main(int argc, char** argv) {
             if (std::string(argv[i]) == "--jleg" && i+1 < argc) { J_leg = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--jrung" && i+1 < argc) { J_rung = std::atof(argv[++i]); continue; }
             if (argv[i][0] == '-') {
-                continue;
+                std::fprintf(stderr, "Unknown flag: %s\n", argv[i]);
+                return 1;
             }
             if (pos == 0) L = std::atoi(argv[i]);
             else if (pos == 1) chi_max = std::atoi(argv[i]);

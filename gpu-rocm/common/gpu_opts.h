@@ -18,7 +18,7 @@ struct GpuOpts {
     bool lanczos_graph = false;  // capture Lanczos inner loop as a HIP graph (DMRG_GPU_OPT_LANCZOS_GRAPH)
     bool rsvd          = false;  // randomized SVD for truncation (DMRG_GPU_OPT_RSVD)
     bool sparse_mpo    = false;  // block-sparse apply_heff (DMRG_GPU_OPT_SPARSE_MPO)
-    bool fuse_lanczos  = false;  // fused axpy+reorth kernel (DMRG_GPU_OPT_FUSE_LANCZOS)
+    bool fuse_lanczos  = false;  // fused axpy+normalize kernels (reorth unchanged) (DMRG_GPU_OPT_FUSE_LANCZOS)
     bool d_pad         = false;  // pad D_mpo to MFMA-friendly size (DMRG_GPU_OPT_D_PAD)
 
     bool profile       = false;  // DMRG_GPU_PROFILE=1 enables per-phase hipEvent timing

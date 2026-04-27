@@ -137,7 +137,62 @@ this).
 
 ---
 
-## What was fixed (Tier A, this commit)
+## Round 2 deep-pass — Tier A round 2 additions (this commit)
+
+A second-pass review on 2026-04-27 (after the round-1 Tier A fixes shipped in
+`4208052`) surfaced two additional G1-blocking items missed by round 1:
+
+- **A4** — `lanczos_process_beta_kernel` divide-by-zero guard
+  (`gpu-rocm/common/scalar_traits.h:410`). The kernel computed
+  `inv_nrm_out[0] = 1.0 / beta` with no guard; if `beta == 0` (invariant
+  Krylov subspace exhausted), the result is `inf` → NaN propagates through
+  Ritz vector construction → garbage energy. The in-loop
+  `lanczos_check_beta` only fires every 3 iterations after `iter >= 4`; for
+  small Krylov spaces (boundary sites with small chi) it may never run
+  in-loop. Fix: clamp to 0 below `1e-300` (true subnormal underflow only).
+  Single fix in shared header propagates to all 5 Lanczos-based variants
+  (dmrg-gpu, dmrg2-gpu, pdmrg-gpu, pdmrg-multi-gpu, pdmrg-gpu-opt).
+
+- **A5** — Silent flag swallow in test binaries
+  (`test_dmrg_gpu.cpp:560`, `test_dmrg2_gpu.cpp:510`,
+  `test_pdmrg_gpu.cpp:571`). Pattern `if (argv[i][0] == '-') continue;`
+  silently ignored any unrecognized `-`-prefixed flag. A typo in the
+  campaign config or a future-added flag we forget to wire would have
+  produced 240 silent wrong-config runs with no error. Fix:
+  `fprintf(stderr, "Unknown flag: %s\n", argv[i]); return 1;` so the
+  binary exits non-zero on the first bad invocation, the campaign runner
+  marks the cell as failed, and the operator sees the typo immediately.
+
+- **B9 promoted to fix** — `gpu-rocm/common/gpu_opts.h:21` `fuse_lanczos`
+  comment said "fused axpy+reorth kernel" but reorthogonalization is
+  unchanged. Misleading for anyone interpreting ablation results that
+  include `fuse_lanczos=on`. Fix: comment now reads
+  "fused axpy+normalize kernels (reorth unchanged)". Cosmetic, no
+  behavior change.
+
+## Round 2 — items remaining deferred (B7-B12)
+
+- **B7**: RSVD heap-alloc pattern also exists in `dmrg-gpu` (round 1 only
+  flagged dmrg2-gpu and pdmrg-gpu). Extends the existing B2 entry. G1
+  doesn't pass `--rsvd`; revisit when running RSVD-on benchmarks.
+- **B8**: `pdmrg-gpu` recalibration inflates `parallel_sec` when
+  `--recal > 0` (build_initial_environments + serial 2-site sweep
+  included inside the `t_start → t_parallel` interval). G1 default
+  `n_recal=0`; latent if accidentally enabled.
+- **B10**: `dmrg2-gpu` `if (dE < tol_ && sweep > 0) break;` enforces an
+  implicit 2-sweep minimum (would prevent detecting genuine 1-sweep
+  convergence). Harmless for G1 (sweeps ≥ 5 in config).
+- **B11**: `pdmrg-gpu` boundary merge workspace round-robin
+  (`si = idx % n_avail_streams`) could collide if `n_active >
+  n_avail_streams`. Currently safe for campaign grid (`n_segments ≤ 4`,
+  `n_active ≤ n_segments/2 ≤ 2`).
+- **B12**: `pdmrg-gpu` HIP graph cache key omits `D_mpo_`. Currently safe
+  because the campaign uses one MPO per fresh subprocess; would matter
+  if the solver object were reused across MPOs.
+
+---
+
+## What was fixed (Tier A round 1, commit 4208052)
 
 For reference; see commit message for full details.
 

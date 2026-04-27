@@ -411,7 +411,16 @@ __global__ void lanczos_process_beta_kernel(const double* nrm2_result, double* i
                                              double* beta_arr, Scalar* neg_beta_scalars, int iter) {
     double beta = nrm2_result[0];
     beta_arr[iter] = beta;
-    inv_nrm_out[0] = 1.0 / beta;
+    // Divide-by-zero guard for invariant-subspace exhaustion (beta -> 0).
+    // Without the guard, 1.0/beta produces inf, the subsequent scal zeros v_{i+1}
+    // to NaN, and the energy returned by rocsolver_dsteqr is garbage. The in-loop
+    // lanczos_check_beta only fires every 3 iterations after iter >= 4; for small
+    // Krylov spaces (boundary sites with small chi) it may never run in-loop.
+    // Setting inv to 0 makes the subsequent scal produce a zero vector, which is
+    // safer (rocsolver receives a clean trailing zero in the tridiagonal) than
+    // letting NaN propagate. The threshold 1e-300 only fires on true subnormal
+    // underflow, never on a meaningful Lanczos beta.
+    inv_nrm_out[0] = (beta > 1e-300) ? (1.0 / beta) : 0.0;
     neg_beta_scalars[iter] = dev_make_neg_real_scalar(Scalar{}, -beta);
 }
 

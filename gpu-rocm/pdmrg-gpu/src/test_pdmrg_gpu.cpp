@@ -568,7 +568,7 @@ int main(int argc, char** argv) {
             if (std::string(argv[i]) == "--ej" && i+1 < argc) { E_J = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--ec" && i+1 < argc) { E_C = std::atof(argv[++i]); continue; }
             if (std::string(argv[i]) == "--phi" && i+1 < argc) { phi_ext = std::atof(argv[++i]); continue; }
-            if (argv[i][0] == '-') continue;
+            if (argv[i][0] == '-') { std::fprintf(stderr, "Unknown flag: %s\n", argv[i]); return 1; }
             if (pos == 0) L = std::atoi(argv[i]);
             else if (pos == 1) chi_max = std::atoi(argv[i]);
             else if (pos == 2) n_outer = std::atoi(argv[i]);
