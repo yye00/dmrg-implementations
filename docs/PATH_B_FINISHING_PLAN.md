@@ -20,8 +20,10 @@
 | Paper edit 7 (§6.4 cross-ref hygiene) | **DONE** | New §6.4 cross-refs to `sec:svd_ceiling`, `sec:when_gpu_wins`, `sec:opt_ablation`, `sec:batched_sweep`, `sec:chebyshev` all resolve. LaTeX builds cleanly (45 pages, 0 undefined refs). |
 | Paper edit 8 (COVER_LETTER changelog) | pending | One-line update needed. |
 | Paper edit 9 (README -opt disclaimer) | pending | One-line per variant. |
-| GPU work G1/G2/G3 (baseline N=10 rebench) | pending | Prompt prepared in conversation. Operator runs on MI300X VM. |
-| Ground-truth "superseded" footer | pending | Apply when GPU data lands and final PR opens. |
+| GPU work G1/G2/G3 (baseline N=10 rebench) | pending | Now driven by `benchmarks/run_campaign.py --config benchmarks/campaigns/g1_baseline_rebench.json` (commit `e7887c2`). JSON in, JSON out, idempotent. Operator runs on MI300X VM. |
+| Ground-truth "superseded" footer | **DONE** | Applied at commit `bdfceec`. |
+| Pre-G1 baseline code review | in_progress | 3 reviewer agents auditing `dmrg-gpu`/`dmrg2-gpu`/`pdmrg-gpu` and their `-base` snapshots in parallel for timing-scope, hidden CPU paths, print-in-loop, CLI parity, optimization regressions. Pre-launch quality gate to avoid burning 240 reps on flawed binaries. |
+| pdmrg-multi-gpu follow-on investigation | **flagged** | See [`docs/MULTI_GPU_INVESTIGATION.md`](MULTI_GPU_INVESTIGATION.md). §6.7.1 partial data shows the analytical crossover is real (2.5--3× wins at $\chi \geq 128$ on long chains); a defensible $N{=}10$ campaign needs build script, code review, CLI parity, and a 12--16h multi-MI300X window. Not blocking the CPC submission. |
 
 **Net change vs original plan**: instead of *abandoning* the `-gpu-opt` writeup, we *closed* it with a principled analytical-complexity treatment. The negative result is now explained from first principles before the measurements are presented, which strengthens the paper-craft position considerably (reviewer-defensible, not expedient). The two ablation-flag wins on baselines (§6.6) survive untouched.
 
