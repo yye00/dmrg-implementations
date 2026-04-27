@@ -33,6 +33,17 @@
     } while(0)
 
 // ============================================================================
+// Promote double eigenvector to hipDoubleComplex (for Josephson Ritz coefficients).
+// rocsolver_dsteqr returns the tridiagonal eigenvectors as `double`; when Scalar
+// is hipDoubleComplex we need to widen them to complex for the subsequent GEMV.
+// Same definition as in pdmrg-gpu/src/pdmrg_gpu_impl.h:231.
+// ============================================================================
+static __global__ void promote_double_to_complex(const double* src, hipDoubleComplex* dst, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) dst[i] = make_hipDoubleComplex(src[i], 0.0);
+}
+
+// ============================================================================
 // Constructor
 // ============================================================================
 
@@ -165,6 +176,8 @@ void PDMRGGPUBase<Scalar>::allocate_stream_workspaces() {
                                                       (size_t)svd_max_k * svd_max_n) * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_svd_E,    svd_max_k * sizeof(RealType)));
         HIP_CHECK(hipMalloc(&ws.d_svd_info, sizeof(int)));
+        HIP_CHECK(hipMalloc(&ws.d_svdj_residual, sizeof(double)));
+        HIP_CHECK(hipMalloc(&ws.d_svdj_n_sweeps, sizeof(rocblas_int)));
 
         // Pre-allocated scratch for form_theta_with_V.
         HIP_CHECK(hipMalloc(&ws.d_psi_R, psi_R_max * sizeof(Scalar)));
@@ -221,6 +234,8 @@ void PDMRGGPUBase<Scalar>::free_gpu_resources() {
         if (ws.d_svd_work) hipFree(ws.d_svd_work);
         if (ws.d_svd_E) hipFree(ws.d_svd_E);
         if (ws.d_svd_info) hipFree(ws.d_svd_info);
+        if (ws.d_svdj_residual) hipFree(ws.d_svdj_residual);
+        if (ws.d_svdj_n_sweeps) hipFree(ws.d_svdj_n_sweeps);
         if (ws.d_psi_R) hipFree(ws.d_psi_R);
     }
 
@@ -810,8 +825,15 @@ double PDMRGGPUBase<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta,
     rocsolver_dsteqr(handles_[si], rocblas_evect_tridiagonal, niter,
                      ws.d_steqr_D, ws.d_steqr_E, ws.d_steqr_C, niter, ws.d_steqr_info);
 
+    // streams_[si] is non-blocking, so a bare hipMemcpy on the legacy stream
+    // would NOT wait for rocsolver_dsteqr's enqueued work — it would race with
+    // peer segments' in-flight kernels too. Use async + explicit sync so the
+    // readback is correctly ordered against this stream's pending work and
+    // doesn't depend on legacy-stream serialization.
     double energy;
-    HIP_CHECK(hipMemcpy(&energy, ws.d_steqr_D, sizeof(double), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpyAsync(&energy, ws.d_steqr_D, sizeof(double),
+                             hipMemcpyDeviceToHost, streams_[si]));
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
     if constexpr (Traits::is_complex) {
         HIP_CHECK(hipMemsetAsync(ws.d_ritz_coeffs, 0,
@@ -866,12 +888,16 @@ void PDMRGGPUBase<Scalar>::svd_split(int site, Scalar* d_theta, char direction, 
         ws.d_svd_U, m,
         ws.d_svd_Vh, full_k,
         ws.d_svd_E,
-        rocblas_outofplace,
+        ws.d_svdj_residual, ws.d_svdj_n_sweeps,
         ws.d_svd_info);
 
-    // Read back S only (control-flow scalar for truncation rank).
-    HIP_CHECK(hipMemcpy(ws.h_svd_S.data(), ws.d_svd_S,
-                        full_k * sizeof(RealType), hipMemcpyDeviceToHost));
+    // Read back S only (control-flow scalar for truncation rank). Stream-
+    // ordered against rocsolver_gesvd_auto's preceding work; bare hipMemcpy
+    // on the legacy stream would NOT wait for non-blocking streams_[si].
+    HIP_CHECK(hipMemcpyAsync(ws.h_svd_S.data(), ws.d_svd_S,
+                             full_k * sizeof(RealType),
+                             hipMemcpyDeviceToHost, streams_[si]));
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
     int new_k = 0;
     for (int j = 0; j < k; j++) {
@@ -955,11 +981,14 @@ void PDMRGGPUBase<Scalar>::svd_split_single_site(int site, Scalar* d_theta,
         ws.d_svd_U, m,
         ws.d_svd_Vh, full_k,
         ws.d_svd_E,
-        rocblas_outofplace,
+        ws.d_svdj_residual, ws.d_svdj_n_sweeps,
         ws.d_svd_info);
 
-    HIP_CHECK(hipMemcpy(ws.h_svd_S.data(), ws.d_svd_S,
-                        full_k * sizeof(RealType), hipMemcpyDeviceToHost));
+    // Stream-ordered S readback (legacy hipMemcpy would race with non-blocking streams_[si]).
+    HIP_CHECK(hipMemcpyAsync(ws.h_svd_S.data(), ws.d_svd_S,
+                             full_k * sizeof(RealType),
+                             hipMemcpyDeviceToHost, streams_[si]));
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
     int new_k = 0;
     for (int j = 0; j < k; j++) {
@@ -1306,15 +1335,25 @@ double PDMRGGPUBase<Scalar>::run(int n_outer_sweeps, int n_local_sweeps,
     double energy_prev = warmup_energy;
     energy_ = warmup_energy;
 
-    // Parallel sweep launcher: one CPU thread per segment with its own HIP stream
+    // Parallel sweep launcher: one CPU thread per segment with its own HIP stream.
+    // Exception-safe: any exception escaping a thread function would call
+    // std::terminate, abandoning peer threads' GPU work. We capture exceptions
+    // via std::exception_ptr and rethrow after the per-stream sync barrier.
     auto parallel_sweep = [this](auto sweep_fn) {
         std::vector<std::thread> threads(n_segments_);
+        std::vector<std::exception_ptr> exceptions(n_segments_, nullptr);
         for (int k = 0; k < n_segments_; k++) {
-            threads[k] = std::thread([this, k, &sweep_fn]{ sweep_fn(this, k); });
+            threads[k] = std::thread([this, k, &sweep_fn, &exceptions]{
+                try { sweep_fn(this, k); }
+                catch (...) { exceptions[k] = std::current_exception(); }
+            });
         }
         for (auto& t : threads) t.join();
         for (int s = 0; s < n_segments_; s++) {
             HIP_CHECK(hipStreamSynchronize(streams_[s]));
+        }
+        for (auto& e : exceptions) {
+            if (e) std::rethrow_exception(e);
         }
     };
 

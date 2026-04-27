@@ -151,6 +151,9 @@ private:
         Scalar* d_svd_work;            // device scratch for S*Vh (or U*S)
         RealType* d_svd_E;
         int* d_svd_info;
+        // rocsolver_gesvdj output scalars (residual + sweep count, on device).
+        double*      d_svdj_residual;
+        rocblas_int* d_svdj_n_sweeps;
 
         // Pre-allocated device scratch for form_theta_with_V (psi_R copy).
         Scalar* d_psi_R;

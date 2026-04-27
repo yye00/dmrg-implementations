@@ -170,6 +170,120 @@ A second-pass review on 2026-04-27 (after the round-1 Tier A fixes shipped in
   "fused axpy+normalize kernels (reorth unchanged)". Cosmetic, no
   behavior change.
 
+## Adversarial-round closeout (round 4) — pdmrg-family pre-G1 audit
+
+A 4-agent adversarial review pass on the pdmrg family (pdmrg-gpu / pdmrg-gpu-base /
+pdmrg-gpu-opt / pdmrg-multi-gpu) on 2026-04-27 found **3 G1-blocking bugs** that
+my round-3 commits had introduced (`4033ac8`, `bb235ab`, `92bf290`). The G1 build
+phase would have failed at the linker (S1) and compiler (S2); even if those were
+patched, pdmrg-gpu-base would have produced wrong energies (S3). All three are
+now fixed, plus one Tier A item (A1: `std::thread` exception safety).
+
+### Tier S — fixed (would have prevented G1 from building)
+
+- **S1** — `promote_double_to_complex` undefined in -base TUs.
+  Defined in each `-gpu` impl.h but not in the `-base` versions. Hit at link
+  time for `hipDoubleComplex` (Josephson) instantiation.
+  Fix: copied the kernel definition into all 3 `-base` impl.h files
+  (`dmrg_gpu_base_impl.h:39`, `dmrg2_gpu_base_impl.h:39`, `pdmrg_gpu_base_impl.h:41`).
+  Each `-base` impl.h is a separate TU, so the `static __global__` definition
+  doesn't conflict with the `-gpu` siblings.
+
+- **S2** — `rocsolver_gesvd_auto` signature mismatch.
+  All 3 `-base` SVD calls passed 3 tail args
+  (`d_svd_E, rocblas_outofplace, d_svd_info`); the current scalar_traits.h
+  signature requires 4 (`d_E_scratch, d_residual, d_n_sweeps, info`). I
+  missed an R3-F2 signature change in `common/scalar_traits.h:167` when
+  writing the round-3 commits. Fix: added `d_svdj_residual` (double*) and
+  `d_svdj_n_sweeps` (rocblas_int*) to each variant's StreamWorkspace /
+  member fields, allocated in constructor, freed in destructor, passed
+  to all `rocsolver_gesvd_auto` call sites in svd_split + svd_split_single_site.
+
+- **S3** — Bare `hipMemcpy` race against non-blocking streams in pdmrg-gpu-base.
+  3 sites (`pdmrg_gpu_base_impl.h:814` energy readback, `:873` and `:961`
+  S readback for truncation rank). Specific to pdmrg-gpu-base because round
+  3 switched to `hipStreamCreateWithFlags(hipStreamNonBlocking)` for parallel
+  boundary merge correctness; bare hipMemcpy on the legacy stream does NOT
+  wait for non-blocking streams. dmrg-gpu-base and dmrg2-gpu-base use blocking
+  streams so the same pattern there is safe. Fix: replaced with
+  `hipMemcpyAsync(..., streams_[si]) + hipStreamSynchronize(streams_[si])`,
+  matching the optimized pdmrg-gpu sibling.
+
+### Tier A — fixed opportunistically
+
+- **A1** — `std::thread` exception safety in pdmrg-gpu's `parallel_sweep`
+  and `merge_and_optimize_boundaries` (and pdmrg-gpu-base's `parallel_sweep`).
+  C++ contract: an exception escaping a `std::thread` function calls
+  `std::terminate` immediately, abandoning peer threads' GPU work. Fix:
+  wrap each lambda body in `try { ... } catch (...) { capture exception_ptr }`,
+  rethrow first captured exception after `t.join()` and the per-stream sync
+  barrier. On HIP error during a campaign, the operator now sees a real
+  exception with stack context instead of a silent `std::terminate`.
+
+### Tier B — deferred (not G1-blocking; documented)
+
+These were verified real but live in variants not in the G1 campaign config
+(pdmrg-gpu-opt, pdmrg-multi-gpu) or are minor hygiene issues. Trigger
+conditions noted so future audits know when each becomes urgent:
+
+- **B-Adv1** — `pdmrg-gpu-opt` and `pdmrg-multi-gpu` have the C4 "h_svd_S
+  stale-read" bug: `merge_and_optimize_boundaries` reads `ws.h_svd_S[i]`
+  for V = 1/S, but the GPU SVD path (default) writes to `d_svd_S` and
+  never copies to host. **pdmrg-gpu is SAFE** (uses `accurate_svd` at
+  boundaries which writes h_svd_S directly). **pdmrg-gpu-base is SAFE**
+  (round-3 rewrite D2H-copies S for the truncation-rank decision before
+  the V update reads it). Trigger to fix: any benchmark of pdmrg-gpu-opt
+  or pdmrg-multi-gpu without `--cpu-svd`.
+
+- **B-Adv2** — `pdmrg-gpu-base` `n_segments=1` returns 0.0 energy because
+  the boundary-merge loop never runs and segment-sweep energies are
+  discarded. Trigger: any single-segment run of this variant.
+
+- **B-Adv3** — `pdmrg-gpu` polish skipped when outer converges, regardless
+  of `n_polish > 0`. Trigger: any run with `n_polish > 0` that converges
+  in the outer loop.
+
+- **B-Adv4** — Silent flag swallow in `test_pdmrg_gpu_opt.cpp:407` and
+  `test_pdmrg_multi_gpu.cpp:377` (round-2 fix never applied to these).
+
+- **B-Adv5** — `pdmrg-gpu-opt` build script comment is false (says
+  "SVD is CPU LAPACK only" — actually GPU rocsolver default).
+
+- **B-Adv6** — `pdmrg-gpu-opt` stack-allocated `h_A[256]` arrays passed
+  to `hipMemcpyAsync` in `apply_heff_single_site` (lifetime hazard).
+
+- **B-Adv7** — `pdmrg-gpu-opt` `--batched-sweep` mode actually serializes
+  on stream 0 (perf bug, not correctness).
+
+- **B-Adv8** — `pdmrg-gpu-opt` CLI parity gap: missing 9 flags vs pdmrg-gpu.
+
+- **B-Adv9** — `pdmrg-gpu-opt` `davidson_b` hardcoded + 134MB unconditional
+  VRAM allocation regardless of `--davidson` flag.
+
+- **B-Adv10** — `pdmrg-multi-gpu` timer scope still `include_env_build`
+  (round-1 fix never applied).
+
+- **B-Adv11** — `pdmrg-multi-gpu` hardcoded `n_polish=10` two-site polish
+  (CLAUDE.md violation; same as pdmrg-gpu-base pre-round-3 was).
+
+- **B-Adv12** — `pdmrg-multi-gpu` peer-access setup uses bare loop indices
+  not `devices_[k].device_id` — broken on multi-tenant MI300X with
+  non-contiguous device IDs. Critical for any future multi-MI300X campaign;
+  see `docs/MULTI_GPU_INVESTIGATION.md`.
+
+- **B-Adv13** — `pdmrg-multi-gpu` CMakeLists doesn't include `gpu-rocm/common/`;
+  uses local `src/scalar_traits.h` — the β=0 guard fix from commit 9613ecd
+  may not propagate to this variant.
+
+### Tier C — cosmetic (documented, no urgency)
+
+- pdmrg-gpu-base has stale comment "NO fused WW precompute" (it IS done now).
+- pdmrg-gpu-opt timer placement correct but printf annotation missing.
+- `lanczos_use_1site_` non-atomic shared bool — currently safe by use pattern,
+  fragile under future refactors.
+
+---
+
 ## Round 3 closeout — `-base` variants brought to "competent first-pass GPU"
 
 A third deep-pass review on 2026-04-27 surfaced systemic CPU-bound patterns

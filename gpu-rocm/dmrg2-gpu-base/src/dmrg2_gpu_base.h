@@ -132,6 +132,9 @@ private:
     Scalar* d_svd_work_;          // device scratch for S*Vh (or U*S)
     RealType* d_svd_E_;
     int* d_svd_info_;
+    // rocsolver_gesvdj output scalars (residual + sweep count, on device).
+    double*      d_svdj_residual_;
+    rocblas_int* d_svdj_n_sweeps_;
 
     // Tiny host buffer used only for the truncation-rank decision (one D2H
     // of the singular values per SVD; <= chi_max * 8 bytes, control-flow scalar).

@@ -31,6 +31,17 @@
     } while(0)
 
 // ============================================================================
+// Promote double eigenvector to hipDoubleComplex (for Josephson Ritz coefficients).
+// rocsolver_dsteqr returns the tridiagonal eigenvectors as `double`; when Scalar
+// is hipDoubleComplex we need to widen them to complex for the subsequent GEMV.
+// Same definition as in dmrg-gpu/src/dmrg_gpu_impl.h:231.
+// ============================================================================
+static __global__ void promote_double_to_complex(const double* src, hipDoubleComplex* dst, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) dst[i] = make_hipDoubleComplex(src[i], 0.0);
+}
+
+// ============================================================================
 // Constructor
 // ============================================================================
 
@@ -122,6 +133,8 @@ DMRGGPUBase<Scalar>::DMRGGPUBase(int L, int d, int chi_max, int D_mpo, double to
     HIP_CHECK(hipMalloc(&d_svd_work_, svd_max_dim * chi_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_svd_E_,    chi_max_ * sizeof(RealType)));
     HIP_CHECK(hipMalloc(&d_svd_info_, sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_svdj_residual_, sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_svdj_n_sweeps_, sizeof(rocblas_int)));
 
     // Tiny host buffer for the truncation-rank decision (chi_max RealTypes).
     h_svd_S_.resize(chi_max_);
@@ -170,6 +183,8 @@ void DMRGGPUBase<Scalar>::free_gpu_resources() {
     if (d_svd_work_) hipFree(d_svd_work_);
     if (d_svd_E_) hipFree(d_svd_E_);
     if (d_svd_info_) hipFree(d_svd_info_);
+    if (d_svdj_residual_) hipFree(d_svdj_residual_);
+    if (d_svdj_n_sweeps_) hipFree(d_svdj_n_sweeps_);
 
     rocblas_destroy_handle(rocblas_h_);
     hipStreamDestroy(stream_);
@@ -667,7 +682,7 @@ void DMRGGPUBase<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char dir
         d_svd_U_, m,
         d_svd_Vh_, full_k,
         d_svd_E_,
-        rocblas_outofplace,
+        d_svdj_residual_, d_svdj_n_sweeps_,
         d_svd_info_);
 
     // Read back S only (small: full_k <= chi_max doubles). Used for the

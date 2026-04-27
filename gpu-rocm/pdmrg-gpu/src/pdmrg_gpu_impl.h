@@ -2592,15 +2592,27 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
         // Single boundary — no threading overhead
         optimize_boundary(0);
     } else {
-        // Multiple boundaries — parallelize
+        // Multiple boundaries — parallelize. Exception-safe: if any thread's
+        // optimize_boundary throws (e.g., HIP_CHECK failure), the exception
+        // is captured via std::exception_ptr and rethrown after all threads
+        // join. Without this, the throwing thread calls std::terminate
+        // immediately (C++ contract for an exception escaping a thread),
+        // abandoning peer threads and leaking GPU work.
         std::vector<std::thread> threads(n_active);
+        std::vector<std::exception_ptr> exceptions(n_active, nullptr);
         for (int i = 0; i < n_active; i++) {
-            threads[i] = std::thread(optimize_boundary, i);
+            threads[i] = std::thread([&optimize_boundary, &exceptions, i]{
+                try { optimize_boundary(i); }
+                catch (...) { exceptions[i] = std::current_exception(); }
+            });
         }
         for (auto& t : threads) t.join();
         // Sync all used streams
         for (int i = 0; i < std::min(n_active, n_avail_streams); i++) {
             HIP_CHECK(hipStreamSynchronize(streams_[i]));
+        }
+        for (auto& e : exceptions) {
+            if (e) std::rethrow_exception(e);
         }
     }
 
@@ -2650,17 +2662,30 @@ double PDMRGGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmu
     energy_ = warmup_energy;
     bool outer_converged = false;
 
-    // Parallel sweep launcher: one CPU thread per segment, each with its own HIP stream
+    // Parallel sweep launcher: one CPU thread per segment, each with its own HIP stream.
+    // Exception-safe: if any thread's lambda throws (e.g., HIP_CHECK failure), the
+    // exception is captured via std::exception_ptr and rethrown after all threads
+    // join. Without this, an exception escaping a std::thread function calls
+    // std::terminate immediately, abandoning in-flight GPU work on peer streams
+    // and bypassing the per-stream sync below — leaving the GPU in a dirty state.
     auto parallel_sweep = [this](auto sweep_fn) {
         std::vector<std::thread> threads(n_segments_);
+        std::vector<std::exception_ptr> exceptions(n_segments_, nullptr);
         for (int k = 0; k < n_segments_; k++) {
-            threads[k] = std::thread([this, k, &sweep_fn]{ sweep_fn(this, k); });
+            threads[k] = std::thread([this, k, &sweep_fn, &exceptions]{
+                try { sweep_fn(this, k); }
+                catch (...) { exceptions[k] = std::current_exception(); }
+            });
         }
         for (auto& t : threads) t.join();
         // Sync per-segment GPU streams — segment sweeps launch async GPU work that
-        // must complete before boundary coupling reads their outputs on stream 0
+        // must complete before boundary coupling reads their outputs on stream 0.
         for (int s = 0; s < n_segments_; s++) {
             HIP_CHECK(hipStreamSynchronize(streams_[s]));
+        }
+        // Rethrow the first captured exception (if any) after the barrier.
+        for (auto& e : exceptions) {
+            if (e) std::rethrow_exception(e);
         }
     };
 

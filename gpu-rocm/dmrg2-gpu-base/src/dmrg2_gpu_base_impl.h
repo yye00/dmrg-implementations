@@ -31,6 +31,17 @@
     } while(0)
 
 // ============================================================================
+// Promote double eigenvector to hipDoubleComplex (for Josephson Ritz coefficients).
+// rocsolver_dsteqr returns the tridiagonal eigenvectors as `double`; when Scalar
+// is hipDoubleComplex we need to widen them to complex for the subsequent GEMV.
+// Same definition as in dmrg2-gpu/src/dmrg2_gpu_impl.h:164.
+// ============================================================================
+static __global__ void promote_double_to_complex(const double* src, hipDoubleComplex* dst, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) dst[i] = make_hipDoubleComplex(src[i], 0.0);
+}
+
+// ============================================================================
 // Constructor
 // ============================================================================
 
@@ -125,6 +136,8 @@ DMRG2GPUBase<Scalar>::DMRG2GPUBase(int L, int d, int chi_max, int D_mpo, double 
                                                 (size_t)svd_max_k * svd_max_n) * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_svd_E_,    svd_max_k * sizeof(RealType)));
     HIP_CHECK(hipMalloc(&d_svd_info_, sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_svdj_residual_, sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_svdj_n_sweeps_, sizeof(rocblas_int)));
 
     h_svd_S_.resize(svd_max_k);
 
@@ -179,6 +192,8 @@ void DMRG2GPUBase<Scalar>::free_gpu_resources() {
     if (d_svd_work_) hipFree(d_svd_work_);
     if (d_svd_E_) hipFree(d_svd_E_);
     if (d_svd_info_) hipFree(d_svd_info_);
+    if (d_svdj_residual_) hipFree(d_svdj_residual_);
+    if (d_svdj_n_sweeps_) hipFree(d_svdj_n_sweeps_);
 
     rocblas_destroy_handle(rocblas_h_);
     hipStreamDestroy(stream_);
@@ -725,7 +740,7 @@ void DMRG2GPUBase<Scalar>::svd_split(int site, Scalar* d_theta, char direction) 
         d_svd_U_, m,
         d_svd_Vh_, full_k,
         d_svd_E_,
-        rocblas_outofplace,
+        d_svdj_residual_, d_svdj_n_sweeps_,
         d_svd_info_);
 
     // Read back S only (full_k <= chi_max RealTypes) for truncation-rank decision.
