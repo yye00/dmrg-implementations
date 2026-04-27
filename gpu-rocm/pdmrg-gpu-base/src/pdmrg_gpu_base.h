@@ -10,32 +10,32 @@
 /**
  * Stream-Parallel DMRG (PDMRG) on GPU — NAIVE BASELINE
  *
- * Unoptimized reference implementation of stream-parallel two-site DMRG.
+ * Competent first-pass GPU implementation of stream-parallel two-site DMRG.
  * Preserves PDMRG's defining feature — chain partitioned into P segments
- * running concurrently on P HIP streams — but strips every per-stream
- * optimization from the `pdmrg-gpu` implementation:
+ * running concurrently on P HIP streams — and runs all linear algebra on
+ * device. The two-site fused MPO (WW) is precomputed once per bond at
+ * set_mpo() time. The Lanczos eigensolver runs in device-pointer mode with
+ * rocSOLVER `dsteqr` for the tridiagonal eigenproblem. The SVD uses
+ * rocSOLVER `gesvd_auto` and device-side truncation kernels. No CPU
+ * computation in the inner sweep loop.
  *
- *   - No fused two-site MPO cache (d_WW): the WW tensor is rebuilt on
- *     the HOST inside apply_heff_two_site on every Lanczos iteration
- *     and uploaded back to the GPU. Cost is never amortized.
- *   - No gemm_batched: all contractions in apply_heff / update_*_env
- *     use nested for-loops of single rocBLAS gemm calls.
- *   - No device-pointer-mode Lanczos: host-pointer mode throughout, with
- *     CPU LAPACK dstev for the tridiagonal eigenproblem.
- *   - No custom GPU kernels (except the complex-conjugate helper needed
- *     for bra correctness on complex environments).
- *   - No randomized SVD, no on-device SVD truncation.
- *   - No boundary accurate-SVD (Stoudenmire V = Λ⁻¹ still used, but the
- *     singular values come from the plain rocSOLVER gesvd + host truncation).
- *   - Single-site warmup and polish sweeps still exist because they are
- *     part of the PDMRG algorithm (not an optimization), but they run
- *     through the same naive matvec/Lanczos/SVD paths.
+ * Compared to PDMRGGPU (the optimized variant), this baseline omits:
+ *   - HIP graph capture for the Lanczos inner loop,
+ *   - randomized SVD (RSVD),
+ *   - batched GEMM and the GpuOpts ablation framework,
+ *   - sparse-MPO compaction,
+ *   - D_PAD MFMA-friendly padding,
+ *   - the on-device WW precompute kernel (uses host-side compute then H2D),
+ *   - boundary `accurate_svd` (uses plain `rocsolver_gesvd_auto` instead).
+ * The baseline uses non-blocking streams (required for correct concurrent
+ * boundary merges; not an optimization), single-GEMM-per-pair patterns
+ * where the optimized variant uses gemm_batched, and the standard non-fused
+ * Lanczos kernels.
  *
- * Hard-coded defaults:
- *   - n_warmup       = 3   (single-site warmup sweeps before PDMRG loop)
- *   - n_outer        = 20  (outer PDMRG iterations; chosen by caller)
- *   - n_local        = 2   (inner local sweeps per outer iteration)
- *   - Polish sweeps  = 10  (two-site full-chain polish after PDMRG loop)
+ * CLAUDE.md compliance: warmup and polish sweeps are SINGLE-SITE
+ * (sweep_LR_full_1site / sweep_RL_full_1site). The number of warmup and
+ * polish sweeps is configurable via run() parameters (default 1 each;
+ * caller must supply n_polish explicitly to override).
  *
  * Templated on Scalar: double (real) or hipDoubleComplex (complex128).
  */
@@ -51,9 +51,13 @@ public:
     void set_mpo(const std::vector<Scalar*>& h_mpo_tensors);
     void initialize_mps_random(double scale = 0.1);
 
-    // Run PDMRG. n_local_sweeps and n_warmup are hard-coded if the caller
-    // omits them; n_outer_sweeps is always supplied explicitly.
-    double run(int n_outer_sweeps, int n_local_sweeps = 2, int n_warmup = 3);
+    // Run PDMRG. CLAUDE.md compliant defaults (n_warmup=1, n_polish=0,
+    // single-site warmup and polish). All counts are configurable so the
+    // benchmark harness can pass them explicitly per CLAUDE.md rule.
+    double run(int n_outer_sweeps,
+               int n_local_sweeps = 2,
+               int n_warmup = 1,
+               int n_polish = 0);
 
     double get_energy() const { return energy_; }
     void get_mps(std::vector<std::vector<Scalar>>& h_mps) const;
@@ -97,15 +101,22 @@ private:
     std::vector<Scalar*> d_W_left_;
     std::vector<Scalar*> d_W_right_;
 
+    // Per-bond two-site fused MPO (WW), precomputed once at set_mpo() time.
+    // d_WW_[bond] has shape (D*d², D*d²) for each adjacent (site, site+1) pair.
+    // Eliminates the per-Lanczos-iteration host roundtrip pattern.
+    std::vector<Scalar*> d_WW_;
+
     std::vector<int> L_env_alloc_chi_;
     std::vector<int> R_env_alloc_chi_;
 
-    // === Per-stream workspace — minimal naive set ===
+    // === Per-stream workspace ===
+    // All buffers below live on device. Each stream has its own copy so
+    // multiple segment sweeps can run concurrently without interfering.
     struct StreamWorkspace {
         // Contraction intermediates
         Scalar* d_T1;
         Scalar* d_T2;
-        Scalar* d_T3;  // per-call WW scratch (D*d² × D*d²)
+        Scalar* d_T3;   // generic device scratch (kept for parity with -gpu)
 
         // Lanczos
         Scalar* d_theta;
@@ -113,20 +124,37 @@ private:
         Scalar* d_lanczos_v;
         Scalar* d_ritz_coeffs;
 
-        // Host-side Lanczos workspace (CPU LAPACK dstev)
-        std::vector<double> h_alpha;
-        std::vector<double> h_beta;
-        std::vector<double> h_steqr_work;
-        std::vector<double> h_steqr_Z;
+        // Device-pointer-mode scratch for rocBLAS BLAS-1 results.
+        Scalar*   d_dot_result;
+        RealType* d_nrm2_result;
+        RealType* d_inv_nrm;
+        Scalar*   d_neg_alpha;
+        Scalar*   d_neg_overlap;
+        Scalar*   d_neg_beta_scalars;  // [max_lanczos_iter]
 
-        // SVD workspace (rocSOLVER gesvd + host-side truncation)
+        // Per-iteration alpha/beta arrays on device.
+        RealType* d_alpha_dev;         // [max_lanczos_iter]
+        RealType* d_beta_dev;          // [max_lanczos_iter]
+
+        // rocSOLVER dsteqr workspaces — fully on-device tridiagonal eigensolve.
+        double*      d_steqr_D;
+        double*      d_steqr_E;
+        double*      d_steqr_C;        // (max_iter × max_iter)
+        rocblas_int* d_steqr_info;
+
+        // SVD workspace. Truncation runs on device via extract_cols_kernel
+        // and scale_rows/cols_by_diag_kernel from common/scalar_traits.h.
         Scalar* d_svd_A;
         Scalar* d_svd_U;
         RealType* d_svd_S;
         Scalar* d_svd_Vh;
+        Scalar* d_svd_work;            // device scratch for S*Vh (or U*S)
         RealType* d_svd_E;
         int* d_svd_info;
-        std::vector<Scalar> h_svd_U, h_svd_Vh, h_svd_tmp;
+
+        // Pre-allocated device scratch for form_theta_with_V (psi_R copy).
+        Scalar* d_psi_R;
+        // Tiny host buffer used only for the truncation-rank decision.
         std::vector<RealType> h_svd_S;
     };
     std::vector<StreamWorkspace> workspaces_;
@@ -154,6 +182,7 @@ private:
     void ensure_R_env_alloc(int idx, int chi);
 
     // === Initialization ===
+    void precompute_WW();   // host-side per-bond WW build at set_mpo time
     void build_initial_environments();
     void allocate_mps_tensor(int site, int cL, int cR);
     void partition_chain();

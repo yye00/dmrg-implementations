@@ -4,21 +4,24 @@
 #include <cmath>
 #include <vector>
 #include <cstring>
+#include <cstdio>
 #include <string>
 
 // ============================================================================
 // NAIVE BASELINE — pdmrg-gpu-base (stream-parallel, no optimizations)
 // ============================================================================
-// Problem-selection flags only:
+// CLI surface mirrors test_pdmrg_gpu (the optimized variant) so the bench
+// harness can drive both binaries with the same flag set:
 //   (positional) L  chi_max  n_sweeps
-//   --josephson     Run Josephson junction (complex128)
-//   --tfim          Run TFIM
-// No optimization knobs — all algorithmic defaults are hard-coded in the
-// PDMRGGPUBase class constructor and run() method:
-//   n_segments  = 2  (hard-coded in tests)
-//   n_warmup    = 3  (single-site warmup sweeps)
-//   n_local     = 2  (local sweeps per outer iteration)
-//   polish      = 10 (two-site full-chain polish sweeps)
+//   --josephson | --tfim     Problem selection (default: heisenberg)
+//   --segments N             Number of segments (CLAUDE.md compliant default 2)
+//   --warmup N               Single-site warmup sweep count (default 1, max 2)
+//   --polish N               Single-site polish sweep count (default 0, max 2)
+//   --local-sweeps N         Inner local-sweep count per outer iter (default 2)
+//   --quiet                  Suppress per-test summary printing
+//   --nmax N                 Josephson local dimension (accepted; default 2)
+// Unknown flags now exit non-zero with an error (round 2 fix; the previous
+// silent-swallow trap let bench-config typos run with default values).
 
 using Complex = hipDoubleComplex;
 
@@ -195,10 +198,10 @@ void build_josephson_mpo(int L, int d, int D_mpo,
 // ============================================================================
 // Heisenberg test
 // ============================================================================
-int test_heisenberg(int L, int chi_max, int n_sweeps) {
+int test_heisenberg(int L, int chi_max, int n_sweeps,
+                    int n_segments, int n_warmup, int n_polish, int n_local) {
     int d = 2;
     int D_mpo = 5;
-    const int n_segments = 2;  // hard-coded
 
     printf("======================================\n");
     printf("Heisenberg PDMRG-GPU-BASE Test (naive stream-parallel)\n");
@@ -212,14 +215,14 @@ int test_heisenberg(int L, int chi_max, int n_sweeps) {
         {8, -3.374932598688},
     };
 
-    PDMRGGPUBase<double> dmrg(L, d, chi_max, D_mpo, n_segments, 1e-12);
+    PDMRGGPUBase<double> dmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
     dmrg.initialize_mps_random();
 
     std::vector<double*> h_mpo_tensors(L);
     build_heisenberg_mpo(L, D_mpo, h_mpo_tensors);
     dmrg.set_mpo(h_mpo_tensors);
 
-    double energy = dmrg.run(n_sweeps);
+    double energy = dmrg.run(n_sweeps, n_local, n_warmup, n_polish);
 
     int ret = 0;
     if (exact_energies.count(L) > 0) {
@@ -238,10 +241,10 @@ int test_heisenberg(int L, int chi_max, int n_sweeps) {
 // ============================================================================
 // TFIM test — hard-coded J=1.0, h=1.0 (critical point)
 // ============================================================================
-int test_tfim(int L, int chi_max, int n_sweeps) {
+int test_tfim(int L, int chi_max, int n_sweeps,
+              int n_segments, int n_warmup, int n_polish, int n_local) {
     int d = 2;
     int D_mpo = 3;
-    const int n_segments = 2;  // hard-coded
     const double J_tfim = 1.0;
     const double h_field = 1.0;
 
@@ -253,14 +256,14 @@ int test_tfim(int L, int chi_max, int n_sweeps) {
     printf("  J=%.4f, h=%.4f (hard-coded)\n", J_tfim, h_field);
     printf("======================================\n\n");
 
-    PDMRGGPUBase<double> dmrg(L, d, chi_max, D_mpo, n_segments, 1e-12);
+    PDMRGGPUBase<double> dmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
     dmrg.initialize_mps_random();
 
     std::vector<double*> h_mpo_tensors(L);
     build_tfim_mpo(L, D_mpo, J_tfim, h_field, h_mpo_tensors);
     dmrg.set_mpo(h_mpo_tensors);
 
-    double energy = dmrg.run(n_sweeps);
+    double energy = dmrg.run(n_sweeps, n_local, n_warmup, n_polish);
     printf("Energy per site: %.12f\n", energy / L);
 
     for (auto ptr : h_mpo_tensors) delete[] ptr;
@@ -270,12 +273,13 @@ int test_tfim(int L, int chi_max, int n_sweeps) {
 // ============================================================================
 // Josephson Junction test — hard-coded n_max=2, E_J=1.0, E_C=0.5, phi_ext=pi/4
 // ============================================================================
-int test_josephson(int L, int chi_max, int n_sweeps) {
-    const int n_max = 2;
+int test_josephson(int L, int chi_max, int n_sweeps,
+                   int n_segments, int n_warmup, int n_polish, int n_local,
+                   int n_max_arg) {
+    const int n_max = n_max_arg;
     const double E_J = 1.0;
     const double E_C = 0.5;
     const double phi_ext = M_PI / 4;
-    const int n_segments = 2;  // hard-coded
 
     int d = 2 * n_max + 1;
     int D_mpo = 4;
@@ -288,14 +292,14 @@ int test_josephson(int L, int chi_max, int n_sweeps) {
     printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/4 (hard-coded)\n", E_J, E_C);
     printf("======================================\n\n");
 
-    PDMRGGPUBase<Complex> dmrg(L, d, chi_max, D_mpo, n_segments, 1e-12);
+    PDMRGGPUBase<Complex> dmrg(L, d, chi_max, D_mpo, n_segments, 1e-10);
     dmrg.initialize_mps_random();
 
     std::vector<Complex*> h_mpo_tensors(L);
     build_josephson_mpo(L, d, D_mpo, E_J, E_C, 0.0, n_max, phi_ext, h_mpo_tensors);
     dmrg.set_mpo(h_mpo_tensors);
 
-    double energy = dmrg.run(n_sweeps);
+    double energy = dmrg.run(n_sweeps, n_local, n_warmup, n_polish);
     printf("Energy per site: %.12f\n", energy / L);
 
     for (auto ptr : h_mpo_tensors) delete[] ptr;
@@ -303,12 +307,18 @@ int test_josephson(int L, int chi_max, int n_sweeps) {
 }
 
 // ============================================================================
-// Main — only problem-selection flags, no optimization toggles
+// Main — full CLI: problem selection + algorithmic-parameter flags.
+// Defaults match the optimized pdmrg-gpu test driver (CLAUDE.md compliant).
 // ============================================================================
 int main(int argc, char** argv) {
     int L = 8;
     int chi_max = 32;
     int n_sweeps = 30;
+    int n_segments = 2;
+    int n_warmup = 1;
+    int n_polish = 0;
+    int n_local = 2;
+    int n_max = 2;
     bool run_josephson = false;
     bool run_tfim = false;
 
@@ -317,8 +327,16 @@ int main(int argc, char** argv) {
         std::string arg = argv[i];
         if (arg == "--josephson") { run_josephson = true; continue; }
         if (arg == "--tfim")      { run_tfim = true; continue; }
-        if (arg == "--nmax" && i+1 < argc) { ++i; continue; }  // accepted+ignored for benchmark-runner compat
-        if (arg[0] == '-') continue;
+        if (arg == "--quiet")     { continue; }  // accepted; no-op (no per-test output)
+        if (arg == "--segments"     && i+1 < argc) { n_segments = std::atoi(argv[++i]); continue; }
+        if (arg == "--warmup"       && i+1 < argc) { n_warmup   = std::atoi(argv[++i]); continue; }
+        if (arg == "--polish"       && i+1 < argc) { n_polish   = std::atoi(argv[++i]); continue; }
+        if (arg == "--local-sweeps" && i+1 < argc) { n_local    = std::atoi(argv[++i]); continue; }
+        if (arg == "--nmax"         && i+1 < argc) { n_max      = std::atoi(argv[++i]); continue; }
+        if (arg[0] == '-') {
+            std::fprintf(stderr, "Unknown flag: %s\n", argv[i]);
+            return 1;
+        }
         if (pos == 0) L = std::atoi(argv[i]);
         else if (pos == 1) chi_max = std::atoi(argv[i]);
         else if (pos == 2) n_sweeps = std::atoi(argv[i]);
@@ -326,9 +344,12 @@ int main(int argc, char** argv) {
     }
 
     try {
-        if (run_josephson) return test_josephson(L, chi_max, n_sweeps);
-        if (run_tfim)      return test_tfim(L, chi_max, n_sweeps);
-        return test_heisenberg(L, chi_max, n_sweeps);
+        if (run_josephson) return test_josephson(L, chi_max, n_sweeps,
+                                                  n_segments, n_warmup, n_polish, n_local, n_max);
+        if (run_tfim)      return test_tfim(L, chi_max, n_sweeps,
+                                             n_segments, n_warmup, n_polish, n_local);
+        return test_heisenberg(L, chi_max, n_sweeps,
+                                n_segments, n_warmup, n_polish, n_local);
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << std::endl;
         return 1;
