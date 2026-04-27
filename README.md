@@ -71,6 +71,10 @@ All implementations achieve machine precision agreement (ΔE < 1e-14) on correct
 
 **† Experimental `-opt` prototypes.** These three variants are not benchmarked at the headline statistical level used in the published paper. Per the analytical work-multiplier bounds in `paper/main.tex` §6.4 (Block-Davidson $\alpha \in [3,6]$; cross-segment batched GEMM requires $P \gg 16$ to win; Chebyshev filter $\alpha \sim m \geq 4$), they are not competitive with the baselines in the $\chi \le 256$ regime studied. The code is preserved for follow-up evaluation in the regimes where each optimization is naturally indicated; see `docs/PATH_B_FINISHING_PLAN.md` for the full rationale.
 
+**Other GPU directions explored** (paper §6.7 `sec:other_directions`, exploratory):
+- `gpu-rocm/pdmrg-multi-gpu/` — 4-MI300X segment-decomposition parallel DMRG. Partial 27/44 single-rep data shows the analytically-predicted communication-vs-compute crossover (multi-GPU loses at $\chi=64$, wins by 2–3× at $\chi=128, 256$ on long Heisenberg chains). Statistically-pinned $N{=}10$ multi-GPU campaign deferred (requires coordinated multi-MI300X windows).
+- `gpu-rocm/rlbfgs-gpu/`, `gpu-rocm/radam-gpu/` — Riemannian-manifold polish optimizers (L-BFGS, Adam) on the MPS manifold. Correctness passes to truncation floor on all challenge sizes; one extra DMRG1 sweep delivers more $\Delta E$ in less wall time than 100 manifold-gradient steps on 1D ground-state problems. Predicted regimes of usefulness (long-range MPOs, multi-layer TT, excited states, tangent-space dynamics) deferred to future work.
+
 ### Architecture Split
 
 - **`cpu/`** -- Pure-Python implementations using numpy/scipy/quimb, parallelized with MPI.

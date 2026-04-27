@@ -32,6 +32,7 @@
 \item CPU LAPACK SVD consumes 97--98\% of per-sweep time at $\chi{=}256$, capping GPU speedups.
 \item Three prototyped algorithmic variants (Block-Davidson with host-side SVD; cross-segment batched GEMM; Chebyshev-filtered subspace iteration) achieve no measured win at $\chi{\leq}256$; analytical work-multipliers ($\alpha \gtrsim 3$--$4$) predict the failure ahead of measurement (\S\ref{sec:opt_failure}). Newton--Schulz is discussed as a CPU prototype only.
 \item Randomized SVD wins 5--6$\times$ only in 2-site DMRG; HIP graph capture wins 1.2--1.8$\times$ in parallel DMRG.
+\item Multi-GPU segment-decomposition (4-MI300X \texttt{pdmrg-multi-gpu}) and Riemannian-manifold polish optimizers (\texttt{rlbfgs-gpu}, \texttt{radam-gpu}) are reported as exploratory directions consistent with their analytical bounds; full $N{=}10$ campaigns in their predicted regimes of competitiveness are deferred (\S\ref{sec:other_directions}).
 \end{highlights}
 
 \begin{abstract}
@@ -47,7 +48,8 @@ We report extensive negative results on algorithmic optimizations designed to ex
 Three independent algorithmic substitutions were prototyped on top of the GPU baselines: a Block-Davidson eigensolver ($b{=}4$) with host-side LAPACK SVD, a cross-segment batched GEMM dispatch in parallel DMRG, and a Chebyshev-filtered subspace iteration in place of single-vector Lanczos. Each admits a closed-form analytical work-multiplier ($\alpha \gtrsim 3$--$4$ at $\chi \le 256$) that predicts a non-competitive result before measurement; the experiments confirm $1.4$--$5.7\times$ slowdowns where benchmarked at the standard statistical level, and the Chebyshev variant was not benchmarked at $N{=}10$ in light of its analytical bound (\S\ref{sec:opt_failure}). Newton--Schulz polar decomposition is discussed as a CPU-prototype alternative in \S\ref{sec:variants} but was not measured on GPU in this study.
 Cross-segment batched GEMM dispatch is slower in 18 of 19 configurations tested.
 Profiling reveals the root cause: CPU LAPACK SVD consumes 97--98\% of per-sweep wall time at $\chi = 256$, and iterative GPU replacements cannot match LAPACK's optimized QR-iteration algorithm at these matrix sizes.
-All source code, benchmark scripts, and raw data are publicly available.
+Two further GPU directions --- 4-device multi-GPU segment-decomposition and Riemannian-manifold polish optimizers --- are reported as exploratory: analytical bounds and preliminary measurements identify their regimes of potential competitiveness, full statistical campaigns deferred.
+All source code, benchmark scripts, raw data, and the JSON-driven campaign runner that produces fully self-describing benchmark output are publicly available.
 \end{abstract}
 
 \begin{keyword}
@@ -864,6 +866,53 @@ The primary \texttt{-gpu} variants retain on-device rocsolver because their use-
 Note: the 124~s and 142~s figures come from the same profile run as Table~\ref{tab:profile}; the profiled variant and SVD path are unverified pending re-profiling (see table caption).
 
 The profiling picture is unambiguous: at moderate bond dimensions, DMRG on a GPU is not a compute-bound problem.  It is an SVD-bound problem, and the SVD path choice determines whether the CPU or the GPU pays that cost.
+
+\subsection{Other GPU directions explored}
+\label{sec:other_directions}
+
+Beyond the algorithmic-variant family of \S\ref{sec:opt_failure} (which targets the per-bond pipeline of an existing variant) and the per-flag micro-optimisation framework of \S\ref{sec:opt_ablation} (which targets specific kernels within a variant), the repository contains exploratory implementations that change the surrounding architecture rather than the per-bond algorithm: a four-device multi-GPU parallel DMRG (\texttt{pdmrg-multi-gpu}) and two Riemannian-manifold optimizers (\texttt{rlbfgs-gpu}, \texttt{radam-gpu}).  We did early investigations on each, established analytical bounds describing the regime where they would compete, and ran preliminary measurements consistent with those bounds; full $N{=}10$ campaigns at the headline statistical level are deferred.  The prototypes are preserved in the source tree (\texttt{gpu-rocm/pdmrg-multi-gpu/}, \texttt{gpu-rocm/rlbfgs-gpu/}, \texttt{gpu-rocm/radam-gpu/}) for follow-up evaluation.
+
+\subsubsection{Multi-GPU segment-decomposition (pdmrg-multi-gpu)}
+\label{sec:multi_gpu}
+
+The single-MI300X parallel DMRG of \S\ref{sec:pdmrg} decomposes the chain into $P$ segments processed on per-segment streams of one device.  The natural extension is to assign each segment to a distinct GPU, replacing inter-stream synchronisation on one device with inter-device transfers across $N_g{=}4$ MI300Xs.
+
+\paragraph{Analytical bound.}  Per-bond compute is $O(\chi^3 d^2)$.  Inter-segment boundary state is $O(\chi^2 d)$ per boundary per sweep, transferred over the inter-device interconnect at bandwidth $B_\text{HD}$.  The compute-to-communication ratio at a single boundary scales as $\chi^3 d^2 / (\chi^2 d) = \chi d$, so multi-GPU should win whenever per-segment GEMM throughput exceeds the boundary-transfer cost, i.e., once $\chi$ is large enough that $\chi d \cdot \rho_\text{GEMM}^{-1} \gg B_\text{HD}^{-1} \cdot \chi^2 d$ on the relevant interconnect.  The crossover is therefore predicted to lie at moderate $\chi$ for chains long enough to fill multiple segments per GPU; below that crossover, communication dominates.
+
+\paragraph{Preliminary measurements.}  A 4-device exploratory run completed 27 of 44 planned configurations before the GPU window expired (no statistical replicates; backing JSON in \texttt{benchmarks/paper\_results/mi300x/challenge/pdmrg-multi-gpu\_mi300x\_challenge\_20260407\_partial.json}).  Comparison against single-MI300X \texttt{pdmrg-gpu} on the four overlapping Heisenberg configurations is shown in Table~\ref{tab:multi_gpu}: the analytically-predicted crossover is visible in the data --- multi-GPU loses by $2\text{--}3\times$ at $\chi{=}64$ and wins by roughly the same factor at $\chi{=}128, 256$.
+
+\begin{table}[h]
+\centering
+\caption{4-MI300X \texttt{pdmrg-multi-gpu} vs.\ single-MI300X \texttt{pdmrg-gpu}, partial overlapping Heisenberg configurations (single-rep exploratory data; harness not statistically matched). Speedup $> 1$ favours multi-GPU.}
+\label{tab:multi_gpu}
+\begin{tabular}{rrrrr}
+\toprule
+$L$ & $\chi$ & single (s) & 4-GPU (s) & speedup \\
+\midrule
+50  & 64  & 11.1  & 31.7  & $0.35\times$ \\
+50  & 128 & 190.3 & 62.8  & $\mathbf{3.03\times}$ \\
+50  & 256 & 311.0 & 123.7 & $\mathbf{2.51\times}$ \\
+100 & 64  & 35.7  & 80.8  & $0.44\times$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The directional agreement with the analytical bound is encouraging, but the comparison is exploratory: the two harnesses were not run under matched warmup/polish or chi-schedule, the multi-GPU configurations are single-rep without crash-filter or Wilson CI, and the inter-device transfer path was not instrumented.  A statistically-pinned $N{=}10$ multi-GPU campaign with matched harness is left for follow-up work, which will require multiple coordinated multi-MI300X windows beyond what was available for the present submission.  We make no headline performance claim for multi-GPU pdmrg in this paper.
+
+\subsubsection{Riemannian-manifold optimizers (rlbfgs-gpu, radam-gpu)}
+\label{sec:riemannian}
+
+DMRG sweeps the chain site by site, performing a local eigensolve at each bond.  An alternative is to optimize the entire MPS as a single point on the matrix-product manifold using a Riemannian gradient method.  Two such optimizers are implemented as polish-after-warmup steps that take a partially-converged MPS and run additional manifold-gradient updates: a Riemannian L-BFGS (\texttt{rlbfgs-gpu}, two-loop recursion + on-the-fly vector transport + Armijo line search + cautious-pair update) and a Riemannian Adam (\texttt{radam-gpu}).  Both pass correctness tests across all challenge sizes (Heisenberg $L{=}50$--$200$, Josephson $L{=}16$--$64$, TFIM $L{=}50$--$200$) to the truncation floor.
+
+\paragraph{Analytical context.}  A DMRG sweep performs $L$ local Lanczos eigensolves with tight tolerance.  Each local eigensolve is many implicit optimizer steps using exact second-order information from the Krylov subspace on a subproblem that fits the MPS gauge exactly.  A Riemannian gradient step is one first/second-order step on the full chain with worse conditioning from the tangent-space projection that maintains the manifold constraint.  The work-per-$\Delta E$ comparison therefore favours DMRG sweeps in the regimes where local eigensolves are well-conditioned, namely gapped 1D ground states with moderate $\chi$.  Where Riemannian optimization should help is precisely where DMRG sweeps are not natural or not cheap: long-range MPOs (per-bond cost rises faster than $\chi^3 d^2$), multi-layer tensor networks (no clean alternating-direction sweep gauge), excited-state targeting, or tangent-space time evolution.
+
+\paragraph{Preliminary measurements (Heisenberg, MI300X).}  At $L{=}50$, $\chi{=}64$, after one DMRG1 warmup sweep ($E_0 = -21.972110254842$, $|g| = 2.5\times 10^{-6}$): 100 Riemannian-LBFGS polish steps gave $\Delta E = -3.7\times 10^{-10}$ in 166~s; 100 Riemannian-Adam steps gave $\Delta E = +2\times 10^{-10}$ in 152~s with a transient regression of $+1.4\times 10^{-9}$ at epoch 50; one additional DMRG1 sweep gave $\Delta E = -1.5\times 10^{-8}$ in roughly $4\times$ less wall time.  At $L{=}200$, $\chi{=}128$, the same pattern: 100 LBFGS steps $\Delta E = -3.3\times 10^{-7}$ ($166$~s), 100 Adam steps $\Delta E = -1.7\times 10^{-7}$ ($152$~s), one extra DMRG1 sweep $\Delta E = -1.6\times 10^{-6}$ ($38$~s).  Across the tested 1D ground-state envelope, one extra DMRG1 sweep delivers an order of magnitude more $\Delta E$ in $4\times$ less wall time than 100 manifold-gradient steps; the Riemannian polish does not earn its keep.  Backing data: \texttt{benchmarks/data/} (radam/rlbfgs result files, single-rep exploratory).
+
+\paragraph{Future work.}  The Riemannian-optimizer prototypes are kept for the regimes where the analytical context above does favour them; we do not attempt those regimes in this paper.
+
+\subsubsection{Common posture}
+
+Both directions in this subsection are deliberately framed as exploratory: each has analytical reasoning that predicts the regime of competitiveness, preliminary measurements consistent with that prediction, and a clean future-work boundary.  Reporting them here serves three purposes: (i)~it documents that the directions were considered and not silently dropped; (ii)~it gives a complexity-grounded answer to the natural reviewer question of why they are not in the headline tables; and (iii)~it preserves the analytical bounds so that future work in the regimes where these methods are predicted to help can build on them rather than re-deriving.
 
 
 %% ============================================================

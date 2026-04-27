@@ -66,6 +66,16 @@ characteristics that match the CPC audience:
   the analytical bound (alpha ~ m ≥ 4). Newton-Schulz polar decomposition
   is discussed as a CPU-prototype alternative only and was not measured on
   GPU in this study.
+- Two further directions are reported as exploratory (paper §6.7):
+  4-device multi-MI300X segment-decomposition (pdmrg-multi-gpu) shows
+  the analytically-predicted compute-vs-communication crossover in
+  preliminary data — losing at chi=64 and winning by 2-3x at chi=128, 256
+  on long Heisenberg chains; full statistical campaign deferred. Riemannian
+  manifold optimizers (rlbfgs-gpu, radam-gpu) pass correctness on all
+  challenge sizes but lose to one extra DMRG1 sweep on 1D ground-state
+  problems where DMRG's local eigensolves already exploit alternating-
+  direction structure; predicted regimes of competitiveness (long-range
+  MPOs, multi-layer TT, excited states) deferred.
 - Of six GPU micro-optimizations tested uniformly across all variants, only
   two deliver robust wins — and only in the specific variants where they
   target the measured bottleneck.
