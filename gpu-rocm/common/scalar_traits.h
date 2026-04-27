@@ -439,6 +439,34 @@ __global__ void invert_nrm_kernel(const RealType* nrm, RealType* inv_nrm) {
     inv_nrm[0] = RealType(1.0) / nrm[0];
 }
 
+// Promote rocsolver_dsteqr's real-double eigenvectors to hipDoubleComplex
+// for the complex Lanczos Ritz-coefficient path. tridiag eigenvectors are
+// always real (Hermitian tridiagonal); the Scalar-typed ritz buffer needs
+// imaginary zeros when Scalar is complex. Single source of truth — every
+// variant previously had its own static __global__ copy of this kernel.
+// `static` (not inline) follows the existing convention for non-template
+// __global__ functions in this header (HIP doesn't reliably dedupe
+// inline __global__ across TUs; static gives one instance per TU which
+// is wasteful but correct).
+static __global__ void promote_double_to_complex(const double* src,
+                                                  hipDoubleComplex* dst, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) dst[i] = make_hipDoubleComplex(src[i], 0.0);
+}
+
+// Lanczos invariant-subspace check: returns 0 if no β_j < tol within first n,
+// else (j+1) of the first breakdown. Single block, single thread — the array
+// is tiny (n ≤ max_lanczos_iter ~ 100). One rocblas_int crosses the PCIe
+// boundary per check vs. a full β D2H. Single source of truth — pdmrg-gpu,
+// pdmrg-gpu-opt, and dmrg-gpu had local copies pre-promotion.
+static __global__ void lanczos_check_beta(const double* beta, int n, double tol,
+                                          rocblas_int* result) {
+    *result = 0;
+    for (int j = 0; j < n; j++) {
+        if (beta[j] < tol) { *result = j + 1; return; }
+    }
+}
+
 // ============================================================================
 // SVD post-processing kernels: keep U/S/Vh on GPU, avoid D2H→CPU→H2D roundtrip
 // ============================================================================

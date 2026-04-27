@@ -194,13 +194,8 @@ __global__ void setup_renv_step3_ptrs(Scalar** dA, Scalar** dB, Scalar** dC,
     }
 }
 
-// Lanczos: find first beta < tol, write index+1 to result (0 = none found)
-static __global__ void lanczos_check_beta(const double* beta, int n, double tol, rocblas_int* result) {
-    *result = 0;
-    for (int j = 0; j < n; j++) {
-        if (beta[j] < tol) { *result = j + 1; return; }
-    }
-}
+// lanczos_check_beta now defined in common/scalar_traits.h
+// (round-5 single-source-of-truth promotion).
 
 // Fused Lanczos update:  w := w + (-α)*v_i + [(-β_{im1})*v_{im1}]
 // d_neg_alpha and d_neg_beta_im1 are Scalar* on device (device-pointer mode).
@@ -229,11 +224,8 @@ __global__ void lanczos_fused_norm_copy_kernel(
     v_next[idx] = ScalarTraits<Scalar>::scale_by_real(*d_inv_beta, w[idx]);
 }
 
-// Promote double eigenvector to hipDoubleComplex (for Josephson Ritz coefficients)
-static __global__ void promote_double_to_complex(const double* src, hipDoubleComplex* dst, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) dst[i] = make_hipDoubleComplex(src[i], 0.0);
-}
+// promote_double_to_complex now defined in common/scalar_traits.h
+// (round-5 single-source-of-truth promotion).
 
 // ============================================================================
 // Constructor

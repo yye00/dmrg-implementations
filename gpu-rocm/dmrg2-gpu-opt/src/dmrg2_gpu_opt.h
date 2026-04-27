@@ -61,6 +61,14 @@ public:
     GpuOpts& opts() { return opts_; }
     const GpuOpts& opts() const { return opts_; }
 
+    // Public API setters — parity with pdmrg-gpu-opt (round-5 J2). Setters
+    // for flags genuinely N/A in two-site DMRG (set_use_batched_sweep,
+    // set_use_chebyshev) are intentionally absent rather than no-ops.
+    void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
+    void set_use_davidson(bool use_dav) { use_davidson_ = use_dav; }
+    void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
+    void set_quiet(bool) {}  // no-op (matches pdmrg-gpu-opt API surface)
+
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }
 
@@ -140,6 +148,16 @@ private:
     double*      d_steqr_C_ = nullptr;
     rocblas_int* d_steqr_info_ = nullptr;
 
+    // Randomized SVD workspace (Halko-Martinsson-Tropp, on-device). Allocated
+    // only when use_rsvd_ flag is on (round-5 J2 port from dmrg2-gpu).
+    static constexpr int RSVD_OVERSAMPLE_ = 10;
+    Scalar*  d_rsvd_omega_   = nullptr;
+    Scalar*  d_rsvd_Y_       = nullptr;
+    Scalar*  d_rsvd_tau_     = nullptr;
+    Scalar*  d_rsvd_B_       = nullptr;
+    Scalar*  d_rsvd_U_small_ = nullptr;
+    int      rsvd_r_max_     = 0;
+
     // CPU SVD workspace (legacy — only used by the init-time workspace query;
     // runtime SVD is fully on-device).
     std::vector<Scalar> h_svd_A_, h_svd_U_, h_svd_Vh_, h_svd_work_, h_svd_tmp_;
@@ -171,6 +189,11 @@ private:
 
     // Ablation flags + phase timers
     GpuOpts opts_;
+    // Public-API-controlled flags. Defaults match the historical -opt
+    // behavior (Block-Davidson primary, no RSVD, on-device SVD).
+    bool use_cpu_svd_ = false;       // opt-in CPU LAPACK SVD path (legacy)
+    bool use_davidson_ = true;       // -opt's defining choice; false → Lanczos
+    bool use_rsvd_ = false;          // opt-in randomized SVD (round-5 port)
     PhaseTimer t_lanczos_;      // full lanczos_eigensolver call
     PhaseTimer t_apply_heff_;   // each apply_heff invocation
     PhaseTimer t_svd_;          // SVD bond splitting

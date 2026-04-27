@@ -61,14 +61,8 @@ __global__ void lanczos_fused_norm_copy_kernel(
     v_next[idx] = ScalarTraits<Scalar>::scale_by_real(*d_inv_beta, w[idx]);
 }
 
-// Invariant-subspace check: returns 0 if no β below tol, else (j+1) of first
-// breakdown. Writes to a single rocblas_int slot so the host sync is one int.
-static __global__ void lanczos_check_beta(const double* beta, int n, double tol, rocblas_int* result) {
-    *result = 0;
-    for (int j = 0; j < n; j++) {
-        if (beta[j] < tol) { *result = j + 1; return; }
-    }
-}
+// lanczos_check_beta now defined in common/scalar_traits.h
+// (round-5 single-source-of-truth promotion).
 
 // SPARSE_MPO setup kernels (two-site only — single-site sparse uses host-side
 // pointer arrays). Skipped slots must be pre-zeroed by the caller (V /

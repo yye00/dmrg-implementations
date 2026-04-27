@@ -30,16 +30,8 @@
         } \
     } while(0)
 
-// ============================================================================
-// Promote double eigenvector to hipDoubleComplex (for Josephson Ritz coefficients).
-// rocsolver_dsteqr returns the tridiagonal eigenvectors as `double`; when Scalar
-// is hipDoubleComplex we need to widen them to complex for the subsequent GEMV.
-// Same definition as in dmrg-gpu/src/dmrg_gpu_impl.h:231.
-// ============================================================================
-static __global__ void promote_double_to_complex(const double* src, hipDoubleComplex* dst, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) dst[i] = make_hipDoubleComplex(src[i], 0.0);
-}
+// promote_double_to_complex now defined in common/scalar_traits.h
+// (round-5 single-source-of-truth promotion).
 
 // ============================================================================
 // Constructor

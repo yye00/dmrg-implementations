@@ -55,15 +55,8 @@ __global__ void lanczos_fused_norm_copy_kernel(
     v_next[idx] = ScalarTraits<Scalar>::scale_by_real(*d_inv_beta, w[idx]);
 }
 
-// Promote rocsolver_dsteqr's real-double eigenvectors to hipDoubleComplex
-// for the complex Lanczos Ritz-coefficient path. Bug fix per round-4 audit:
-// previously the complex case truncated imaginary parts via Traits::make_scalar
-// from a double host buffer, silently producing real-only Ritz vectors.
-static __global__ void promote_double_to_complex(const double* src,
-                                                  hipDoubleComplex* dst, int n) {
-    int i = blockIdx.x * blockDim.x + threadIdx.x;
-    if (i < n) dst[i] = make_hipDoubleComplex(src[i], 0.0);
-}
+// promote_double_to_complex now defined in common/scalar_traits.h
+// (round-5 single-source-of-truth promotion).
 
 // Profiling counters (reset per sweep pair)
 static double prof_davidson_ms = 0, prof_svd_ms = 0, prof_env_ms = 0;
@@ -214,6 +207,32 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_steqr_C_,    (size_t)max_lanczos_iter_ * max_lanczos_iter_ * sizeof(double)));
     HIP_CHECK(hipMalloc(&d_steqr_info_, sizeof(rocblas_int)));
 
+    // Randomized SVD workspace (Halko-Martinsson-Tropp). Allocated only when
+    // the use_rsvd_ flag is on; G1 baseline doesn't pass it. Mirrors dmrg-gpu's
+    // pattern (round-5 J2): RSVD's small SVD output can be up to (chi_max + p)
+    // singular values, so the d_svd_S_ / d_svd_U_ / d_svd_Vh_ buffers grow if
+    // the flag is on.
+    if (use_rsvd_) {
+        int r_max = chi_max_ + RSVD_OVERSAMPLE_;
+        if (d_svd_S_)  HIP_CHECK(hipFree(d_svd_S_));
+        if (d_svd_E_)  HIP_CHECK(hipFree(d_svd_E_));
+        if (d_svd_U_)  HIP_CHECK(hipFree(d_svd_U_));
+        if (d_svd_Vh_) HIP_CHECK(hipFree(d_svd_Vh_));
+        HIP_CHECK(hipMalloc(&d_svd_S_,  r_max * sizeof(RealType)));
+        HIP_CHECK(hipMalloc(&d_svd_E_,  r_max * sizeof(RealType)));
+        HIP_CHECK(hipMalloc(&d_svd_U_,  (size_t)svd_max_dim * r_max * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_svd_Vh_, (size_t)r_max * svd_max_dim * sizeof(Scalar)));
+
+        rsvd_r_max_ = r_max;
+        int n_max = svd_max_dim;
+        int m_max = svd_max_dim;
+        HIP_CHECK(hipMalloc(&d_rsvd_omega_,   (size_t)n_max * rsvd_r_max_ * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_Y_,       (size_t)m_max * rsvd_r_max_ * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_tau_,     (size_t)rsvd_r_max_ * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_B_,       (size_t)rsvd_r_max_ * n_max * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&d_rsvd_U_small_, (size_t)rsvd_r_max_ * rsvd_r_max_ * sizeof(Scalar)));
+    }
+
     // CPU SVD workspace
     h_svd_A_.resize(theta_size_max_);
     h_svd_U_.resize((size_t)svd_max_dim * chi_max_);
@@ -318,6 +337,11 @@ void DMRGGPUOpt<Scalar>::free_gpu_resources() {
     if (d_steqr_E_) hipFree(d_steqr_E_);
     if (d_steqr_C_) hipFree(d_steqr_C_);
     if (d_steqr_info_) hipFree(d_steqr_info_);
+    if (d_rsvd_omega_)   hipFree(d_rsvd_omega_);
+    if (d_rsvd_Y_)       hipFree(d_rsvd_Y_);
+    if (d_rsvd_tau_)     hipFree(d_rsvd_tau_);
+    if (d_rsvd_B_)       hipFree(d_rsvd_B_);
+    if (d_rsvd_U_small_) hipFree(d_rsvd_U_small_);
 
     // Block-Davidson workspace
     if (d_dav_V_) hipFree(d_dav_V_);
@@ -1170,25 +1194,108 @@ void DMRGGPUOpt<Scalar>::svd_fallback(int site, Scalar* d_theta, char direction)
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_user_);
 
-    // GPU SVD via size-gated dispatcher (Jacobi for double, bidiagonal for
-    // small complex). Keeps U/S/Vh device-resident throughout.
-    HIP_CHECK(hipMemcpyAsync(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar),
-                              hipMemcpyDeviceToDevice, stream_));
-    Traits::rocsolver_gesvd_auto(rocblas_h_,
-        rocblas_svect_singular, rocblas_svect_singular,
-        m, n_svd,
-        d_svd_A_, m,
-        d_svd_S_,
-        d_svd_U_, m,
-        d_svd_Vh_, full_k,
-        d_svd_E_,
-        d_svdj_residual_, d_svdj_n_sweeps_,
-        d_svd_info_);
+    // Choose between full SVD (rocsolver_gesvd_auto) and randomized SVD
+    // (Halko-Martinsson-Tropp). RSVD is profitable when full_k > k + p
+    // (oversample beats waste) and m > 2k. vh_lda + svd_k track Vh's
+    // leading dim and the number of singular pairs produced — full SVD
+    // gives full_k of each, RSVD gives b_k = min(r_use, n_svd).
+    int vh_lda = full_k;
+    int svd_k  = full_k;
+    bool used_rsvd = use_rsvd_
+                  && full_k > k + RSVD_OVERSAMPLE_
+                  && m > 2 * k;
 
-    // Truncation: find new_k on device, copy 1 int back. Mirrors dmrg-gpu.
+    if (!used_rsvd) {
+        // GPU SVD via size-gated dispatcher (Jacobi for double, bidiagonal for
+        // small complex). Keeps U/S/Vh device-resident throughout.
+        HIP_CHECK(hipMemcpyAsync(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar),
+                                  hipMemcpyDeviceToDevice, stream_));
+        Traits::rocsolver_gesvd_auto(rocblas_h_,
+            rocblas_svect_singular, rocblas_svect_singular,
+            m, n_svd,
+            d_svd_A_, m,
+            d_svd_S_,
+            d_svd_U_, m,
+            d_svd_Vh_, full_k,
+            d_svd_E_,
+            d_svdj_residual_, d_svdj_n_sweeps_,
+            d_svd_info_);
+    } else {
+        // --- Randomized SVD (Halko–Martinsson–Tropp) ---
+        // Approximates the leading k singular triplets of A ~ (m × n_svd)
+        // with r = k + p oversampling. Mirrors dmrg-gpu's RSVD path
+        // (round-5 J2 backport). Inner SVD of B stays on device.
+        int r_use = std::min({k + RSVD_OVERSAMPLE_, full_k, rsvd_r_max_});
+
+        // Ω ∈ C^{n_svd × r_use}, fresh Gaussian-ish per call.
+        {
+            std::vector<Scalar> h_omega((size_t)n_svd * r_use);
+            for (size_t i = 0; i < h_omega.size(); i++) {
+                h_omega[i] = Traits::random_val();
+            }
+            HIP_CHECK(hipMemcpyAsync(d_rsvd_omega_, h_omega.data(),
+                h_omega.size() * sizeof(Scalar), hipMemcpyHostToDevice, stream_));
+        }
+
+        Scalar one = Traits::one(), zero_val = Traits::zero();
+
+        // Y = A · Ω  —  (m × r_use)
+        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            rocblas_operation_none, rocblas_operation_none,
+            m, r_use, n_svd, &one,
+            d_theta, m,
+            d_rsvd_omega_, n_svd,
+            &zero_val,
+            d_rsvd_Y_, m));
+
+        // QR(Y): geqrf overwrites Y with R+householders, orgqr reifies Q in place.
+        ROCBLAS_CHECK(Traits::rocsolver_geqrf(rocblas_h_, m, r_use,
+            d_rsvd_Y_, m, d_rsvd_tau_));
+        ROCBLAS_CHECK(Traits::rocsolver_orgqr(rocblas_h_, m, r_use, r_use,
+            d_rsvd_Y_, m, d_rsvd_tau_));
+
+        // B = Q^H · A  —  (r_use × n_svd)
+        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            Traits::op_h, rocblas_operation_none,
+            r_use, n_svd, m, &one,
+            d_rsvd_Y_, m,
+            d_theta, m,
+            &zero_val,
+            d_rsvd_B_, r_use));
+
+        // SVD(B) on GPU — small matrix, on-device inner SVD per the
+        // round-4 reconciliation rule (no host-LAPACK roundtrip).
+        int b_k = std::min(r_use, n_svd);
+        Traits::rocsolver_gesvd_auto(rocblas_h_,
+            rocblas_svect_singular, rocblas_svect_singular,
+            r_use, n_svd,
+            d_rsvd_B_, r_use,
+            d_svd_S_,
+            d_rsvd_U_small_, r_use,
+            d_svd_Vh_, b_k,
+            d_svd_E_,
+            d_svdj_residual_, d_svdj_n_sweeps_,
+            d_svd_info_);
+
+        // U = Q · U_small  —  (m × b_k), written into d_svd_U_.
+        ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            rocblas_operation_none, rocblas_operation_none,
+            m, b_k, r_use, &one,
+            d_rsvd_Y_, m,
+            d_rsvd_U_small_, r_use,
+            &zero_val,
+            d_svd_U_, m));
+
+        vh_lda = b_k;
+        svd_k  = b_k;
+    }
+
+    // Truncation: find new_k on device, copy 1 int back. svd_k caps the
+    // search so RSVD's b_k limit is respected.
+    int k_target = std::min(k, svd_k);
     int new_k;
     hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
-                       d_svd_S_, k, 1e-14, d_svd_info_);
+                       d_svd_S_, k_target, 1e-14, d_svd_info_);
     HIP_CHECK(hipMemcpyAsync(&new_k, d_svd_info_, sizeof(int),
                               hipMemcpyDeviceToHost, stream_));
     HIP_CHECK(hipStreamSynchronize(stream_));
@@ -1198,9 +1305,9 @@ void DMRGGPUOpt<Scalar>::svd_fallback(int site, Scalar* d_theta, char direction)
     if (direction == 'R') {
         int new_chi_R = new_k;
 
-        // MPS[site] = U[:, :new_k] — D2D when new_k == full_k, else extract_cols.
+        // MPS[site] = U[:, :new_k] — D2D when new_k == svd_k, else extract_cols.
         allocate_mps_tensor(site, cL, new_chi_R);
-        if (new_k == full_k) {
+        if (new_k == svd_k) {
             HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], d_svd_U_,
                                      (size_t)m * new_k * sizeof(Scalar),
                                      hipMemcpyDeviceToDevice, stream_));
@@ -1212,11 +1319,12 @@ void DMRGGPUOpt<Scalar>::svd_fallback(int site, Scalar* d_theta, char direction)
         }
 
         // S*Vh → d_svd_work_ (scale rows of Vh by S on device).
+        // Vh's leading dim is vh_lda (= full_k for full SVD, = b_k for RSVD).
         {
             int total = new_k * n_svd;
             hipLaunchKernelGGL((scale_rows_by_diag_kernel<Scalar, RealType>),
                                dim3((total + threads - 1) / threads), dim3(threads), 0, stream_,
-                               d_svd_S_, d_svd_Vh_, full_k,
+                               d_svd_S_, d_svd_Vh_, vh_lda,
                                d_svd_work_, new_k, new_k, n_svd);
         }
 
@@ -1241,17 +1349,18 @@ void DMRGGPUOpt<Scalar>::svd_fallback(int site, Scalar* d_theta, char direction)
         int new_chi_L = new_k;
 
         // MPS[site] = Vh[:new_k, :] — extract first new_k rows from
-        // (full_k × n_svd) col-major Vh on device.
+        // (vh_lda × n_svd) col-major Vh on device. vh_lda == full_k for
+        // full SVD, == b_k for RSVD.
         allocate_mps_tensor(site, new_chi_L, cR);
-        if (new_chi_L == full_k) {
+        if (new_chi_L == svd_k && vh_lda == new_chi_L) {
             HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], d_svd_Vh_,
-                                     (size_t)full_k * n_svd * sizeof(Scalar),
+                                     (size_t)vh_lda * n_svd * sizeof(Scalar),
                                      hipMemcpyDeviceToDevice, stream_));
         } else {
             int total = new_chi_L * n_svd;
             hipLaunchKernelGGL(extract_cols_kernel<Scalar>,
                                dim3((total + threads - 1) / threads), dim3(threads), 0, stream_,
-                               d_svd_Vh_, full_k, d_mps_tensors_[site], new_chi_L,
+                               d_svd_Vh_, vh_lda, d_mps_tensors_[site], new_chi_L,
                                new_chi_L, n_svd);
         }
 
@@ -1605,7 +1714,8 @@ double DMRGGPUOpt<Scalar>::optimize_site(int site, char direction) {
     form_theta(site, d_theta_);
 
     auto t0 = std::chrono::high_resolution_clock::now();
-    double energy = block_davidson_eigensolver(site, d_theta_);
+    double energy = use_davidson_ ? block_davidson_eigensolver(site, d_theta_)
+                                  : lanczos_eigensolver(site, d_theta_);
     auto t1 = std::chrono::high_resolution_clock::now();
     prof_davidson_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
 
@@ -1641,7 +1751,8 @@ double DMRGGPUOpt<Scalar>::sweep_left_to_right() {
         int site = L_ - 1;
         form_theta(site, d_theta_);
         auto t0 = std::chrono::high_resolution_clock::now();
-        energy = block_davidson_eigensolver(site, d_theta_);
+        energy = use_davidson_ ? block_davidson_eigensolver(site, d_theta_)
+                               : lanczos_eigensolver(site, d_theta_);
         auto t1 = std::chrono::high_resolution_clock::now();
         prof_davidson_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
         int sz = chi_L(site) * d_ * chi_R(site);
@@ -1670,7 +1781,8 @@ double DMRGGPUOpt<Scalar>::sweep_right_to_left() {
         int site = 0;
         form_theta(site, d_theta_);
         auto t0 = std::chrono::high_resolution_clock::now();
-        energy = block_davidson_eigensolver(site, d_theta_);
+        energy = use_davidson_ ? block_davidson_eigensolver(site, d_theta_)
+                               : lanczos_eigensolver(site, d_theta_);
         auto t1 = std::chrono::high_resolution_clock::now();
         prof_davidson_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
         int sz = chi_L(site) * d_ * chi_R(site);
