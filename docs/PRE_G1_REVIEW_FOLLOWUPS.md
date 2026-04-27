@@ -170,6 +170,86 @@ A second-pass review on 2026-04-27 (after the round-1 Tier A fixes shipped in
   "fused axpy+normalize kernels (reorth unchanged)". Cosmetic, no
   behavior change.
 
+## Round 3 closeout — `-base` variants brought to "competent first-pass GPU"
+
+A third deep-pass review on 2026-04-27 surfaced systemic CPU-bound patterns
+in all three `-gpu-base` snapshots that went beyond what "naive" justified.
+The operator instruction was unambiguous: **"zero CPU calls in any
+`-gpu-*` implementation."** All three `-base` variants were rewritten to a
+"competent first-pass GPU implementation" posture: device-pointer rocBLAS,
+on-device tridiagonal eigensolve via `rocsolver_dsteqr`, on-device SVD
+truncation via the shared `extract_cols_kernel` /
+`scale_rows/cols_by_diag_kernel`, `rocsolver_gesvd_auto` instead of the
+older `rocsolver_gesvd`, sweep-only timer scope matching the `-gpu`
+variants, and (for the two-site / parallel variants) per-bond fused MPO
+precomputation at `set_mpo()` time.
+
+Commits:
+  - `4033ac8` — `gpu-rocm/dmrg-gpu-base`
+  - `bb235ab` — `gpu-rocm/dmrg2-gpu-base` (adds WW precompute)
+  - `92bf290` — `gpu-rocm/pdmrg-gpu-base` (adds WW precompute, per-stream
+    workspaces, non-blocking streams, full CLI surface, CLAUDE.md
+    compliance for warmup/polish, single-site polish)
+
+Round-3 punch-list (R3-1 through R3-13) status:
+
+  - **R3-1** (timer scope drift `-base` vs `-gpu`): RESOLVED in all 3.
+    The round-1 fix at commit `4208052` was applied to `-gpu` only; the
+    round-3 commits apply the same fix to `-base`.
+  - **R3-2** (host-pointer rocBLAS in inner loop): RESOLVED in all 3.
+    Lanczos inner loop now in device-pointer mode; pointer mode toggled
+    back to host before SVD/setup.
+  - **R3-3** (per-iter `std::vector<Scalar> h_coeffs` heap alloc):
+    RESOLVED in all 3. Reorthogonalization now uses pre-allocated
+    `d_neg_overlap` device scratch.
+  - **R3-4** (CPU `dstev_` instead of `rocsolver_dsteqr`): RESOLVED in
+    all 3. Per-stream `d_steqr_D/E/C/info` workspaces.
+  - **R3-5** (host-side SVD truncation with full D2H+H2D of U/S/Vh):
+    RESOLVED in all 3. Device kernels write directly into MPS tensors
+    (or into pre-allocated `d_svd_work` for the absorb GEMM).
+  - **R3-6** (wrong SVD algorithm `rocsolver_gesvd` vs `_auto`):
+    RESOLVED in all 3.
+  - **R3-7** (dmrg2-gpu-base WW host-rebuild per Lanczos iter): RESOLVED.
+    `precompute_WW()` in `set_mpo()` builds `d_WW_[bond]` once on host
+    (set_mpo is outside the timed region) and uploads to device.
+  - **R3-8** (pdmrg-gpu-base WW host-rebuild): RESOLVED. Same pattern
+    as R3-7.
+  - **R3-9** (pdmrg-gpu-base silent flag swallow): RESOLVED. Test driver
+    now exits non-zero on unknown flag, identical to the round-2 fix in
+    `-gpu` test files.
+  - **R3-10** (pdmrg-gpu-base CLAUDE.md violations: hardcoded n_warmup=3,
+    two-site polish, hardcoded n_polish=10): RESOLVED. `run()` signature
+    now takes `n_polish`. Defaults `n_warmup=1, n_polish=0`. Polish phase
+    uses `sweep_LR_full_1site()` / `sweep_RL_full_1site()` (single-site).
+    CLI `--warmup`, `--polish`, `--segments`, `--local-sweeps` flags
+    added.
+  - **R3-11** (pdmrg-gpu-base blocking `hipStreamCreate` + sync hipMemcpy
+    serialization): RESOLVED. `hipStreamCreateWithFlags(hipStreamNonBlocking)`.
+  - **R3-12** (pdmrg-gpu-base plain `rocsolver_gesvd` at boundaries):
+    NOT FIXED in this round. `accurate_svd` (Stoudenmire recursive
+    refinement) is a `-gpu`-only optimization for boundary numerical
+    stability; keeping `-base` on the plain rocSOLVER SVD preserves a
+    real algorithmic distinction between the two variants. Documented
+    here so future audits don't re-flag.
+  - **R3-13** (pdmrg-gpu-base per-call `h_psi_R` heap alloc + sync
+    hipMemcpy): RESOLVED. Pre-allocated `d_psi_R` in StreamWorkspace;
+    `form_theta_with_V` uploads V to ws.d_svd_S as scratch and uses
+    `scale_rows_by_diag_kernel` for the row scaling on device.
+
+What this means for benchmarking:
+  - All 6 `-gpu` and `-gpu-base` variants now use the same timer scope
+    (sweep_only). `-gpu / -gpu-base` wall-time ratios are now apples-
+    to-apples.
+  - `-base` snapshots represent a "competent first-pass GPU
+    implementation" baseline; `-gpu` adds dual-stream pipelining (where
+    applicable), HIP graph capture, RSVD, batched GEMM + GpuOpts ablation
+    framework, sparse-MPO compaction, D_PAD, and (in dmrg2-gpu /
+    pdmrg-gpu) on-device WW precompute kernels and the `accurate_svd`
+    boundary path. Speedup ratios now attribute to those optimizations
+    rather than to artifactual CPU-roundtrip patterns.
+
+---
+
 ## Round 2 — items remaining deferred (B7-B12)
 
 - **B7**: RSVD heap-alloc pattern also exists in `dmrg-gpu` (round 1 only
