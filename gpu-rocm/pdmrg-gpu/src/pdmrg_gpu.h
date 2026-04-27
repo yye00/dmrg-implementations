@@ -157,15 +157,19 @@ private:
         std::vector<Scalar> h_svd_A, h_svd_U, h_svd_Vh, h_svd_work, h_svd_tmp;
         std::vector<RealType> h_svd_S;
         std::vector<RealType> h_svd_rwork;
-        // Randomized truncated SVD (GPU QR)
+        // Randomized truncated SVD (GPU QR + on-device inner SVD).
+        // The inner SVD of B (the small r × n_svd matrix) runs on device via
+        // rocsolver_gesvd_auto into d_rsvd_U_small / d_svd_S / d_svd_Vh,
+        // matching dmrg-gpu/dmrg2-gpu. The previous host-roundtrip pattern
+        // (D2H of B, lapack_gesvd, H2D of U_small) was a per-bond CPU
+        // bottleneck unique to pdmrg-gpu and is no longer used.
         Scalar* d_rsvd_omega;     // (n, r) random projection on GPU
         Scalar* d_rsvd_Y;         // (m, r) projected result on GPU
         Scalar* d_rsvd_Q;         // (m, r) QR factor on GPU
         Scalar* d_rsvd_B;         // (r, n) projected matrix on GPU
         Scalar* d_rsvd_ipiv;      // (r) QR tau on GPU (rocSOLVER)
+        Scalar* d_rsvd_U_small;   // (r, r) inner SVD U on GPU (replaces h_rsvd_U_small)
         Scalar* d_rsvd_U_full;    // (m, r) for U = Q @ U_small on GPU
-        std::vector<Scalar> h_rsvd_B;          // (r, n) host copy
-        std::vector<Scalar> h_rsvd_U_small;    // (r, r) from SVD of B
         // Pre-allocated Vh buffer for boundary merge R_env swap
         Scalar* d_Vh_canonical;       // size: chi_max*d × d*chi_max (same as theta_size_max)
 

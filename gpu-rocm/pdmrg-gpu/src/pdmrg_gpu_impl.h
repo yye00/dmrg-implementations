@@ -497,15 +497,15 @@ void PDMRGGPU<Scalar>::allocate_stream_workspaces() {
             ws.d_rsvd_Q = nullptr;
             ws.d_rsvd_B = nullptr;
             ws.d_rsvd_ipiv = nullptr;
+            ws.d_rsvd_U_small = nullptr;
             ws.d_rsvd_U_full = nullptr;
-            HIP_CHECK(hipMalloc(&ws.d_rsvd_omega,  (size_t)rsvd_n * rsvd_r * sizeof(Scalar)));
-            HIP_CHECK(hipMalloc(&ws.d_rsvd_Y,     (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
-            HIP_CHECK(hipMalloc(&ws.d_rsvd_Q,     (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
-            HIP_CHECK(hipMalloc(&ws.d_rsvd_B,     (size_t)rsvd_r * rsvd_n * sizeof(Scalar)));
-            HIP_CHECK(hipMalloc(&ws.d_rsvd_ipiv,  (size_t)rsvd_r * sizeof(Scalar)));
-            HIP_CHECK(hipMalloc(&ws.d_rsvd_U_full,(size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
-            ws.h_rsvd_B.resize((size_t)rsvd_r * rsvd_n);
-            ws.h_rsvd_U_small.resize((size_t)rsvd_r * rsvd_r);
+            HIP_CHECK(hipMalloc(&ws.d_rsvd_omega,   (size_t)rsvd_n * rsvd_r * sizeof(Scalar)));
+            HIP_CHECK(hipMalloc(&ws.d_rsvd_Y,       (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
+            HIP_CHECK(hipMalloc(&ws.d_rsvd_Q,       (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
+            HIP_CHECK(hipMalloc(&ws.d_rsvd_B,       (size_t)rsvd_r * rsvd_n * sizeof(Scalar)));
+            HIP_CHECK(hipMalloc(&ws.d_rsvd_ipiv,    (size_t)rsvd_r * sizeof(Scalar)));
+            HIP_CHECK(hipMalloc(&ws.d_rsvd_U_small, (size_t)rsvd_r * rsvd_r * sizeof(Scalar)));
+            HIP_CHECK(hipMalloc(&ws.d_rsvd_U_full,  (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
 
             // Pre-allocated Vh buffer for boundary merge R_env swap (avoids hot-path hipMalloc)
             // Max size = chi_max*d rows × d*chi_max cols = theta_size_max
@@ -608,6 +608,7 @@ void PDMRGGPU<Scalar>::free_gpu_resources() {
         if (ws.d_rsvd_Q) hipFree(ws.d_rsvd_Q);
         if (ws.d_rsvd_B) hipFree(ws.d_rsvd_B);
         if (ws.d_rsvd_ipiv) hipFree(ws.d_rsvd_ipiv);
+        if (ws.d_rsvd_U_small) hipFree(ws.d_rsvd_U_small);
         if (ws.d_rsvd_U_full) hipFree(ws.d_rsvd_U_full);
         if (ws.d_Vh_canonical) hipFree(ws.d_Vh_canonical);
 
@@ -1765,107 +1766,84 @@ void PDMRGGPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction, int
         HIP_CHECK(hipStreamSynchronize(streams_[si]));
     }
 
-    // Step 5: Copy B to host, compute SVD of B (r x n_svd) — much smaller than (m x n_svd).
-    // Async D2H to avoid null-stream capture collisions (see lanczos_eigensolver note).
-    HIP_CHECK(hipMemcpyAsync(ws.h_rsvd_B.data(), ws.d_rsvd_B, r * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost, streams_[si]));
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
-
+    // Step 5: SVD of B on DEVICE — small (r × n_svd) matrix, but keeping it
+    // on device avoids a per-bond D2H + LAPACK + H2D roundtrip. Matches the
+    // dmrg-gpu / dmrg2-gpu pattern; the previous host-LAPACK path was a
+    // pdmrg-gpu-only inconsistency.
     int small_k = std::min(r, n_svd);
-    {
-        int lwork = (int)ws.h_svd_work.size();
-        int info;
-        const char jobu = 'S', jobvt = 'S';
-        // U_small: (r x small_k), S: (small_k), Vh: (small_k x n_svd)
-        Traits::lapack_gesvd(&jobu, &jobvt, &r, &n_svd, ws.h_rsvd_B.data(), &r, ws.h_svd_S.data(),
-                ws.h_rsvd_U_small.data(), &r, ws.h_svd_Vh.data(), &small_k,
-                ws.h_svd_work.data(), &lwork,
-                ws.h_svd_rwork.empty() ? nullptr : ws.h_svd_rwork.data(), &info);
-        if (info != 0) {
-            svd_split(site, d_theta, direction, si);
-            return;
-        }
-    }
+    Traits::rocsolver_gesvd_auto(handles_[si],
+        rocblas_svect_singular, rocblas_svect_singular,
+        r, n_svd,
+        ws.d_rsvd_B, r,
+        ws.d_svd_S,
+        ws.d_rsvd_U_small, r,
+        ws.d_svd_Vh, small_k,
+        ws.d_svd_E,
+        ws.d_svdj_residual, ws.d_svdj_n_sweeps,
+        ws.d_svd_info);
 
-    // Step 6: Upload U_small to GPU, compute U_full = Q @ U_small on GPU
-    //   Q is (m x r) on device, U_small is (r x small_k) on host -> U_full (m x small_k)
+    // Step 6: U_full = Q @ U_small on device (single GEMM, all device-resident).
     {
-        // Upload U_small to device (reuse d_rsvd_B as temp — it's no longer needed)
-        HIP_CHECK(hipMemcpyAsync(ws.d_rsvd_B, ws.h_rsvd_U_small.data(),
-                            (size_t)r * small_k * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
         Scalar one = Traits::one(), zero_val = Traits::zero();
         ROCBLAS_CHECK(Traits::gemm(handles_[si],
             rocblas_operation_none, rocblas_operation_none,
             m, small_k, r, &one,
             ws.d_rsvd_Q, m,
-            ws.d_rsvd_B, r,
+            ws.d_rsvd_U_small, r,
             &zero_val,
             ws.d_rsvd_U_full, m));
-        HIP_CHECK(hipStreamSynchronize(streams_[si]));
     }
 
-    // Now: U_full (m x small_k) is on GPU at ws.d_rsvd_U_full
-    //      S (small_k) and Vh (small_k x n_svd) are on host
-    RealType* h_S_data = ws.h_svd_S.data();
-    Scalar* h_Vh_data = ws.h_svd_Vh.data();
-
-    // Truncation
+    // Truncation rank: read back the (small_k <= chi_max) singular values
+    // for the same rank decision the standard svd_split does.
+    HIP_CHECK(hipMemcpyAsync(ws.h_svd_S.data(), ws.d_svd_S,
+                             small_k * sizeof(RealType),
+                             hipMemcpyDeviceToHost, streams_[si]));
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
     int new_k = k;
     for (int i = 0; i < new_k; i++) {
-        if (h_S_data[i] < 1e-14) { new_k = i; break; }
+        if (ws.h_svd_S[i] < 1e-14) { new_k = i; break; }
     }
     if (new_k == 0) new_k = 1;
 
-    // Upload S to device for GPU-side scaling
-    HIP_CHECK(hipMemcpyAsync(ws.d_svd_S, h_S_data, new_k * sizeof(RealType),
-                              hipMemcpyHostToDevice, streams_[si]));
+    // S, Vh, U_small all live on device after the on-device rocsolver_gesvd_auto
+    // (no host upload step needed; was required by the previous host-LAPACK
+    // pattern but no longer applicable).
 
     if (direction == 'R') {
-        // MPS[site] = U_full[:, :new_k]  (U_full already on GPU)
+        // MPS[site] = U_full[:, :new_k] (U_full on device, lda=m, first new_k
+        // columns contiguous in column-major).
         allocate_mps_tensor(site, cL, new_k);
-        if (new_k == small_k) {
-            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.d_rsvd_U_full,
-                                (size_t)m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
-        } else {
-            // Column subset: first new_k columns are contiguous in column-major
-            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.d_rsvd_U_full,
-                                (size_t)m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
-        }
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], ws.d_rsvd_U_full,
+                                 (size_t)m * new_k * sizeof(Scalar),
+                                 hipMemcpyDeviceToDevice, streams_[si]));
 
-        // MPS[site+1] = diag(S) @ Vh[:new_k, :] — scale rows of Vh by S on GPU
-        // Vh is on host with leading dim small_k, pack to new_k and upload
-        if (new_k == small_k) {
-            HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, h_Vh_data,
-                        (size_t)small_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
-        } else {
-            for (int j = 0; j < n_svd; j++)
-                for (int i = 0; i < new_k; i++)
-                    ws.h_svd_tmp[i + j * new_k] = h_Vh_data[i + j * small_k];
-            HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, ws.h_svd_tmp.data(),
-                        (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
-        }
+        // MPS[site+1] = diag(S) @ Vh[:new_k, :] — scale rows of Vh by S on GPU.
+        // Vh is on device at ws.d_svd_Vh (small_k × n_svd, lda=small_k);
+        // scale_rows_by_real handles the row-stride shift from small_k to new_k.
         allocate_mps_tensor(site + 1, new_k, cR);
-        int vh_ld = (new_k == small_k) ? small_k : new_k;
-        scale_rows_by_real(ws.d_svd_work, vh_ld, ws.d_svd_S,
+        scale_rows_by_real(ws.d_svd_Vh, small_k, ws.d_svd_S,
                            d_mps_tensors_[site + 1], new_k, new_k, n_svd, streams_[si]);
 
     } else {
-        // MPS[site] = U_full[:, :new_k] @ diag(S) — scale columns on GPU
-        // U_full already on GPU at d_rsvd_U_full
+        // MPS[site] = U_full[:, :new_k] @ diag(S) — scale columns on GPU.
         allocate_mps_tensor(site, cL, new_k);
         scale_columns_by_real(ws.d_rsvd_U_full, m, ws.d_svd_S,
                               d_mps_tensors_[site], m, m, new_k, streams_[si]);
 
-        // MPS[site+1] = Vh[:new_k, :]
+        // MPS[site+1] = Vh[:new_k, :] — extract first new_k rows from
+        // (small_k × n_svd) col-major Vh on device.
         allocate_mps_tensor(site + 1, new_k, cR);
         if (new_k == small_k) {
-            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], h_Vh_data,
-                                (size_t)small_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], ws.d_svd_Vh,
+                                     (size_t)small_k * n_svd * sizeof(Scalar),
+                                     hipMemcpyDeviceToDevice, streams_[si]));
         } else {
-            for (int j = 0; j < n_svd; j++)
-                for (int i = 0; i < new_k; i++)
-                    ws.h_svd_tmp[i + j * new_k] = h_Vh_data[i + j * small_k];
-            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], ws.h_svd_tmp.data(),
-                                (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
+            HIP_CHECK(hipMemcpy2DAsync(
+                d_mps_tensors_[site + 1], new_k * sizeof(Scalar),
+                ws.d_svd_Vh,              small_k * sizeof(Scalar),
+                new_k * sizeof(Scalar),   n_svd,
+                hipMemcpyDeviceToDevice, streams_[si]));
         }
     }
 

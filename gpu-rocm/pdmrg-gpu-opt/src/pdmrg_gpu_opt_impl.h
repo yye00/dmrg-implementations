@@ -1433,6 +1433,20 @@ void PDMRGGPUOpt<Scalar>::svd_split(int site, Scalar* d_theta, char direction, i
 
     bond_dims_[site + 1] = new_k;
     ws.heff_cached_site = -1;
+
+    // C4 fix: ensure ws.h_svd_S holds the (post-truncation) singular values
+    // for callers that need them on host. merge_and_optimize_boundaries reads
+    // ws.h_svd_S[i] to compute V = 1/clip(S, 1e-12); without this D2H copy
+    // the boundary V was being computed from stale or zero-initialized
+    // host memory whenever the GPU SVD path was taken (the default).
+    // The CPU-SVD path already populates h_svd_S directly via lapack_gesvd;
+    // this copy is a no-op in that case (overwrite with same values) but
+    // unconditional for clarity. Stream-ordered against the SVD's writes
+    // so it is safe under non-blocking streams.
+    HIP_CHECK(hipMemcpyAsync(ws.h_svd_S.data(), ws.d_svd_S,
+                             new_k * sizeof(RealType),
+                             hipMemcpyDeviceToHost, streams_[si]));
+    HIP_CHECK(hipStreamSynchronize(streams_[si]));
 }
 
 // ============================================================================
