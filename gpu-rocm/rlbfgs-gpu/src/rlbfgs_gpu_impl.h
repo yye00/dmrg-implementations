@@ -1051,6 +1051,13 @@ void RLBFGSGPU<Scalar>::lbfgs_two_loop() {
 
 template<typename Scalar>
 double RLBFGSGPU<Scalar>::trial_energy_at(double alpha) {
+    // Save caller's pointer mode so we can restore on every exit path
+    // (round-5 A11 fix). Previously this function set host mode and never
+    // restored, leaking it into the caller's handle and corrupting any
+    // subsequent device-mode rocBLAS call (e.g., compute_all_gradients).
+    rocblas_pointer_mode prev_mode;
+    rocblas_get_pointer_mode(handle_, &prev_mode);
+
     // d_trial_mps_ = d_mps_ + alpha * d_dir_
     tangent_copy(d_mps_, d_trial_mps_);
     Scalar a = Traits::make_scalar(alpha);
@@ -1068,6 +1075,8 @@ double RLBFGSGPU<Scalar>::trial_energy_at(double alpha) {
     double E = compute_energy_from_envs();
     std::swap(d_mps_, d_trial_mps_);    // restore original as "current"
     // NB: d_trial_mps_ now holds the canonicalized, normalized trial iterate.
+
+    rocblas_set_pointer_mode(handle_, prev_mode);
     return E;
 }
 

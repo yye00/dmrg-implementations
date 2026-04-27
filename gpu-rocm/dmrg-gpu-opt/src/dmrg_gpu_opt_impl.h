@@ -207,12 +207,15 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_steqr_C_,    (size_t)max_lanczos_iter_ * max_lanczos_iter_ * sizeof(double)));
     HIP_CHECK(hipMalloc(&d_steqr_info_, sizeof(rocblas_int)));
 
-    // Randomized SVD workspace (Halko-Martinsson-Tropp). Allocated only when
-    // the use_rsvd_ flag is on; G1 baseline doesn't pass it. Mirrors dmrg-gpu's
-    // pattern (round-5 J2): RSVD's small SVD output can be up to (chi_max + p)
-    // singular values, so the d_svd_S_ / d_svd_U_ / d_svd_Vh_ buffers grow if
-    // the flag is on.
-    if (use_rsvd_) {
+    // Randomized SVD workspace (Halko-Martinsson-Tropp). Allocated EAGERLY
+    // regardless of use_rsvd_ default — round-5 A7 fix. Previously gated on
+    // use_rsvd_ at construction, but set_rsvd(true) post-ctor (the J2 setter
+    // surface) would have left buffers nullptr and crashed on first RSVD
+    // call. Eager allocation costs ~4 MB at chi=256 (negligible vs the
+    // multi-GB MPS) and lets the user toggle use_rsvd_ at any time safely.
+    // Also resizes d_svd_S/E/U/Vh from chi_max to chi_max + OVERSAMPLE since
+    // RSVD's small-SVD output can produce that many singular values.
+    {
         int r_max = chi_max_ + RSVD_OVERSAMPLE_;
         if (d_svd_S_)  HIP_CHECK(hipFree(d_svd_S_));
         if (d_svd_E_)  HIP_CHECK(hipFree(d_svd_E_));
@@ -1194,18 +1197,51 @@ void DMRGGPUOpt<Scalar>::svd_fallback(int site, Scalar* d_theta, char direction)
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_user_);
 
-    // Choose between full SVD (rocsolver_gesvd_auto) and randomized SVD
-    // (Halko-Martinsson-Tropp). RSVD is profitable when full_k > k + p
-    // (oversample beats waste) and m > 2k. vh_lda + svd_k track Vh's
-    // leading dim and the number of singular pairs produced — full SVD
-    // gives full_k of each, RSVD gives b_k = min(r_use, n_svd).
+    // Choose between full SVD (rocsolver_gesvd_auto), randomized SVD
+    // (Halko-Martinsson-Tropp), and the use_cpu_svd_ opt-in CPU LAPACK path.
+    // RSVD is profitable when full_k > k + p (oversample beats waste) and
+    // m > 2k. vh_lda + svd_k track Vh's leading dim and the number of
+    // singular pairs produced — full SVD gives full_k of each, RSVD gives
+    // b_k = min(r_use, n_svd).
     int vh_lda = full_k;
     int svd_k  = full_k;
     bool used_rsvd = use_rsvd_
+                  && !use_cpu_svd_
                   && full_k > k + RSVD_OVERSAMPLE_
                   && m > 2 * k;
 
-    if (!used_rsvd) {
+    if (use_cpu_svd_) {
+        // CPU LAPACK SVD — opt-in only (use_cpu_svd_ flag, off by default).
+        // Round-5 A7 fix: previously the setter set_cpu_svd existed for J2
+        // API parity but the flag was never read. Now wired: D2H theta,
+        // host gesvd, H2D U/S/Vh into the on-device buffers so the existing
+        // truncate+scale+absorb post-SVD logic works uniformly.
+        HIP_CHECK(hipMemcpyAsync(h_svd_A_.data(), d_theta,
+                                  m * n_svd * sizeof(Scalar),
+                                  hipMemcpyDeviceToHost, stream_));
+        HIP_CHECK(hipStreamSynchronize(stream_));
+        int lwork = (int)h_svd_work_.size();
+        int info;
+        const char jobu = 'S', jobvt = 'S';
+        Traits::lapack_gesvd(&jobu, &jobvt, &m, &n_svd, h_svd_A_.data(), &m,
+                h_svd_S_.data(), h_svd_U_.data(), &m, h_svd_Vh_.data(), &full_k,
+                h_svd_work_.data(), &lwork,
+                h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
+        if (info != 0) {
+            throw std::runtime_error("svd_fallback (use_cpu_svd_): LAPACK gesvd info=" + std::to_string(info));
+        }
+        // Upload U / S / Vh back to the on-device buffers used by the
+        // existing post-SVD truncate + scale + absorb logic.
+        HIP_CHECK(hipMemcpyAsync(d_svd_S_, h_svd_S_.data(),
+                                  full_k * sizeof(RealType),
+                                  hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_svd_U_, h_svd_U_.data(),
+                                  (size_t)m * full_k * sizeof(Scalar),
+                                  hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_svd_Vh_, h_svd_Vh_.data(),
+                                  (size_t)full_k * n_svd * sizeof(Scalar),
+                                  hipMemcpyHostToDevice, stream_));
+    } else if (!used_rsvd) {
         // GPU SVD via size-gated dispatcher (Jacobi for double, bidiagonal for
         // small complex). Keeps U/S/Vh device-resident throughout.
         HIP_CHECK(hipMemcpyAsync(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar),

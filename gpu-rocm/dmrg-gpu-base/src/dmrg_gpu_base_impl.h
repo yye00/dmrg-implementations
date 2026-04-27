@@ -804,8 +804,11 @@ double DMRGGPUBase<Scalar>::sweep_left_to_right() {
         form_theta(site, d_theta_);
         energy = lanczos_eigensolver(site, d_theta_);
         int sz = chi_L(site) * d_ * chi_R(site);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_theta_, sz * sizeof(Scalar),
-                            hipMemcpyDeviceToDevice));
+        // Stream-bound D2D — bare hipMemcpy routes through the legacy
+        // stream and would synchronize the device unnecessarily on the
+        // sweep-boundary path (round-5 A2 fix).
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], d_theta_, sz * sizeof(Scalar),
+                                  hipMemcpyDeviceToDevice, stream_));
     }
 
     return energy;
@@ -824,8 +827,9 @@ double DMRGGPUBase<Scalar>::sweep_right_to_left() {
         form_theta(site, d_theta_);
         energy = lanczos_eigensolver(site, d_theta_);
         int sz = chi_L(site) * d_ * chi_R(site);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], d_theta_, sz * sizeof(Scalar),
-                            hipMemcpyDeviceToDevice));
+        // Stream-bound D2D, see L→R sweep above.
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], d_theta_, sz * sizeof(Scalar),
+                                  hipMemcpyDeviceToDevice, stream_));
     }
 
     return energy;

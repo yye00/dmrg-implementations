@@ -2006,10 +2006,11 @@ double PDMRGGPUOpt<Scalar>::chebyshev_eigensolver(int site, Scalar* d_theta, int
     std::vector<double> h_alpha(bounds_lanczos);
     std::vector<double> h_beta(bounds_lanczos);
 
-    // Normalize initial vector. Explicitly set host pointer mode so the
-    // host-pointer scalar (&init_norm) is interpreted correctly regardless
-    // of any prior pointer-mode state on this handle (round-4 M3).
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
+    // Normalize initial vector. Use AsvdPointerModeGuard to capture the
+    // caller's pointer mode and restore it on every exit path (round-5 A9):
+    // chebyshev previously set host mode but never restored, leaving the
+    // handle in an inconsistent state when the caller had device mode set.
+    AsvdPointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_host);
     double init_norm;
     ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &init_norm));
     if (init_norm < 1e-14) {

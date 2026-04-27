@@ -206,9 +206,10 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     HIP_CHECK(hipMalloc(&d_steqr_C_,    (size_t)max_lanczos_iter_ * max_lanczos_iter_ * sizeof(double)));
     HIP_CHECK(hipMalloc(&d_steqr_info_, sizeof(rocblas_int)));
 
-    // Randomized SVD workspace (round-5 J2 port). Allocated only when
-    // use_rsvd_ is on. Two-site sizing: m = chi_max·d, n = d·chi_max.
-    if (use_rsvd_) {
+    // Randomized SVD workspace — allocated EAGERLY (round-5 A8 fix). See
+    // dmrg-gpu-opt for rationale: J2 setter set_rsvd(true) post-ctor would
+    // leave buffers nullptr if gated. Two-site sizing: m = chi_max·d, n = d·chi_max.
+    {
         int r_max = chi_max_ + RSVD_OVERSAMPLE_;
         if (d_svd_S_)  HIP_CHECK(hipFree(d_svd_S_));
         if (d_svd_E_)  HIP_CHECK(hipFree(d_svd_E_));
@@ -1215,16 +1216,46 @@ void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char dir
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_user_);
 
-    // Choose between full SVD (rocsolver_gesvd_auto) and randomized SVD
-    // (Halko-Martinsson-Tropp). Same gating as dmrg-gpu-opt c5+J2 backport;
-    // RSVD typically wins large at chi=128+ per round-2 ablation lessons.
+    // Choose between full SVD (rocsolver_gesvd_auto), randomized SVD
+    // (Halko-Martinsson-Tropp), and the use_cpu_svd_ opt-in CPU LAPACK path
+    // (round-5 A8 fix — flag was previously dead). Same gating as
+    // dmrg-gpu-opt; RSVD typically wins large at chi=128+ per round-2
+    // ablation lessons.
     int vh_lda = full_k;
     int svd_k  = full_k;
     bool used_rsvd = use_rsvd_
+                  && !use_cpu_svd_
                   && full_k > k + RSVD_OVERSAMPLE_
                   && m > 2 * k;
 
-    if (!used_rsvd) {
+    if (use_cpu_svd_) {
+        // CPU LAPACK SVD — opt-in only. D2H theta, host gesvd, H2D U/S/Vh
+        // back to device buffers so the existing post-SVD truncate+scale
+        // logic works uniformly.
+        HIP_CHECK(hipMemcpyAsync(h_svd_A_.data(), d_theta,
+                                  m * n_svd * sizeof(Scalar),
+                                  hipMemcpyDeviceToHost, stream_));
+        HIP_CHECK(hipStreamSynchronize(stream_));
+        int lwork = (int)h_svd_work_.size();
+        int info;
+        const char jobu = 'S', jobvt = 'S';
+        Traits::lapack_gesvd(&jobu, &jobvt, &m, &n_svd, h_svd_A_.data(), &m,
+                h_svd_S_.data(), h_svd_U_.data(), &m, h_svd_Vh_.data(), &full_k,
+                h_svd_work_.data(), &lwork,
+                h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
+        if (info != 0) {
+            throw std::runtime_error("svd_split_fallback (use_cpu_svd_): LAPACK gesvd info=" + std::to_string(info));
+        }
+        HIP_CHECK(hipMemcpyAsync(d_svd_S_, h_svd_S_.data(),
+                                  full_k * sizeof(RealType),
+                                  hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_svd_U_, h_svd_U_.data(),
+                                  (size_t)m * full_k * sizeof(Scalar),
+                                  hipMemcpyHostToDevice, stream_));
+        HIP_CHECK(hipMemcpyAsync(d_svd_Vh_, h_svd_Vh_.data(),
+                                  (size_t)full_k * n_svd * sizeof(Scalar),
+                                  hipMemcpyHostToDevice, stream_));
+    } else if (!used_rsvd) {
         HIP_CHECK(hipMemcpyAsync(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar),
                                   hipMemcpyDeviceToDevice, stream_));
         Traits::rocsolver_gesvd_auto(rocblas_h_,
