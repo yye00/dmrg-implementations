@@ -9,9 +9,12 @@ project(DMRG_GPU_BASE LANGUAGES CXX HIP)
 # ==========================================
 # NAIVE BASELINE — single-site DMRG on GPU
 # ==========================================
-# No optimizations. Pure rocBLAS single-GEMM calls in host-pointer mode,
-# CPU LAPACK dstev for Lanczos tridiagonal eigensolve, rocSOLVER gesvd
-# with host-side truncation. Used as the speedup reference for dmrg-gpu.
+# Competent first-pass GPU implementation. All linear algebra on device:
+# rocBLAS in device-pointer mode for the Lanczos inner loop, rocSOLVER
+# dsteqr for the tridiagonal eigensolve, rocSOLVER gesvd_auto for the SVD,
+# device-side kernels for SVD truncation/scaling. No CPU LAPACK calls and
+# no host roundtrips of device-resident data inside the sweep loop.
+# Used as the speedup reference for dmrg-gpu.
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,24 +32,9 @@ find_package(hip REQUIRED)
 find_package(rocblas REQUIRED)
 find_package(rocsolver REQUIRED)
 
-# Find LAPACK/BLAS for CPU dstev + potential gesvd fallback
-# Prefer local OpenBLAS 0.3.28+ (system OpenBLAS 0.3.20 has broken dgesvd)
-set(OPENBLAS_PATH "$ENV{HOME}/openblas-0.3.28" CACHE PATH "Path to local OpenBLAS installation")
-if(EXISTS "/usr/local/openblas/lib/libopenblas.so")
-    message(STATUS "Using system-local OpenBLAS: /usr/local/openblas")
-    set(LAPACK_LIBRARIES "/usr/local/openblas/lib/libopenblas.so" pthread)
-    include_directories(/usr/local/openblas/include)
-elseif(EXISTS "${OPENBLAS_PATH}/lib/libopenblas.a")
-    message(STATUS "Using local OpenBLAS: ${OPENBLAS_PATH}")
-    set(LAPACK_LIBRARIES "${OPENBLAS_PATH}/lib/libopenblas.a" pthread)
-    include_directories(${OPENBLAS_PATH}/include)
-else()
-    message(WARNING "Local OpenBLAS not found, falling back to system LAPACK")
-    find_package(LAPACK REQUIRED)
-endif()
-
 include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/../common
 )
 
 add_executable(dmrg_gpu_base
@@ -69,7 +57,6 @@ target_link_libraries(dmrg_gpu_base
     hip::device
     roc::rocblas
     roc::rocsolver
-    ${LAPACK_LIBRARIES}
 )
 
 message(STATUS "==============================================")
@@ -77,6 +64,6 @@ message(STATUS "DMRG-GPU-BASE (NAIVE BASELINE) Build Config")
 message(STATUS "==============================================")
 message(STATUS "GPU targets: ${GPU_TARGETS}")
 message(STATUS "Backend: naive rocBLAS (no gemm_batched, no fused)")
-message(STATUS "Lanczos: host-pointer mode + CPU dstev")
-message(STATUS "SVD: rocSOLVER gesvd + host-side truncation")
+message(STATUS "Lanczos: device-pointer mode + rocSOLVER dsteqr")
+message(STATUS "SVD: rocSOLVER gesvd_auto + on-device truncation")
 message(STATUS "==============================================")

@@ -351,6 +351,76 @@ def correctness_check(binary: Path, model: str, gate_cfg: dict,
     return rec
 
 
+# ─── Smoke test ───────────────────────────────────────────────────────────────
+# Cheap correctness validation run before burning a full N=10 campaign. Used
+# via `--smoke-test`. Each variant is run on a small Heisenberg config with
+# a known exact ground-state energy and the result is checked to within a
+# tolerance. Useful when -base variants (or any other freshly-rewritten
+# binary) need pre-launch validation without the cost of the full grid.
+
+# Heisenberg OBC ground-state energies (reference values from quimb / ED).
+SMOKE_TEST_CONFIGS = [
+    # (model, L, chi, sweeps, expected_energy, tol)
+    ("heisenberg",  4, 16, 20, -1.616025403784, 1e-8),
+    ("heisenberg",  8, 32, 30, -3.374932598688, 1e-8),
+]
+
+
+def run_smoke_test(variants: list, build_cfg: dict, build_records: dict,
+                   extra_args_per_variant: dict, timeout_sec: int) -> int:
+    """Run each variant on each smoke-test config, validate energy. Return
+    nonzero on any failure (used as a process exit code)."""
+    print("\n=== Smoke test ===")
+    print(f"  configs: {len(SMOKE_TEST_CONFIGS)}")
+    print(f"  variants: {variants}")
+    print()
+
+    failures = []
+    for variant in variants:
+        binary = variant_binary_path(build_cfg, variant)
+        if not binary.exists():
+            print(f"  [skip] {variant}: binary not built at {binary.relative_to(REPO_ROOT)}")
+            failures.append(f"{variant}: binary missing")
+            continue
+        extra_args = extra_args_per_variant.get(variant, [])
+
+        for (model, L, chi, sweeps, expected, tol) in SMOKE_TEST_CONFIGS:
+            cfg = {"L": L, "chi": chi, "sweeps": sweeps, "nmax": 2}
+            print(f"  [smoke] {variant}/{model}/L{L}_chi{chi}/sweeps{sweeps} ...",
+                  end="", flush=True)
+            rec = run_one_rep(binary, model, cfg, extra_args, timeout_sec)
+            ok = rec.get("valid") and rec.get("energy") is not None
+            tag = "OK"
+            if not ok:
+                tag = f"FAIL rc={rec.get('rc')}"
+            elif expected is not None:
+                err = abs(rec["energy"] - expected)
+                if err < tol:
+                    tag = f"OK  E={rec['energy']:.12f}  err={err:.2e}  wall={rec['wall_s']:.2f}s"
+                else:
+                    tag = f"ENERGY_MISMATCH  E={rec['energy']:.12f}  expected={expected:.12f}  err={err:.2e}"
+                    ok = False
+            print(f" {tag}")
+            if not ok:
+                failures.append({
+                    "variant": variant, "model": model, "config": cfg,
+                    "energy": rec.get("energy"), "expected": expected,
+                    "rc": rec.get("rc"), "stderr_tail": rec.get("stderr_tail"),
+                })
+
+    print()
+    print(f"=== Smoke test summary ===")
+    print(f"  variants tested: {len(variants)}")
+    print(f"  configs/variant: {len(SMOKE_TEST_CONFIGS)}")
+    if failures:
+        print(f"  FAILURES: {len(failures)}")
+        for f in failures:
+            print(f"    {f}")
+        return 1
+    print(f"  ALL PASS")
+    return 0
+
+
 def run_cell(binary: Path, variant: str, model: str, config: dict,
              reps: int, extra_args: list, timeout_sec: int,
              input_cfg: dict, input_cfg_hash: str, tag: str,
@@ -437,6 +507,11 @@ def main():
                     help="validate, render paths, list cells; do not build or run")
     ap.add_argument("--build-only", action="store_true",
                     help="build variants but do not run the campaign")
+    ap.add_argument("--smoke-test", action="store_true",
+                    help="after build, run each variant on a tiny Heisenberg "
+                         "config with a known ground-state energy and exit. "
+                         "Use to validate new binaries before burning a full "
+                         "N=10 campaign.")
     ap.add_argument("--force", action="store_true",
                     help="re-run cells even if their result JSON exists")
     args = ap.parse_args()
@@ -503,6 +578,13 @@ def main():
             continue
         build_records[variant] = build_variant(build_cfg, variant)
         print(f"  [build] {variant}: ok ({build_records[variant]['binary_info']['sha256'][:16]}...)")
+
+    if args.smoke_test:
+        timeout_sec = cfg["run"].get("timeout_sec", 1800)
+        extra_args_per_variant = cfg["run"].get("extra_args_per_variant", {}) or {}
+        rc = run_smoke_test(variants, build_cfg, build_records,
+                            extra_args_per_variant, timeout_sec)
+        sys.exit(rc)
 
     if args.build_only:
         print("\n--build-only: skipping run phase.")

@@ -3,11 +3,18 @@
   "campaign": {
     "name": "g1_baseline_rebench",
     "tag_template": "paper-rebench-{date}",
-    "description": "Path B G1: N=10 baseline GPU rebench of dmrg-gpu, dmrg2-gpu, pdmrg-gpu on heisenberg + josephson at the published challenge grid. Per docs/PATH_B_FINISHING_PLAN.md. The -opt variants are explicitly excluded (paper scope tightened to baselines only after the 2026-04-26 corrective audit; see §6.4 of paper/main.tex for the analytical-bound treatment of the -opt families)."
+    "description": "Path B G1: N=10 baseline GPU rebench. Six variants: the three paper -gpu baselines (dmrg-gpu, dmrg2-gpu, pdmrg-gpu) plus their -gpu-base counterparts (round-3 rewrites that bring -base to a 'competent first-pass GPU' posture so -gpu / -gpu-base speedup ratios are interpretable). Heisenberg + josephson at the published challenge grid. Per docs/PATH_B_FINISHING_PLAN.md and docs/PRE_G1_REVIEW_FOLLOWUPS.md. The -opt variants are explicitly excluded (paper scope tightened to baselines only after the 2026-04-26 corrective audit; see §6.4 of paper/main.tex for the analytical-bound treatment of the -opt families)."
   },
   "build": {
     "rebuild": false,
-    "variants": ["dmrg-gpu", "dmrg2-gpu", "pdmrg-gpu"],
+    "variants": [
+      "dmrg-gpu",
+      "dmrg-gpu-base",
+      "dmrg2-gpu",
+      "dmrg2-gpu-base",
+      "pdmrg-gpu",
+      "pdmrg-gpu-base"
+    ],
     "rocm_path": "/opt/rocm",
     "build_script": "build_mi300x.sh",
     "binary_template": "gpu-rocm/{variant}/build/{variant_underscored}"
@@ -35,7 +42,8 @@
       ]
     },
     "extra_args_per_variant": {
-      "pdmrg-gpu": ["--warmup", "1", "--polish", "0", "--segments", "2"]
+      "pdmrg-gpu": ["--warmup", "1", "--polish", "0", "--segments", "2"],
+      "pdmrg-gpu-base": ["--warmup", "1", "--polish", "0", "--segments", "2"]
     },
     "timeout_sec": 1800
   },
