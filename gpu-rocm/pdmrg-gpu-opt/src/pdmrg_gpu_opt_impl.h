@@ -2012,14 +2012,22 @@ double PDMRGGPUOpt<Scalar>::chebyshev_eigensolver(int site, Scalar* d_theta, int
     std::vector<double> h_alpha(bounds_lanczos);
     std::vector<double> h_beta(bounds_lanczos);
 
-    // Normalize initial vector
+    // Normalize initial vector. Explicitly set host pointer mode so the
+    // host-pointer scalar (&init_norm) is interpreted correctly regardless
+    // of any prior pointer-mode state on this handle (round-4 M3).
+    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
     double init_norm;
     ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &init_norm));
     if (init_norm < 1e-14) {
         std::vector<Scalar> h_init(n);
         srand(42 + site);
         for (int i = 0; i < n; i++) h_init[i] = Traits::random_val();
-        HIP_CHECK(hipMemcpy(d_theta, h_init.data(), n * sizeof(Scalar), hipMemcpyHostToDevice));
+        // Stream-bound H2D — bare hipMemcpy routes through the legacy stream
+        // and would collide with peer segments' captured graphs under
+        // LANCZOS_GRAPH (round-4 M4).
+        HIP_CHECK(hipMemcpyAsync(d_theta, h_init.data(), n * sizeof(Scalar),
+                                  hipMemcpyHostToDevice, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
         ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &init_norm));
     }
     {

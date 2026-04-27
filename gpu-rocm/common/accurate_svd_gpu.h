@@ -239,6 +239,19 @@ inline void accurate_svd_gpu(
         return;
     }
 
+    // Workspace-bounds check (round-4 M2): caller's allocate() sized the
+    // arena for some (max_m, max_n); if a later call passes (m, n) beyond
+    // those, we'd OOB on ws.d_M_work[depth] / ws.d_U[depth] / etc. Throw
+    // a clear error rather than silently corrupting memory.
+    if (depth == 0 && (m > ws.max_m || n > ws.max_n)) {
+        throw std::runtime_error("accurate_svd_gpu: input (m=" + std::to_string(m)
+                                 + ", n=" + std::to_string(n)
+                                 + ") exceeds AsvdScratch capacity (max_m="
+                                 + std::to_string(ws.max_m) + ", max_n="
+                                 + std::to_string(ws.max_n)
+                                 + "). Call ws.allocate() with larger sizes first.");
+    }
+
     // --- Step 1: Standard SVD on device ---
     // rocsolver_gesvd is destructive on the input, so copy d_M_in → d_M_work.
     // Caller's d_M_in may have ldm != m; copy by 2D into a packed (m × n) buffer.

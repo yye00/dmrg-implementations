@@ -15,15 +15,33 @@
  *
  * Templated on Scalar: double (real) or hipDoubleComplex (complex128).
  *
- * Key algorithmic changes from dmrg-gpu:
- * 1. Block-Davidson eigensolver replaces Lanczos (BLAS-3 dominant)
- * 2. Dimension padding to MFMA-16 multiples for MI300X tile alignment
- * 3. Batched Step-3 GEMMs reduce kernel launch overhead
+ * Tier: -opt is the "FURTHER algorithmic improvements" tier per the project's
+ * three-tier model:
+ *   -base : competent first-pass GPU port (no advanced optimizations).
+ *   -gpu  : canonical paper reference (Lanczos, on-device SVD, opt-in RSVD,
+ *           graph capture, fused kernels, sparse MPO).
+ *   -opt  : superset of -gpu PLUS algorithmic explorations that are NOT
+ *           drop-in optimizations of the same algorithm. Specifically:
+ *           Block-Davidson eigensolver REPLACES Lanczos (different algorithm,
+ *           BLAS-3 dominant), and MFMA-16 padding REPLACES the natural
+ *           bond-dim layout (architecture-aware). The user explicitly chose
+ *           this taxonomy in 2026-04-27; the family-uniformity audit (A17)
+ *           flagged the algorithmic divergence as a parity break, but per
+ *           the locked tier definition it's intentional.
  *
- * ALL tensor contractions on GPU via rocBLAS gemm.
- * Only CPU work: control flow, convergence checks on scalars,
- *                small eigendecompositions (Davidson projected H),
- *                loops over small MPO bond dimension (D=5, d=2) to dispatch GEMMs.
+ * Algorithm-level differences from -gpu:
+ * 1. Block-Davidson eigensolver replaces Lanczos (BLAS-3 dominant).
+ * 2. Dimension padding to MFMA-16 multiples for MI300X tile alignment.
+ * 3. Batched Step-3 GEMMs reduce kernel launch overhead.
+ *
+ * Correctness baseline matches -gpu (post round-4 C5 backport):
+ * - Zero per-sweep host LAPACK on default code path (rocsolver_dsteqr for
+ *   tridiagonal, rocsolver_gesvd_auto for SVD, on-device truncate + scale
+ *   + absorb).
+ * - Complex Ritz coefficient promote_double_to_complex on device.
+ *
+ * Paper status: excluded from G1 baseline campaign per §6.4 analytical-bound
+ * treatment. Binary still ships and must be at-least-correct.
  */
 
 // Round up to next multiple of 16 for MI300X MFMA FP64 tile alignment

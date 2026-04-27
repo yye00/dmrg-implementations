@@ -181,6 +181,12 @@ PDMRGMultiGPU<Scalar>::PDMRGMultiGPU(int L, int d, int chi_max, int D_mpo, int n
     lanczos_use_1site_ = false;
     rsvd_oversampling_ = 20;
 
+    // Load DMRG_GPU_OPT_* env vars so multi-GPU runs honor the same
+    // ablation flags as the single-device variants (tier uniformity,
+    // round-4 A15). G1 baseline campaign passes no opt-in flags so this
+    // is a no-op there; matters for ablation runs.
+    opts_.load_from_env();
+
     // Allocate per-device resources
     allocate_device_resources();
 

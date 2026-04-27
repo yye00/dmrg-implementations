@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include "scalar_traits.h"
+#include "../../common/gpu_opts.h"
 #include "../../common/accurate_svd_gpu.h"
 
 /**
@@ -180,6 +181,15 @@ private:
     int rsvd_oversampling_;
     int theta_size_max_;
     int max_lanczos_iter_;
+
+    // Environment-driven opt-in flags (DMRG_GPU_OPT_*). load_from_env() is
+    // called in the constructor so multi-GPU runs can enable RSVD / sparse
+    // MPO / device-k truncation / etc. via the same env-var interface as
+    // the single-device variants — restoring tier uniformity (round-4 A15).
+    GpuOpts opts_;
+public:
+    GpuOpts& opts() { return opts_; }
+private:
 
     // === Core methods (device-aware: di = device index) ===
     // Two-site

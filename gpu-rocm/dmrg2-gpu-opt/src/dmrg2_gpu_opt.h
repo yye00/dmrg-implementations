@@ -15,13 +15,23 @@
  *
  * Templated on Scalar: double (real) or hipDoubleComplex (complex128).
  *
- * Key algorithmic changes from dmrg2-gpu:
- * 1. Block-Davidson eigensolver replaces Lanczos (BLAS-3 dominant)
+ * Tier: -opt is the "FURTHER algorithmic improvements" tier per the project's
+ * three-tier model (see dmrg-gpu-opt.h docstring for the full taxonomy).
+ * Block-Davidson REPLACES Lanczos (different algorithm, BLAS-3 dominant) —
+ * this is intentional algorithmic divergence from dmrg2-gpu, not a bug.
  *
- * ALL tensor contractions on GPU via rocBLAS gemm.
- * Fused two-site MPO (WW) precomputed for efficient H_eff application.
- * 2. Dimension padding to MFMA-16 multiples for MI300X tile alignment
- * 3. Strided batched Step-3 GEMMs to reduce kernel launch overhead
+ * Algorithm-level differences from dmrg2-gpu:
+ * 1. Block-Davidson eigensolver replaces Lanczos (BLAS-3 dominant).
+ * 2. Dimension padding to MFMA-16 multiples for MI300X tile alignment.
+ * 3. Strided batched Step-3 GEMMs reduce kernel launch overhead.
+ *
+ * Correctness baseline matches dmrg2-gpu (post round-4 C6 backport):
+ * - Zero per-sweep host LAPACK on default code path (rocsolver_dsteqr for
+ *   tridiagonal, rocsolver_gesvd_auto for SVD, on-device truncate + scale).
+ * - Two-site fused MPO (WW) precomputed for efficient H_eff application.
+ *
+ * Paper status: excluded from G1 baseline campaign per §6.4 analytical-bound
+ * treatment. Binary still ships and must be at-least-correct.
  */
 
 // Round up to next multiple of 16 for MI300X MFMA FP64 tile alignment
