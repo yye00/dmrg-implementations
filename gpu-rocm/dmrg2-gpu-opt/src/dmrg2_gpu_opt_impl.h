@@ -56,6 +56,14 @@ __global__ void lanczos_fused_norm_copy_kernel(
     v_next[idx] = ScalarTraits<Scalar>::scale_by_real(*d_inv_beta, w[idx]);
 }
 
+// Promote rocsolver_dsteqr's real-double eigenvectors to hipDoubleComplex
+// for the complex Lanczos Ritz-coefficient path.
+static __global__ void promote_double_to_complex(const double* src,
+                                                  hipDoubleComplex* dst, int n) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    if (i < n) dst[i] = make_hipDoubleComplex(src[i], 0.0);
+}
+
 // Profiling counters (reset per sweep pair)
 static double prof_davidson_ms = 0, prof_svd_ms = 0, prof_env_ms = 0;
 static int prof_davidson_iters = 0, prof_site_count = 0;
@@ -191,6 +199,17 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     HIP_CHECK(hipMalloc(&d_svd_U_,    (size_t)svd_max_m * svd_max_k * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_svd_S_,    svd_max_k * sizeof(RealType)));
     HIP_CHECK(hipMalloc(&d_svd_Vh_,   (size_t)svd_max_k * svd_max_n * sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_svd_E_,    svd_max_k * sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_svd_info_, sizeof(int)));
+    HIP_CHECK(hipMalloc(&d_svd_work_, theta_size_max_ * sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_svdj_residual_, sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_svdj_n_sweeps_, sizeof(rocblas_int)));
+
+    // rocsolver_dsteqr scratch (replaces 2× host LAPACK dstev_ in Lanczos).
+    HIP_CHECK(hipMalloc(&d_steqr_D_,    max_lanczos_iter_ * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_steqr_E_,    max_lanczos_iter_ * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_steqr_C_,    (size_t)max_lanczos_iter_ * max_lanczos_iter_ * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_steqr_info_, sizeof(rocblas_int)));
 
     // CPU SVD workspace (fallback)
     h_svd_A_.resize(theta_size_max_);
@@ -277,6 +296,15 @@ void DMRG2GPUOpt<Scalar>::free_gpu_resources() {
     if (d_svd_U_) hipFree(d_svd_U_);
     if (d_svd_S_) hipFree(d_svd_S_);
     if (d_svd_Vh_) hipFree(d_svd_Vh_);
+    if (d_svd_E_) hipFree(d_svd_E_);
+    if (d_svd_info_) hipFree(d_svd_info_);
+    if (d_svd_work_) hipFree(d_svd_work_);
+    if (d_svdj_residual_) hipFree(d_svdj_residual_);
+    if (d_svdj_n_sweeps_) hipFree(d_svdj_n_sweeps_);
+    if (d_steqr_D_) hipFree(d_steqr_D_);
+    if (d_steqr_E_) hipFree(d_steqr_E_);
+    if (d_steqr_C_) hipFree(d_steqr_C_);
+    if (d_steqr_info_) hipFree(d_steqr_info_);
 
     // Block-Davidson workspace
     if (d_dav_V_) hipFree(d_dav_V_);
@@ -1027,19 +1055,33 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
         }
 
         // Eigenvalue convergence check (every 3 iterations after iter >= 4)
+        // Tridiagonal eigensolve on device via rocsolver_dsteqr — H2D the
+        // small host α/β, solve, D2H one int + one double. Replaces host
+        // LAPACK dstev_ that introduced a per-3-iter PCIe stall + host BLAS
+        // dependency. Matches dmrg-gpu-opt c5 backport pattern.
         if (iter >= 4 && iter % 3 == 0) {
             int ncheck = iter + 1;
-            std::vector<double> h_D_chk(ncheck), h_E_chk(ncheck);
-            std::copy(h_alpha.begin(), h_alpha.begin() + ncheck, h_D_chk.begin());
+            std::vector<double> h_E_chk(ncheck);
             for (int i = 0; i < ncheck - 1; i++) h_E_chk[i] = h_beta[i];
             h_E_chk[ncheck - 1] = 0.0;
-            const char jobz_n = 'N';
-            const int n_chk = ncheck;
-            std::vector<double> h_work_chk(1);
-            int info_chk = 0;
-            dstev_(&jobz_n, &n_chk, h_D_chk.data(), h_E_chk.data(), nullptr, &n_chk, h_work_chk.data(), &info_chk);
-            if (info_chk == 0) {
-                double cur_energy = h_D_chk[0];
+
+            HIP_CHECK(hipMemcpyAsync(d_steqr_D_, h_alpha.data(),
+                                      ncheck * sizeof(double),
+                                      hipMemcpyHostToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_steqr_E_, h_E_chk.data(),
+                                      ncheck * sizeof(double),
+                                      hipMemcpyHostToDevice, stream_));
+            rocsolver_dsteqr(rocblas_h_, rocblas_evect_none, ncheck,
+                             d_steqr_D_, d_steqr_E_, nullptr, ncheck,
+                             d_steqr_info_);
+            rocblas_int h_info_chk;
+            double cur_energy;
+            HIP_CHECK(hipMemcpyAsync(&h_info_chk, d_steqr_info_, sizeof(rocblas_int),
+                                      hipMemcpyDeviceToHost, stream_));
+            HIP_CHECK(hipMemcpyAsync(&cur_energy, d_steqr_D_, sizeof(double),
+                                      hipMemcpyDeviceToHost, stream_));
+            HIP_CHECK(hipStreamSynchronize(stream_));
+            if (h_info_chk == 0) {
                 if (std::abs(cur_energy - prev_energy) < tol_eig_conv) {
                     iter++;
                     break;
@@ -1080,33 +1122,42 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
     prof_davidson_iters += niter;
     prof_heff_calls += niter;
 
-    // Solve tridiagonal eigenvalue problem on CPU
-    std::vector<double> h_D(niter), h_E(niter), h_Z(niter * niter);
-    std::vector<double> h_work(std::max(1, 2*niter - 2));
-    int lapack_info = 0;
-
-    std::copy(h_alpha.begin(), h_alpha.begin() + niter, h_D.begin());
+    // Final tridiagonal solve on device via rocsolver_dsteqr; eigenvectors
+    // stay on device at d_steqr_C_, first column moves to d_ritz_coeffs_
+    // with promote_double_to_complex when Scalar is complex.
+    std::vector<double> h_E(niter);
     for (int i = 0; i < niter - 1; i++) h_E[i] = h_beta[i];
     if (niter > 0) h_E[niter - 1] = 0.0;
 
-    const char jobz = 'V';
-    const int n_lapack = niter;
-    const int ldz = niter;
-
-    dstev_(&jobz, &n_lapack, h_D.data(), h_E.data(), h_Z.data(), &ldz, h_work.data(), &lapack_info);
-
-    if (lapack_info != 0) {
-        throw std::runtime_error("LAPACK dstev failed with info = " + std::to_string(lapack_info));
+    HIP_CHECK(hipMemcpyAsync(d_steqr_D_, h_alpha.data(),
+                              niter * sizeof(double),
+                              hipMemcpyHostToDevice, stream_));
+    HIP_CHECK(hipMemcpyAsync(d_steqr_E_, h_E.data(),
+                              niter * sizeof(double),
+                              hipMemcpyHostToDevice, stream_));
+    rocsolver_dsteqr(rocblas_h_, rocblas_evect_tridiagonal, niter,
+                     d_steqr_D_, d_steqr_E_, d_steqr_C_, niter,
+                     d_steqr_info_);
+    rocblas_int h_lapack_info;
+    double energy;
+    HIP_CHECK(hipMemcpyAsync(&h_lapack_info, d_steqr_info_, sizeof(rocblas_int),
+                              hipMemcpyDeviceToHost, stream_));
+    HIP_CHECK(hipMemcpyAsync(&energy, d_steqr_D_, sizeof(double),
+                              hipMemcpyDeviceToHost, stream_));
+    HIP_CHECK(hipStreamSynchronize(stream_));
+    if (h_lapack_info != 0) {
+        throw std::runtime_error("rocsolver_dsteqr failed with info = " + std::to_string(h_lapack_info));
     }
 
-    double energy = h_D[0];
-
-    // Reconstruct ground state: |theta> = sum_i c[i] |v_i>
-    std::vector<Scalar> h_ritz_scalar(niter);
-    for (int i = 0; i < niter; i++) {
-        h_ritz_scalar[i] = Traits::make_scalar(h_Z[i]);
+    if constexpr (std::is_same_v<Scalar, double>) {
+        HIP_CHECK(hipMemcpyAsync(d_ritz_coeffs_, d_steqr_C_,
+                                  niter * sizeof(double),
+                                  hipMemcpyDeviceToDevice, stream_));
+    } else {
+        int blk = (niter + 63) / 64;
+        hipLaunchKernelGGL(promote_double_to_complex, dim3(blk), dim3(64), 0, stream_,
+                           d_steqr_C_, (hipDoubleComplex*)d_ritz_coeffs_, niter);
     }
-    HIP_CHECK(hipMemcpy(d_ritz_coeffs_, h_ritz_scalar.data(), niter * sizeof(Scalar), hipMemcpyHostToDevice));
 
     Scalar one_sc = Traits::one(), zero_sc = Traits::zero();
     ROCBLAS_CHECK(Traits::gemv(
@@ -1126,7 +1177,11 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
 }
 
 // ============================================================================
-// SVD bond splitting (CPU LAPACK)
+// SVD bond splitting — on-device default path (rocsolver_gesvd_auto +
+// on-device truncation/scale). Replaces the prior host-LAPACK
+// svd_split_fallback that did D2H of theta + host gesvd + scale on CPU +
+// H2D of MPS — exactly the per-sweep PCIe traffic we eliminated for the
+// other -gpu-opt variants in 8dbd1b8.
 // ============================================================================
 
 template<typename Scalar>
@@ -1139,67 +1194,75 @@ void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char dir
     int full_k = std::min(m, n_svd);
     int k = std::min(full_k, chi_max_user_);
 
-    // CPU SVD path
-    HIP_CHECK(hipMemcpy(h_svd_A_.data(), d_theta, m * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpyAsync(d_svd_A_, d_theta, m * n_svd * sizeof(Scalar),
+                              hipMemcpyDeviceToDevice, stream_));
+    Traits::rocsolver_gesvd_auto(rocblas_h_,
+        rocblas_svect_singular, rocblas_svect_singular,
+        m, n_svd,
+        d_svd_A_, m,
+        d_svd_S_,
+        d_svd_U_, m,
+        d_svd_Vh_, full_k,
+        d_svd_E_,
+        d_svdj_residual_, d_svdj_n_sweeps_,
+        d_svd_info_);
 
-    int lwork = (int)h_svd_work_.size();
-    int info;
-    const char jobu = 'S', jobvt = 'S';
-    Traits::lapack_gesvd(&jobu, &jobvt, &m, &n_svd, h_svd_A_.data(), &m, h_svd_S_.data(),
-            h_svd_U_.data(), &m, h_svd_Vh_.data(), &full_k,
-            h_svd_work_.data(), &lwork,
-            h_svd_rwork_.empty() ? nullptr : h_svd_rwork_.data(), &info);
+    int new_k;
+    hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
+                       d_svd_S_, k, 1e-14, d_svd_info_);
+    HIP_CHECK(hipMemcpyAsync(&new_k, d_svd_info_, sizeof(int),
+                              hipMemcpyDeviceToHost, stream_));
+    HIP_CHECK(hipStreamSynchronize(stream_));
 
-    if (info != 0) {
-        throw std::runtime_error("svd_split_fallback: LAPACK gesvd failed, info=" + std::to_string(info));
-    }
-
-    Scalar* h_U_data = h_svd_U_.data();
-    RealType* h_S_data = h_svd_S_.data();
-    Scalar* h_Vh_data = h_svd_Vh_.data();
-
-    // Truncation
-    int new_k = k;
-    for (int i = 0; i < new_k; i++) {
-        if (h_S_data[i] < 1e-14) { new_k = i; break; }
-    }
-    if (new_k == 0) new_k = 1;
+    int threads = 256;
 
     if (direction == 'R') {
-        // U -> MPS[site] (left-canonical), S*Vh -> MPS[site+1]
+        // U → MPS[site] (left-canonical) — D2D when new_k==full_k, else extract_cols.
         allocate_mps_tensor(site, cL, new_k);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_U_data,
-                            m * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
+        if (new_k == full_k) {
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site], d_svd_U_,
+                                     (size_t)m * new_k * sizeof(Scalar),
+                                     hipMemcpyDeviceToDevice, stream_));
+        } else {
+            int total = m * new_k;
+            hipLaunchKernelGGL(extract_cols_kernel<Scalar>,
+                               dim3((total + threads - 1) / threads), dim3(threads), 0, stream_,
+                               d_svd_U_, m, d_mps_tensors_[site], m, m, new_k);
+        }
 
-        // Compute S*Vh on CPU: (new_k, n_svd)
-        for (int j = 0; j < n_svd; j++)
-            for (int i = 0; i < new_k; i++)
-                h_svd_tmp_[i + j * new_k] = Traits::scale_by_real(h_S_data[i], h_Vh_data[i + j * full_k]);
-
+        // S*Vh → MPS[site+1] (scale rows of Vh by S on device).
         allocate_mps_tensor(site + 1, new_k, cR);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_svd_tmp_.data(),
-                            new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
-
+        {
+            int total = new_k * n_svd;
+            hipLaunchKernelGGL((scale_rows_by_diag_kernel<Scalar, RealType>),
+                               dim3((total + threads - 1) / threads), dim3(threads), 0, stream_,
+                               d_svd_S_, d_svd_Vh_, full_k,
+                               d_mps_tensors_[site + 1], new_k, new_k, n_svd);
+        }
     } else {  // direction == 'L'
-        // U*S -> MPS[site], Vh -> MPS[site+1] (right-canonical)
-        for (int j = 0; j < new_k; j++)
-            for (int i = 0; i < m; i++)
-                h_svd_tmp_[i + j * m] = Traits::scale_by_real(h_S_data[j], h_U_data[i + j * m]);
-
+        // U*S → MPS[site] (scale columns of U by S on device).
         allocate_mps_tensor(site, cL, new_k);
-        HIP_CHECK(hipMemcpy(d_mps_tensors_[site], h_svd_tmp_.data(),
-                            m * new_k * sizeof(Scalar), hipMemcpyHostToDevice));
+        {
+            int total = m * new_k;
+            hipLaunchKernelGGL((scale_cols_by_diag_kernel<Scalar, RealType>),
+                               dim3((total + threads - 1) / threads), dim3(threads), 0, stream_,
+                               d_svd_S_, d_svd_U_, m,
+                               d_mps_tensors_[site], m, m, new_k);
+        }
 
+        // Vh → MPS[site+1] — extract first new_k rows from (full_k × n_svd) col-major Vh.
         allocate_mps_tensor(site + 1, new_k, cR);
         if (new_k == full_k) {
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_Vh_data,
-                                full_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+            HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], d_svd_Vh_,
+                                     (size_t)full_k * n_svd * sizeof(Scalar),
+                                     hipMemcpyDeviceToDevice, stream_));
         } else {
-            for (int j = 0; j < n_svd; j++)
-                for (int i = 0; i < new_k; i++)
-                    h_svd_tmp_[i + j * new_k] = h_Vh_data[i + j * full_k];
-            HIP_CHECK(hipMemcpy(d_mps_tensors_[site + 1], h_svd_tmp_.data(),
-                                new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice));
+            int total = new_k * n_svd;
+            hipLaunchKernelGGL(extract_cols_kernel<Scalar>,
+                               dim3((total + threads - 1) / threads), dim3(threads), 0, stream_,
+                               d_svd_Vh_, full_k,
+                               d_mps_tensors_[site + 1], new_k,
+                               new_k, n_svd);
         }
     }
 

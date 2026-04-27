@@ -118,13 +118,27 @@ private:
     Scalar** d_batch3_B_;
     Scalar** d_batch3_C_;
 
-    // SVD workspace
+    // SVD workspace (on-device — replaces the previous host-LAPACK svd_fallback)
     Scalar* d_svd_A_;
     Scalar* d_svd_U_;
     RealType* d_svd_S_;
     Scalar* d_svd_Vh_;
+    RealType* d_svd_E_;
+    int* d_svd_info_;
+    Scalar* d_svd_work_;
+    double* d_svdj_residual_ = nullptr;
+    rocblas_int* d_svdj_n_sweeps_ = nullptr;
 
-    // CPU SVD workspace (fallback)
+    // Tridiagonal eigensolve workspace (rocsolver_dsteqr — replaces the prior
+    // 2× host LAPACK dstev_ in lanczos_eigensolver, matching pdmrg-gpu-opt
+    // 8dbd1b8). Lanczos α/β remain host-resident in this variant; we H2D
+    // the small tridiagonal into d_steqr_D/E for the on-device solve.
+    double*      d_steqr_D_ = nullptr;
+    double*      d_steqr_E_ = nullptr;
+    double*      d_steqr_C_ = nullptr;
+    rocblas_int* d_steqr_info_ = nullptr;
+
+    // CPU SVD workspace (fallback — only used when use_cpu_svd_ opt-in flag set)
     std::vector<Scalar> h_svd_A_, h_svd_U_, h_svd_Vh_, h_svd_work_, h_svd_tmp_;
     std::vector<RealType> h_svd_S_;
     std::vector<RealType> h_svd_rwork_;
