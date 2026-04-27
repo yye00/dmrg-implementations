@@ -10,6 +10,7 @@
 #include <cstdio>
 #include "scalar_traits.h"
 #include "../../common/gpu_opts.h"
+#include "../../common/accurate_svd_gpu.h"
 
 /**
  * PDMRG-GPU-OPT: Stream-Parallel DMRG with Block-Davidson
@@ -208,6 +209,11 @@ private:
         Scalar* d_rsvd_U_small; // (r, r) U_small from on-device rocsolver_gesvd of B
         std::vector<Scalar> h_rsvd_B;       // legacy host buffer (kept for fallback paths if needed)
         std::vector<Scalar> h_rsvd_U_small; // legacy host buffer (kept for fallback paths if needed)
+
+        // GPU-native accurate SVD scratch for Stoudenmire boundary merges
+        // (algorithmic upgrade — opt previously used plain svd_split + clip,
+        // which lacks uniform relative accuracy on tiny singular values).
+        AsvdScratch<Scalar> asvd;
 
         // LANCZOS_GRAPH: per-segment fixed-address bounce buffer + cached
         // HIP-graph execs keyed by (two_site_flag, site, cL, cR). Only

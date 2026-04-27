@@ -449,6 +449,9 @@ void PDMRGMultiGPU<Scalar>::allocate_device_resources() {
             dev.h_rsvd_B.resize((size_t)rsvd_r * rsvd_n);
             dev.h_rsvd_U_small.resize((size_t)rsvd_r * rsvd_r);
 
+            // GPU-native accurate SVD scratch for boundary merges.
+            dev.asvd.allocate(chi_max_ * d_, d_ * chi_max_);
+
             // Query SVD workspace for the smaller matrix (rsvd_r x rsvd_n)
             {
                 int sm = rsvd_r, sn = rsvd_n;
@@ -551,6 +554,7 @@ void PDMRGMultiGPU<Scalar>::free_gpu_resources() {
         if (dev.d_rsvd_ipiv) hipFree(dev.d_rsvd_ipiv);
         if (dev.d_rsvd_U_full) hipFree(dev.d_rsvd_U_full);
         if (dev.d_rsvd_U_small) hipFree(dev.d_rsvd_U_small);
+        dev.asvd.release();  // GPU-native accurate SVD scratch
         if (dev.d_boundary_staging) hipFree(dev.d_boundary_staging);
 
         rocblas_destroy_handle(dev.handle);
@@ -2271,14 +2275,52 @@ double PDMRGMultiGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
         // Step 2: Optimize theta with eigensolver
         energy = lanczos_eigensolver(bsite, dev.d_theta, theta_size, di);
 
-        // Step 3: SVD split -> direction 'R': MPS[bsite]=U, MPS[bsite+1]=S*Vh
-        if (use_rsvd_)
-            rsvd_split(bsite, dev.d_theta, 'R', di);
-        else
-            svd_split(bsite, dev.d_theta, 'R', di);
+        // Step 3: Accurate SVD split (Stoudenmire recursive, GPU-native).
+        // Replaces plain svd_split / rsvd_split for the boundary case so the
+        // V = 1/S that gets uploaded next iteration uses singular values with
+        // uniform relative accuracy. Identical algorithmic posture to
+        // pdmrg-gpu / pdmrg-gpu-opt — full reconciliation.
+        int m = chi_L(bsite) * d_;
+        int n_svd = d_ * chi_R(bsite + 1);
+        int full_k = std::min(m, n_svd);
+        int k_max = std::min(full_k, chi_max_);
+
+        accurate_svd_gpu<Scalar>(
+            dev.handle, dev.stream,
+            m, n_svd,
+            dev.d_theta, m,
+            dev.d_svd_U, m,
+            dev.d_svd_S,
+            dev.d_svd_Vh, full_k,
+            dev.asvd);
+
+        HIP_CHECK(hipMemcpyAsync(dev.h_svd_S.data(), dev.d_svd_S,
+                                  full_k * sizeof(RealType),
+                                  hipMemcpyDeviceToHost, dev.stream));
+        HIP_CHECK(hipStreamSynchronize(dev.stream));
+
+        int new_k = k_max;
+        for (int i = 0; i < new_k; i++) {
+            if (dev.h_svd_S[i] < 1e-14) { new_k = i; break; }
+        }
+        if (new_k == 0) new_k = 1;
+
+        // MPS[bsite] = U[:, :new_k]
+        allocate_mps_tensor(bsite, chi_L(bsite), new_k, di);
+        HIP_CHECK(hipMemcpyAsync(get_mps(bsite, di), dev.d_svd_U,
+                    (size_t)m * new_k * sizeof(Scalar),
+                    hipMemcpyDeviceToDevice, dev.stream));
+
+        // MPS[bsite+1] = diag(S[:new_k]) @ Vh[:new_k, :]
+        allocate_mps_tensor(bsite + 1, new_k, chi_R(bsite + 1), di);
+        scale_rows_by_real(dev.d_svd_Vh, full_k, dev.d_svd_S,
+                           get_mps(bsite + 1, di), new_k, new_k, n_svd, dev.stream);
+
+        bond_dims_[bsite + 1] = new_k;
+        dev.heff_cached_site = -1;
 
         // Step 4: Update V = 1/clip(S, 1e-12)
-        int new_chi = bond_dims_[bsite + 1];
+        int new_chi = new_k;
         boundary_states_[b].chi = new_chi;
         boundary_states_[b].V.resize(new_chi);
 

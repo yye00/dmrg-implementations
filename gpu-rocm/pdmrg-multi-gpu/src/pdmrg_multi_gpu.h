@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include "scalar_traits.h"
+#include "../../common/accurate_svd_gpu.h"
 
 /**
  * Multi-GPU Stream-Parallel DMRG (PDMRG) across multiple MI300X devices
@@ -151,6 +152,10 @@ private:
         Scalar* d_rsvd_U_small; // (r, r) on-device U_small from rocsolver_gesvd of B
         std::vector<Scalar> h_rsvd_B;       // legacy host buffer (kept for fallback paths)
         std::vector<Scalar> h_rsvd_U_small; // legacy host buffer (kept for fallback paths)
+
+        // GPU-native accurate SVD scratch for Stoudenmire boundary merges
+        // (algorithmic upgrade — multi-gpu previously used plain svd_split).
+        AsvdScratch<Scalar> asvd;
 
         // Segment info
         int seg_first, seg_last;

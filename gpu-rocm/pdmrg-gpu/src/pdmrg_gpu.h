@@ -9,6 +9,7 @@
 #include <cstdint>
 #include "scalar_traits.h"
 #include "../../common/gpu_opts.h"
+#include "../../common/accurate_svd_gpu.h"
 
 /**
  * Stream-Parallel DMRG (PDMRG) on GPU
@@ -172,6 +173,12 @@ private:
         Scalar* d_rsvd_U_full;    // (m, r) for U = Q @ U_small on GPU
         // Pre-allocated Vh buffer for boundary merge R_env swap
         Scalar* d_Vh_canonical;       // size: chi_max*d × d*chi_max (same as theta_size_max)
+
+        // GPU-native accurate SVD (Stoudenmire recursive) for boundary merges.
+        // Replaces the host accurate_svd<Scalar>() roundtrip — see
+        // common/accurate_svd_gpu.h. One arena per stream, sized at
+        // allocate_stream_workspaces() for chi_max·d × d·chi_max worst case.
+        AsvdScratch<Scalar> asvd;
 
         // LANCZOS_GRAPH: per-segment fixed-address bounce buffer + cached
         // HIP-graph execs keyed by (two_site_flag, site, cL, cR). Only

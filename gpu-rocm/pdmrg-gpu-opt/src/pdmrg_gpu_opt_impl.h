@@ -364,6 +364,10 @@ void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
             ws.h_rsvd_U_small.resize((size_t)rsvd_r * rsvd_r);
         }
 
+        // GPU-native accurate SVD scratch (Stoudenmire boundary merges).
+        // Sized for the largest theta (cL*d × d*cR) the boundary path will see.
+        ws.asvd.allocate(chi_max_ * d_, d_ * chi_max_);
+
         // LANCZOS_GRAPH: per-segment bounce buffer for captured apply_heff graphs.
         ws.d_heff_input = nullptr;
         if (opts_.lanczos_graph) {
@@ -449,6 +453,7 @@ void PDMRGGPUOpt<Scalar>::free_gpu_resources() {
         if (ws.d_rsvd_ipiv) hipFree(ws.d_rsvd_ipiv);
         if (ws.d_rsvd_U_full) hipFree(ws.d_rsvd_U_full);
         if (ws.d_rsvd_U_small) hipFree(ws.d_rsvd_U_small);
+        ws.asvd.release();  // GPU-native accurate SVD scratch
 
         // LANCZOS_GRAPH: destroy cached graph execs and bounce buffer
         for (auto& kv : ws.apply_heff_graph_cache) {
@@ -3327,14 +3332,55 @@ double PDMRGGPUOpt<Scalar>::merge_and_optimize_boundaries(int parity) {
             energy = lanczos_eigensolver(bsite, ws.d_theta, theta_size, si);
         }
 
-        // Step 3: SVD split → direction 'R': MPS[bsite]=U, MPS[bsite+1]=S·Vh
-        if (use_rsvd_)
-            rsvd_split(bsite, ws.d_theta, 'R', si);
-        else
-            svd_split(bsite, ws.d_theta, 'R', si);
+        // Step 3: Accurate SVD split (Stoudenmire recursive, GPU-native).
+        // Replaces the previous svd_split / rsvd_split path here — those used
+        // plain rocsolver_gesvd + clip, which lacks uniform relative accuracy
+        // on tiny singular values and so amplifies error when V = 1/S is
+        // formed. accurate_svd_gpu mirrors pdmrg-gpu's algorithmic correctness
+        // and runs entirely on device.
+        int m = chi_L(bsite) * d_;
+        int n_svd = d_ * chi_R(bsite + 1);
+        int full_k = std::min(m, n_svd);
+        int k_max = std::min(full_k, chi_max_);
+
+        accurate_svd_gpu<Scalar>(
+            handles_[si], streams_[si],
+            m, n_svd,
+            ws.d_theta, m,
+            ws.d_svd_U, m,
+            ws.d_svd_S,
+            ws.d_svd_Vh, full_k,
+            ws.asvd);
+
+        // Read back full_k singular values for truncation rank + V on host.
+        // Single tiny D2H (full_k ≤ chi_max ~ 256), not a per-bond bulk transfer.
+        HIP_CHECK(hipMemcpyAsync(ws.h_svd_S.data(), ws.d_svd_S,
+                                  full_k * sizeof(RealType),
+                                  hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
+
+        int new_k = k_max;
+        for (int i = 0; i < new_k; i++) {
+            if (ws.h_svd_S[i] < 1e-14) { new_k = i; break; }
+        }
+        if (new_k == 0) new_k = 1;
+
+        // MPS[bsite] = U[:, :new_k]  (D2D, both on device)
+        allocate_mps_tensor(bsite, chi_L(bsite), new_k);
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[bsite], ws.d_svd_U,
+                    (size_t)m * new_k * sizeof(Scalar),
+                    hipMemcpyDeviceToDevice, streams_[si]));
+
+        // MPS[bsite+1] = diag(S[:new_k]) @ Vh[:new_k, :] (Vh + S on device)
+        allocate_mps_tensor(bsite + 1, new_k, chi_R(bsite + 1));
+        scale_rows_by_real(ws.d_svd_Vh, full_k, ws.d_svd_S,
+                           d_mps_tensors_[bsite + 1], new_k, new_k, n_svd, streams_[si]);
+
+        bond_dims_[bsite + 1] = new_k;
+        ws.heff_cached_site = -1;
 
         // Step 4: Update V = 1/clip(S, 1e-12) for next iteration
-        int new_chi = bond_dims_[bsite + 1];
+        int new_chi = new_k;
         boundary_states_[b].chi = new_chi;
         boundary_states_[b].V.resize(new_chi);
 

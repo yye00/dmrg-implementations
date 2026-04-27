@@ -13,7 +13,9 @@
 #include <mutex>
 #include <atomic>
 #include <stdexcept>
-#include "accurate_svd.h"
+// accurate_svd.h (host LAPACK Stoudenmire) is no longer included — replaced by
+// the GPU-native common/accurate_svd_gpu.h pulled in via pdmrg_gpu.h. The host
+// header is retained on disk for historical reference / cross-validation only.
 
 #define HIP_CHECK(call) \
     do { \
@@ -511,6 +513,11 @@ void PDMRGGPU<Scalar>::allocate_stream_workspaces() {
             // Max size = chi_max*d rows × d*chi_max cols = theta_size_max
             HIP_CHECK(hipMalloc(&ws.d_Vh_canonical, theta_size_max_ * sizeof(Scalar)));
 
+            // GPU-native accurate SVD scratch for boundary merges. Sized for
+            // the largest theta (cL*d × d*cR) the boundary path will see.
+            // Replaces the host accurate_svd D2H/H2D roundtrip.
+            ws.asvd.allocate(chi_max_ * d_, d_ * chi_max_);
+
             // LANCZOS_GRAPH: per-segment bounce buffer for captured apply_heff graphs.
             ws.d_heff_input = nullptr;
             if (opts_.lanczos_graph) {
@@ -611,6 +618,7 @@ void PDMRGGPU<Scalar>::free_gpu_resources() {
         if (ws.d_rsvd_U_small) hipFree(ws.d_rsvd_U_small);
         if (ws.d_rsvd_U_full) hipFree(ws.d_rsvd_U_full);
         if (ws.d_Vh_canonical) hipFree(ws.d_Vh_canonical);
+        ws.asvd.release();  // GPU-native accurate SVD scratch
 
         // LANCZOS_GRAPH: destroy cached graph execs and bounce buffer
         for (auto& kv : ws.apply_heff_graph_cache) {
@@ -2454,27 +2462,36 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
         // Step 2: Optimize θ with eigensolver
         energies[idx] = lanczos_eigensolver(bsite, ws.d_theta, theta_size, si);
 
-        // Step 3: Accurate SVD split at boundary (Stoudenmire Appendix)
-        // Standard SVD has poor relative accuracy for small singular values.
-        // Since V = 1/S amplifies errors, we need the recursive accurate SVD
-        // that achieves uniform relative accuracy for ALL singular values.
+        // Step 3: Accurate SVD split at boundary (Stoudenmire Appendix) —
+        // GPU-native. Standard SVD has poor relative accuracy for small
+        // singular values; since V = 1/S amplifies errors, we use the
+        // recursive accurate SVD that achieves uniform relative accuracy.
+        // accurate_svd_gpu keeps U/S/Vh on device throughout — eliminates
+        // the per-boundary D2H of the full theta + H2D of U/Vh that the
+        // host accurate_svd<Scalar>() previously incurred every sweep.
         int m = cL * d_;
         int n_svd = d_ * cR;
         int full_k = std::min(m, n_svd);
         int k = std::min(full_k, chi_max_);
 
-        // Copy theta from GPU to host
-        HIP_CHECK(hipMemcpyAsync(ws.h_svd_A.data(), ws.d_theta,
-                                  (size_t)m * n_svd * sizeof(Scalar),
+        accurate_svd_gpu<Scalar>(
+            handles_[si], streams_[si],
+            m, n_svd,
+            ws.d_theta, m,
+            ws.d_svd_U, m,
+            ws.d_svd_S,
+            ws.d_svd_Vh, full_k,
+            ws.asvd);
+
+        // Read back the (small) singular values: needed both for truncation
+        // rank decision and for V = 1/clip(S, 1e-12) which lives on host
+        // (uploaded by form_theta_with_V on the next sweep). Size = full_k
+        // doubles, ≤ chi_max ~ 256 — single tiny D2H, not a per-bond bulk
+        // transfer.
+        HIP_CHECK(hipMemcpyAsync(ws.h_svd_S.data(), ws.d_svd_S,
+                                  full_k * sizeof(RealType),
                                   hipMemcpyDeviceToHost, streams_[si]));
         HIP_CHECK(hipStreamSynchronize(streams_[si]));
-
-        // Run accurate SVD on CPU (recursive refinement for small singular values)
-        accurate_svd<Scalar>(m, n_svd,
-                             ws.h_svd_A.data(), m,
-                             ws.h_svd_U.data(), m,
-                             ws.h_svd_S.data(),
-                             ws.h_svd_Vh.data(), full_k);
 
         // Truncate to chi_max, dropping near-zero singular values
         int new_k = k;
@@ -2483,40 +2500,24 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
         }
         if (new_k == 0) new_k = 1;
 
-        // Upload S to device (needed for scale_rows_by_real)
-        HIP_CHECK(hipMemcpyAsync(ws.d_svd_S, ws.h_svd_S.data(),
-                                  new_k * sizeof(RealType),
-                                  hipMemcpyHostToDevice, streams_[si]));
-
-        // MPS[bsite] = U[:, :new_k] (left-canonical)
+        // MPS[bsite] = U[:, :new_k] (left-canonical) — D2D copy on stream.
         allocate_mps_tensor(bsite, cL, new_k);
-        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[bsite], ws.h_svd_U.data(),
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[bsite], ws.d_svd_U,
                     (size_t)m * new_k * sizeof(Scalar),
-                    hipMemcpyHostToDevice, streams_[si]));
+                    hipMemcpyDeviceToDevice, streams_[si]));
 
-        // MPS[bsite+1] = diag(S) @ Vh[:new_k, :] (absorbs singular values)
-        if (new_k == full_k) {
-            HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, ws.h_svd_Vh.data(),
-                        (size_t)full_k * n_svd * sizeof(Scalar),
-                        hipMemcpyHostToDevice, streams_[si]));
-        } else {
-            // Pack contiguous new_k rows from leading-dim full_k layout
-            for (int j = 0; j < n_svd; j++)
-                for (int i = 0; i < new_k; i++)
-                    ws.h_svd_tmp[i + j * new_k] = ws.h_svd_Vh[i + j * full_k];
-            HIP_CHECK(hipMemcpyAsync(ws.d_svd_work, ws.h_svd_tmp.data(),
-                        (size_t)new_k * n_svd * sizeof(Scalar),
-                        hipMemcpyHostToDevice, streams_[si]));
-        }
+        // MPS[bsite+1] = diag(S[:new_k]) @ Vh[:new_k, :] — both on device.
+        // scale_rows_by_real handles the row-stride shift from full_k to new_k.
         allocate_mps_tensor(bsite + 1, new_k, cR);
-        int vh_ld = (new_k == full_k) ? full_k : new_k;
-        scale_rows_by_real(ws.d_svd_work, vh_ld, ws.d_svd_S,
+        scale_rows_by_real(ws.d_svd_Vh, full_k, ws.d_svd_S,
                            d_mps_tensors_[bsite + 1], new_k, new_k, n_svd, streams_[si]);
 
         bond_dims_[bsite + 1] = new_k;
         ws.heff_cached_site = -1;
 
-        // Step 4: Update V = 1/clip(S, 1e-12) for next iteration
+        // Step 4: Update V = 1/clip(S, 1e-12) for next iteration. V lives on
+        // host (small vector, uploaded by form_theta_with_V); the singular
+        // values were already read back above for the truncation decision.
         boundary_states_[b].chi = new_k;
         boundary_states_[b].V.resize(new_k);
 
