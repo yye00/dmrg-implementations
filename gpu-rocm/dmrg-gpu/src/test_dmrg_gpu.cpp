@@ -254,7 +254,7 @@ int test_heisenberg(int L, int chi_max, int n_sweeps, bool quiet) {
         {8, -3.374932598688},
     };
 
-    DMRGGPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRGGPU<double> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 
@@ -296,7 +296,7 @@ int test_tfim(int L, int chi_max, int n_sweeps, double J, double h_field, bool q
         printf("======================================\n\n");
     }
 
-    DMRGGPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRGGPU<double> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 
@@ -341,7 +341,7 @@ int test_josephson(int L, int chi_max, int n_sweeps,
         };
     }
 
-    DMRGGPU<Complex> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRGGPU<Complex> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 
@@ -392,7 +392,7 @@ int test_j1j2(int L, int chi_max, int n_sweeps, double J1, double J2, bool quiet
         };
     }
 
-    DMRGGPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRGGPU<double> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 
@@ -443,7 +443,7 @@ int test_ladder(int L_rungs, int chi_max, int n_sweeps,
         };
     }
 
-    DMRGGPU<double> dmrg(L_rungs, d, chi_max, D_mpo, 1e-12);
+    DMRGGPU<double> dmrg(L_rungs, d, chi_max, D_mpo, 1e-10);
     dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 
@@ -491,7 +491,7 @@ int test_j1j2j3(int L, int chi_max, int n_sweeps,
         {std::make_tuple(8, 1.0, 0.5, 0.25), -3.0690408638},
     };
 
-    DMRGGPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRGGPU<double> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 

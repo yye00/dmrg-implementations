@@ -1562,13 +1562,14 @@ double DMRGGPU<Scalar>::sweep_right_to_left() {
 
 template<typename Scalar>
 double DMRGGPU<Scalar>::run(int n_sweeps) {
-    // Timer starts BEFORE env build — includes env build in total (timer_scope=include_env_build)
-    auto t_start = std::chrono::high_resolution_clock::now();
-
+    // Sweep-only timer: starts AFTER MPS+MPO+env build, stops at convergence.
+    // Env build is reported separately (env_build_sec) but is NOT included
+    // in "Total wall time", which is the headline metric for the campaign.
+    auto t_env_start = std::chrono::high_resolution_clock::now();
     build_initial_environments();
 
-    auto t_envs = std::chrono::high_resolution_clock::now();
-    double env_time = std::chrono::duration<double>(t_envs - t_start).count();
+    auto t_start = std::chrono::high_resolution_clock::now();
+    double env_time = std::chrono::duration<double>(t_start - t_env_start).count();
     printf("  Environment build: %.3f s\n", env_time);
 
     double energy_prev = 0.0;
@@ -1586,7 +1587,7 @@ double DMRGGPU<Scalar>::run(int n_sweeps) {
     double total_time = std::chrono::duration<double>(t_end - t_start).count();
     printf("Final energy: %.12f\n", energy_);
     printf("Total wall time: %.3f s\n", total_time);
-    printf("  env_build_sec: %.3f  timer_scope: include_env_build\n", env_time);
+    printf("  env_build_sec: %.3f  timer_scope: sweep_only\n", env_time);
     report_timers();
 
     return energy_;

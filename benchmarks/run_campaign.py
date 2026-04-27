@@ -84,6 +84,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Output parsers — same regexes as bench_dmrg_gpu_ablate.py for consistency.
 ENERGY_RE = re.compile(r"Final energy:\s+([-\d.eE+]+)")
 WALL_RE   = re.compile(r"Total wall time:\s+([\d.]+)\s*s")
+# As of dd5fd80+follow-up: "Total wall time" is sweep-only; env build is
+# reported on a separate diagnostic line.
+ENV_BUILD_RE  = re.compile(r"env_build_sec:\s+([\d.]+)\s+timer_scope:\s+(\w+)")
 
 
 # ─── Config validation ────────────────────────────────────────────────────────
@@ -307,14 +310,21 @@ def run_one_rep(binary: Path, model: str, config: dict, extra_args: list,
     wall = time.time() - t0
     energy = None
     reported_wall = None
+    env_build_sec = None
+    timer_scope = None
     for line in proc.stdout.splitlines() + proc.stderr.splitlines():
         if m := ENERGY_RE.search(line):
             energy = float(m.group(1))
         if m := WALL_RE.search(line):
             reported_wall = float(m.group(1))
+        if m := ENV_BUILD_RE.search(line):
+            env_build_sec = float(m.group(1))
+            timer_scope = m.group(2)
     rec = {
         "wall_s": reported_wall if reported_wall is not None else wall,
         "wallclock_s": wall,
+        "env_build_sec": env_build_sec,
+        "timer_scope": timer_scope,
         "energy": energy,
         "rc": proc.returncode,
         "timeout": False,

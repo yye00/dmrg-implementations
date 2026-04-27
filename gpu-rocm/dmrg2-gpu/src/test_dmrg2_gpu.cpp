@@ -210,7 +210,7 @@ int test_heisenberg(int L, int chi_max, int n_sweeps, bool quiet) {
         {8, -3.374932598688},
     };
 
-    DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.set_quiet(quiet);
     dmrg.initialize_mps_neel();
 
@@ -253,7 +253,7 @@ int test_tfim(int L, int chi_max, int n_sweeps,
         printf("======================================\n\n");
     }
 
-    DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 
@@ -297,7 +297,7 @@ int test_josephson(int L, int chi_max, int n_sweeps,
         };
     }
 
-    DMRG2GPU<Complex> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRG2GPU<Complex> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 
@@ -344,7 +344,7 @@ int test_j1j2(int L, int chi_max, int n_sweeps, double J1, double J2, bool quiet
         exact_energies = { {4, -1.5}, {6, -2.25}, {8, -3.0} };
     }
 
-    DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 
@@ -391,7 +391,7 @@ int test_j1j2j3(int L, int chi_max, int n_sweeps,
         {std::make_tuple(8, 1.0, 0.5, 0.25), -3.0690408638},
     };
 
-    DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRG2GPU<double> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 
@@ -444,7 +444,7 @@ int test_ladder(int L_rungs, int chi_max, int n_sweeps,
         };
     }
 
-    DMRG2GPU<double> dmrg(L_rungs, d, chi_max, D_mpo, 1e-12);
+    DMRG2GPU<double> dmrg(L_rungs, d, chi_max, D_mpo, 1e-10);
     dmrg.set_quiet(quiet);
     dmrg.initialize_mps_random();
 

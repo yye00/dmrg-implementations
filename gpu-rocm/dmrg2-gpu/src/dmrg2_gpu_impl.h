@@ -1281,7 +1281,11 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
     ));
 
     ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
-    hipLaunchKernelGGL(invert_nrm_kernel<RealType>, dim3(1), dim3(1), 0, 0,
+    // Launch on stream_ (not default stream 0) so the immediately-following
+    // scal_real on rocblas_h_ (which is bound to stream_) sees d_inv_nrm_
+    // written. Cross-stream order with stream 0 is not guaranteed and could
+    // cause a silent data race producing corrupted Ritz vectors.
+    hipLaunchKernelGGL(invert_nrm_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
                        d_nrm2_result_, d_inv_nrm_);
     ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
     ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
@@ -1505,13 +1509,14 @@ double DMRG2GPU<Scalar>::sweep_right_to_left() {
 
 template<typename Scalar>
 double DMRG2GPU<Scalar>::run(int n_sweeps) {
-    // Timer starts BEFORE env build — includes env build in total (timer_scope=include_env_build)
-    auto t_start = std::chrono::high_resolution_clock::now();
-
+    // Sweep-only timer: starts AFTER MPS+MPO+env build, stops at convergence.
+    // Env build is reported separately (env_build_sec) but is NOT included
+    // in "Total wall time", which is the headline metric for the campaign.
+    auto t_env_start = std::chrono::high_resolution_clock::now();
     build_initial_environments();
 
-    auto t_envs = std::chrono::high_resolution_clock::now();
-    double env_time = std::chrono::duration<double>(t_envs - t_start).count();
+    auto t_start = std::chrono::high_resolution_clock::now();
+    double env_time = std::chrono::duration<double>(t_start - t_env_start).count();
     printf("  Environment build: %.3f s\n", env_time);
 
     double energy_prev = 0.0;
@@ -1529,7 +1534,7 @@ double DMRG2GPU<Scalar>::run(int n_sweeps) {
     double total_time = std::chrono::duration<double>(t_end - t_start).count();
     printf("Final energy: %.12f\n", energy_);
     printf("Total wall time: %.3f s\n", total_time);
-    printf("  env_build_sec: %.3f  timer_scope: include_env_build\n", env_time);
+    printf("  env_build_sec: %.3f  timer_scope: sweep_only\n", env_time);
     report_timers();
 
     return energy_;

@@ -1,0 +1,163 @@
+# Pre-G1 baseline review — follow-up items
+
+Three reviewer agents (`feature-dev:code-reviewer`) audited the baseline GPU
+variants on 2026-04-27 against an N=10 campaign launch checklist. The
+G1-blocking findings ("Tier A") were fixed in commit `<this-commit>`. This
+doc captures the remaining "Tier B" items: real but not blocking the G1
+campaign (either because the affected code path isn't exercised, or because
+the variant in question isn't in the campaign).
+
+Each item is paired with what would trigger it from "deferred" to "must
+fix" so future operators know when to revisit.
+
+---
+
+## B1. `pdmrg-gpu-base` CLAUDE.md violations
+
+**Files**:
+- `gpu-rocm/pdmrg-gpu-base/src/pdmrg_gpu_base_impl.h:1322-1323` — polish phase calls `sweep_LR_full()` / `sweep_RL_full()` (two-site), violating CLAUDE.md rule "Polish sweeps MUST be single-site."
+- `gpu-rocm/pdmrg-gpu-base/src/test_pdmrg_gpu_base.cpp:18` — comment indicates hardcoded `n_warmup=3`, violating "n_warmup ≤ 2".
+- The `-base` binary has no `--warmup` / `--polish` CLI flags, so the campaign config cannot override.
+
+**Why deferred**: `pdmrg-gpu-base` is **not in the G1 campaign config**
+(`benchmarks/campaigns/g1_baseline_rebench.json` only lists
+`dmrg-gpu`, `dmrg2-gpu`, `pdmrg-gpu`). The `-base` snapshots are explicitly
+excluded from `gpu-rocm/build_all.sh` and have no entries in the bench
+harness's `IMPL_BINARIES` map.
+
+**Trigger to fix**: any decision to rebench `pdmrg-gpu-base` for
+direct comparison with `pdmrg-gpu`. The base would need either
+(a) `--warmup` / `--polish` CLI flags added and the hardcoded values made
+overridable, or (b) the hardcoded values changed to comply
+(`n_warmup=1`, single-site polish), with the latter making the "naive
+baseline" interpretation slightly misleading.
+
+---
+
+## B2. RSVD per-bond heap allocation in `dmrg2-gpu` and `pdmrg-gpu`
+
+**Files**:
+- `gpu-rocm/dmrg2-gpu/src/dmrg2_gpu_impl.h:1339` — inside `svd_split()`,
+  `std::vector<Scalar> h_omega(n_svd * r_use)` heap-allocated and filled
+  with random values per bond per sweep when `--rsvd` is on. ~1 MB
+  allocation per call at $\chi=256$.
+- `gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:1727` — same pattern in
+  `rsvd_split()`. ~38K scalar allocations per bond at $\chi=128$ in the
+  ablation envelope.
+
+**Why deferred**: G1 does **not** pass `--rsvd` (the campaign config has
+no `--rsvd` in `extra_args_per_variant`). The default RSVD-off code path
+is unaffected.
+
+**Trigger to fix**: any future RSVD-on benchmark campaign (e.g., a
+re-run of the §6.6 ablation table at $N{=}10$ statistical level). Fix:
+move `h_omega` to a pre-allocated buffer in `StreamWorkspace` (alongside
+the existing `h_rsvd_B` allocation pattern) so the inner loop only does
+the random fill, not the malloc.
+
+---
+
+## B3. `--nmax` silently accepted but ignored in `-base` snapshots
+
+**Files**:
+- `gpu-rocm/dmrg-gpu-base/src/test_dmrg_gpu_base.cpp:312`
+- `gpu-rocm/dmrg2-gpu-base/src/test_dmrg2_gpu_base.cpp:311`
+
+The bench harness passes `--nmax 2` for Josephson runs; the `-base`
+binaries accept the flag and silently discard it, always using
+hardcoded `n_max=2`.
+
+**Why deferred**: currently safe because
+`benchmarks/bench_dmrg_gpu_ablate.py:65` and the campaign config both
+use `nmax=2`, which matches the hardcoded value. Numerically identical
+results today.
+
+**Trigger to fix**: any change to the campaign's Josephson `nmax` (e.g.,
+ablation across local-dimension sensitivity, or any model that wants
+`nmax > 2`). Fix: parse `--nmax N` and pass to the constructor instead
+of discarding. ~5 lines per file.
+
+---
+
+## B4. `opts_.print(stderr)` and `[D_PAD]` print on every binary
+invocation
+
+**Files**:
+- `gpu-rocm/dmrg-gpu/src/dmrg_gpu_impl.h:193, 198`
+- `gpu-rocm/dmrg2-gpu/src/dmrg2_gpu_impl.h:~similar` (constructor)
+- `gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:262-268`
+
+Each constructor unconditionally writes 6+ lines to stderr (one per
+optimisation flag, plus a `[D_PAD]` line if D_PAD is on). Fires once per
+binary invocation including the warmup sub-runs, but **not inside the
+sweep loop**, so does not affect timing.
+
+**Why deferred**: cosmetic only. Stderr noise but not perf-relevant.
+
+**Trigger to fix**: if the bench harness ever has trouble parsing stderr
+(e.g., a future logging refactor), or if the noise in benchmark logs
+becomes a real problem. Fix: guard `opts_.print(stderr)` and the D_PAD
+print behind `if (!opts_.quiet)` (would need adding a quiet field to
+`GpuOpts`, or wiring through a constructor argument).
+
+---
+
+## B5. Per-rep `printf` blocks in `pdmrg-gpu::run()`
+
+**File**: `gpu-rocm/pdmrg-gpu/src/pdmrg_gpu_impl.h:2624, 2639, 2727,
+2755, 2759-2765`.
+
+Multiple `printf` lines fire from `run()` per invocation: env build,
+phase summaries (warmup / parallel / polish), final energy, total wall
+time, env_build_sec/timer_scope. None inside the sweep loop. At N=10
+reps per config, this is 10 blocks of stdout per cell.
+
+**Why deferred**: not in hot loop, no GPU performance impact. The
+campaign runner's stdout capture handles the volume fine.
+
+**Trigger to fix**: only if log noise becomes a real problem. Could be
+guarded by a `--quiet` mode that suppresses everything except `Final
+energy` and `Total wall time` lines (which the runner parses).
+
+---
+
+## B6. CLI flag drift between `-gpu` and `-gpu-base`
+
+**Files**: all three `-base/src/test_*.cpp` files lack model-parameter
+flags (`--hfield`, `--ej/ec/phi`, `--j1/j2/j3`, `--jleg/jrung`,
+`--j1j2`, `--j1j2j3`, `--ladder`) and `--quiet`.
+
+**Why deferred**: G1 only runs `-gpu` baselines, not `-base` snapshots.
+The `-base` snapshots are intentional pre-optimisation reference code;
+their CLI surface frozen at the time of the snapshot is acceptable.
+
+**Trigger to fix**: any decision to rebench `-base` against `-gpu` on
+non-default model parameters (currently no published claim depends on
+this).
+
+---
+
+## What was fixed (Tier A, this commit)
+
+For reference; see commit message for full details.
+
+- **A1**: Timing scope changed from `include_env_build` to `sweep_only`
+  in all 3 baselines (`dmrg-gpu`, `dmrg2-gpu`, `pdmrg-gpu`). `t_start`
+  now captured AFTER `build_initial_environments()`. "Total wall time"
+  is now sweep-only; "Environment build: X s" remains as a separate
+  diagnostic line. Per-phase deltas in pdmrg-gpu (warmup/parallel/polish)
+  naturally become sweep-only since they reference `t_start`.
+- **A2**: `invert_nrm_kernel` in `dmrg2-gpu/src/dmrg2_gpu_impl.h:1284`
+  launched on `stream_` instead of default stream `0`. Eliminates a
+  potential cross-stream data race that could silently corrupt Ritz
+  vectors.
+- **A3**: Hardcoded constructor `tol` values in
+  `dmrg-gpu/src/test_dmrg_gpu.cpp` and
+  `dmrg2-gpu/src/test_dmrg2_gpu.cpp` changed from `1e-12` to `1e-10` to
+  match the user-stated convergence target and the constructor default.
+  `pdmrg-gpu` was already at `1e-10`. Float-equality thresholds
+  (`if (std::abs(J1 - 1.0) < 1e-12)`) intentionally NOT changed — those
+  are unrelated parameter checks.
+
+No CLI flag added for `--tol` — the constructor signature accepts `tol`
+already, and a flag can be added later if runtime tuning is needed.
