@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "campaign": {
+    "name": "g1_baseline_rebench",
+    "tag_template": "paper-rebench-{date}",
+    "description": "Path B G1: N=10 baseline GPU rebench of dmrg-gpu, dmrg2-gpu, pdmrg-gpu on heisenberg + josephson at the published challenge grid. Per docs/PATH_B_FINISHING_PLAN.md. The -opt variants are explicitly excluded (paper scope tightened to baselines only after the 2026-04-26 corrective audit; see §6.4 of paper/main.tex for the analytical-bound treatment of the -opt families)."
+  },
+  "build": {
+    "rebuild": false,
+    "variants": ["dmrg-gpu", "dmrg2-gpu", "pdmrg-gpu"],
+    "rocm_path": "/opt/rocm",
+    "build_script": "build_mi300x.sh",
+    "binary_template": "gpu-rocm/{variant}/build/{variant_underscored}"
+  },
+  "clocks": {
+    "pin": true,
+    "perf_level": "high",
+    "sclk": 7
+  },
+  "run": {
+    "models": ["heisenberg", "josephson"],
+    "reps": 10,
+    "configs": {
+      "heisenberg": [
+        {"L": 32, "chi": 64,  "sweeps": 30, "nmax": 2},
+        {"L": 32, "chi": 128, "sweeps": 25, "nmax": 2},
+        {"L": 32, "chi": 256, "sweeps": 20, "nmax": 2},
+        {"L": 64, "chi": 128, "sweeps": 25, "nmax": 2},
+        {"L": 100, "chi": 128, "sweeps": 20, "nmax": 2}
+      ],
+      "josephson": [
+        {"L": 32, "chi": 64,  "sweeps": 30, "nmax": 2},
+        {"L": 32, "chi": 128, "sweeps": 25, "nmax": 2},
+        {"L": 32, "chi": 256, "sweeps": 15, "nmax": 2}
+      ]
+    },
+    "extra_args_per_variant": {
+      "pdmrg-gpu": ["--warmup", "1", "--polish", "0", "--segments", "2"]
+    },
+    "timeout_sec": 1800
+  },
+  "correctness": {
+    "enabled": true,
+    "tol": 5e-10,
+    "config": {"L": 8, "chi": 32, "sweeps": 10, "nmax": 2}
+  },
+  "output": {
+    "dir": "benchmarks/data/campaigns/{tag}/",
+    "include_provenance": true,
+    "manifest": true
+  }
+}
