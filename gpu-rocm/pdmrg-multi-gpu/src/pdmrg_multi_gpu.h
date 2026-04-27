@@ -148,8 +148,9 @@ private:
         Scalar* d_rsvd_B;
         Scalar* d_rsvd_ipiv;
         Scalar* d_rsvd_U_full;
-        std::vector<Scalar> h_rsvd_B;
-        std::vector<Scalar> h_rsvd_U_small;
+        Scalar* d_rsvd_U_small; // (r, r) on-device U_small from rocsolver_gesvd of B
+        std::vector<Scalar> h_rsvd_B;       // legacy host buffer (kept for fallback paths)
+        std::vector<Scalar> h_rsvd_U_small; // legacy host buffer (kept for fallback paths)
 
         // Segment info
         int seg_first, seg_last;

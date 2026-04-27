@@ -438,12 +438,14 @@ void PDMRGMultiGPU<Scalar>::allocate_device_resources() {
             dev.d_rsvd_B = nullptr;
             dev.d_rsvd_ipiv = nullptr;
             dev.d_rsvd_U_full = nullptr;
+            dev.d_rsvd_U_small = nullptr;
             HIP_CHECK(hipMalloc(&dev.d_rsvd_omega, (size_t)rsvd_n * rsvd_r * sizeof(Scalar)));
             HIP_CHECK(hipMalloc(&dev.d_rsvd_Y,    (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
             HIP_CHECK(hipMalloc(&dev.d_rsvd_Q,    (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
             HIP_CHECK(hipMalloc(&dev.d_rsvd_B,    (size_t)rsvd_r * rsvd_n * sizeof(Scalar)));
             HIP_CHECK(hipMalloc(&dev.d_rsvd_ipiv, (size_t)rsvd_r * sizeof(Scalar)));
             HIP_CHECK(hipMalloc(&dev.d_rsvd_U_full, (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
+            HIP_CHECK(hipMalloc(&dev.d_rsvd_U_small, (size_t)rsvd_r * rsvd_r * sizeof(Scalar)));
             dev.h_rsvd_B.resize((size_t)rsvd_r * rsvd_n);
             dev.h_rsvd_U_small.resize((size_t)rsvd_r * rsvd_r);
 
@@ -548,6 +550,7 @@ void PDMRGMultiGPU<Scalar>::free_gpu_resources() {
         if (dev.d_rsvd_B) hipFree(dev.d_rsvd_B);
         if (dev.d_rsvd_ipiv) hipFree(dev.d_rsvd_ipiv);
         if (dev.d_rsvd_U_full) hipFree(dev.d_rsvd_U_full);
+        if (dev.d_rsvd_U_small) hipFree(dev.d_rsvd_U_small);
         if (dev.d_boundary_staging) hipFree(dev.d_boundary_staging);
 
         rocblas_destroy_handle(dev.handle);
@@ -1516,73 +1519,57 @@ void PDMRGMultiGPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction
             d_theta, m,
             &zero_val,
             dev.d_rsvd_B, r));
-        HIP_CHECK(hipStreamSynchronize(dev.stream));
     }
 
-    // Step 5: SVD of B on CPU
-    HIP_CHECK(hipMemcpy(dev.h_rsvd_B.data(), dev.d_rsvd_B, r * n_svd * sizeof(Scalar), hipMemcpyDeviceToHost));
-
+    // Step 5: SVD of B on DEVICE — small (r × n_svd) matrix, but keeping it
+    // on device avoids a per-bond D2H + LAPACK + H2D roundtrip. Matches the
+    // dmrg-gpu / dmrg2-gpu / pdmrg-gpu / pdmrg-gpu-opt pattern; the previous
+    // host-LAPACK path was a pdmrg-multi-gpu-only inconsistency.
     int small_k = std::min(r, n_svd);
-    {
-        int lwork = (int)dev.h_svd_work.size();
-        int info;
-        const char jobu = 'S', jobvt = 'S';
-        Traits::lapack_gesvd(&jobu, &jobvt, &r, &n_svd, dev.h_rsvd_B.data(), &r, dev.h_svd_S.data(),
-                dev.h_rsvd_U_small.data(), &r, dev.h_svd_Vh.data(), &small_k,
-                dev.h_svd_work.data(), &lwork,
-                dev.h_svd_rwork.empty() ? nullptr : dev.h_svd_rwork.data(), &info);
-        if (info != 0) {
-            svd_split(site, d_theta, direction, di);
-            return;
-        }
-    }
+    Traits::rocsolver_gesvd(dev.handle,
+        rocblas_svect_singular, rocblas_svect_singular,
+        r, n_svd,
+        dev.d_rsvd_B, r,
+        dev.d_svd_S,
+        dev.d_rsvd_U_small, r,
+        dev.d_svd_Vh, small_k,
+        dev.d_svd_E,
+        rocblas_outofplace,
+        dev.d_svd_info);
 
-    // Step 6: U_full = Q @ U_small
+    // Step 6: U_full = Q @ U_small on device (single GEMM, all device-resident).
     {
-        HIP_CHECK(hipMemcpyAsync(dev.d_rsvd_B, dev.h_rsvd_U_small.data(),
-                            (size_t)r * small_k * sizeof(Scalar), hipMemcpyHostToDevice, dev.stream));
         Scalar one = Traits::one(), zero_val = Traits::zero();
         ROCBLAS_CHECK(Traits::gemm(dev.handle,
             rocblas_operation_none, rocblas_operation_none,
             m, small_k, r, &one,
             dev.d_rsvd_Q, m,
-            dev.d_rsvd_B, r,
+            dev.d_rsvd_U_small, r,
             &zero_val,
             dev.d_rsvd_U_full, m));
-        HIP_CHECK(hipStreamSynchronize(dev.stream));
     }
 
-    RealType* h_S_data = dev.h_svd_S.data();
-    Scalar* h_Vh_data = dev.h_svd_Vh.data();
-
-    // Truncation
+    // Truncation: read back the small_k singular values for the same rank
+    // decision the standard svd_split does. S, Vh, U_small all stay on device.
+    HIP_CHECK(hipMemcpyAsync(dev.h_svd_S.data(), dev.d_svd_S,
+                              small_k * sizeof(RealType),
+                              hipMemcpyDeviceToHost, dev.stream));
+    HIP_CHECK(hipStreamSynchronize(dev.stream));
     int new_k = k;
     for (int i = 0; i < new_k; i++) {
-        if (h_S_data[i] < 1e-14) { new_k = i; break; }
+        if (dev.h_svd_S[i] < 1e-14) { new_k = i; break; }
     }
     if (new_k == 0) new_k = 1;
-
-    HIP_CHECK(hipMemcpyAsync(dev.d_svd_S, h_S_data, new_k * sizeof(RealType),
-                              hipMemcpyHostToDevice, dev.stream));
 
     if (direction == 'R') {
         allocate_mps_tensor(site, cL, new_k, di);
         HIP_CHECK(hipMemcpyAsync(get_mps(site, di), dev.d_rsvd_U_full,
-                            (size_t)m * new_k * sizeof(Scalar), hipMemcpyDeviceToDevice, dev.stream));
+                            (size_t)m * new_k * sizeof(Scalar),
+                            hipMemcpyDeviceToDevice, dev.stream));
 
-        if (new_k == small_k) {
-            HIP_CHECK(hipMemcpyAsync(dev.d_svd_work, h_Vh_data,
-                        (size_t)small_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, dev.stream));
-        } else {
-            for (int j = 0; j < n_svd; j++)
-                for (int i = 0; i < new_k; i++)
-                    dev.h_svd_tmp[i + j * new_k] = h_Vh_data[i + j * small_k];
-            HIP_CHECK(hipMemcpyAsync(dev.d_svd_work, dev.h_svd_tmp.data(),
-                        (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, dev.stream));
-        }
+        // MPS[site+1] = diag(S[:new_k]) @ Vh[:new_k, :] — Vh on device, scale rows on GPU
         allocate_mps_tensor(site + 1, new_k, cR, di);
-        int vh_ld = (new_k == small_k) ? small_k : new_k;
-        scale_rows_by_real(dev.d_svd_work, vh_ld, dev.d_svd_S,
+        scale_rows_by_real(dev.d_svd_Vh, small_k, dev.d_svd_S,
                            get_mps(site + 1, di), new_k, new_k, n_svd, dev.stream);
 
     } else {
@@ -1592,14 +1579,15 @@ void PDMRGMultiGPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction
 
         allocate_mps_tensor(site + 1, new_k, cR, di);
         if (new_k == small_k) {
-            HIP_CHECK(hipMemcpyAsync(get_mps(site + 1, di), h_Vh_data,
-                                (size_t)small_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, dev.stream));
+            HIP_CHECK(hipMemcpyAsync(get_mps(site + 1, di), dev.d_svd_Vh,
+                                (size_t)small_k * n_svd * sizeof(Scalar),
+                                hipMemcpyDeviceToDevice, dev.stream));
         } else {
-            for (int j = 0; j < n_svd; j++)
-                for (int i = 0; i < new_k; i++)
-                    dev.h_svd_tmp[i + j * new_k] = h_Vh_data[i + j * small_k];
-            HIP_CHECK(hipMemcpyAsync(get_mps(site + 1, di), dev.h_svd_tmp.data(),
-                                (size_t)new_k * n_svd * sizeof(Scalar), hipMemcpyHostToDevice, dev.stream));
+            HIP_CHECK(hipMemcpy2DAsync(
+                get_mps(site + 1, di), new_k * sizeof(Scalar),
+                dev.d_svd_Vh,          small_k * sizeof(Scalar),
+                new_k * sizeof(Scalar), n_svd,
+                hipMemcpyDeviceToDevice, dev.stream));
         }
     }
 

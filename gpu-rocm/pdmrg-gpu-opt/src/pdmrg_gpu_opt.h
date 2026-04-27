@@ -175,6 +175,13 @@ private:
         RealType* d_alpha_dev;
         RealType* d_beta_dev;
         Scalar* d_neg_beta_scalars;
+        // rocsolver_dsteqr workspace (replaces host LAPACK dstev_ for tridiagonal solves).
+        // Always double-precision: rocsolver_dsteqr is real-symmetric only (Lanczos α/β are real),
+        // and the eigenvectors C are promoted to Scalar (complex) when needed.
+        double* d_steqr_D;
+        double* d_steqr_E;
+        double* d_steqr_C;
+        rocblas_int* d_steqr_info;
         Scalar* d_const_one;
         Scalar* d_const_zero;
         Scalar* d_const_neg_one;
@@ -195,11 +202,12 @@ private:
         Scalar* d_rsvd_omega;    // (n, r) random projection on GPU
         Scalar* d_rsvd_Y;       // (m, r) Y = theta @ Omega on GPU
         Scalar* d_rsvd_Q;       // (m, r) QR result on GPU
-        Scalar* d_rsvd_B;       // (r, n) B = Q^H @ theta; reused for U_small upload
+        Scalar* d_rsvd_B;       // (r, n) B = Q^H @ theta; SVD output in-place on device
         Scalar* d_rsvd_ipiv;    // (r) QR tau on GPU (rocSOLVER)
         Scalar* d_rsvd_U_full;  // (m, r) U = Q @ U_small on GPU
-        std::vector<Scalar> h_rsvd_B;       // host buffer for CPU SVD of small B
-        std::vector<Scalar> h_rsvd_U_small; // (r, r) from SVD of B
+        Scalar* d_rsvd_U_small; // (r, r) U_small from on-device rocsolver_gesvd of B
+        std::vector<Scalar> h_rsvd_B;       // legacy host buffer (kept for fallback paths if needed)
+        std::vector<Scalar> h_rsvd_U_small; // legacy host buffer (kept for fallback paths if needed)
 
         // LANCZOS_GRAPH: per-segment fixed-address bounce buffer + cached
         // HIP-graph execs keyed by (two_site_flag, site, cL, cR). Only
