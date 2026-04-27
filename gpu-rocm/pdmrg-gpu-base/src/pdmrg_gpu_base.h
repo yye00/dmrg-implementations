@@ -6,6 +6,7 @@
 #include <vector>
 #include <string>
 #include "scalar_traits.h"
+#include "../../common/accurate_svd_gpu.h"
 
 /**
  * Stream-Parallel DMRG (PDMRG) on GPU — NAIVE BASELINE
@@ -159,6 +160,14 @@ private:
         Scalar* d_psi_R;
         // Tiny host buffer used only for the truncation-rank decision.
         std::vector<RealType> h_svd_S;
+
+        // GPU-native accurate SVD (Stoudenmire recursive) for boundary merges.
+        // Stoudenmire is part of pdmrg's algorithmic definition — without it
+        // V = Λ⁻¹ amplifies SVD's poor relative accuracy on small singular
+        // values, contaminating subsequent sweeps. NOT an "advanced
+        // optimization" gated by the -base charter; mandatory for every
+        // pdmrg variant. See common/accurate_svd_gpu.h.
+        AsvdScratch<Scalar> asvd;
     };
     std::vector<StreamWorkspace> workspaces_;
 

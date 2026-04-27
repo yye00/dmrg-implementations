@@ -2540,24 +2540,27 @@ double PDMRGGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
         // Save d_mps_tensors_[bsite+1] pointer (points to S·Vh)
         Scalar* d_SVh_tensor = d_mps_tensors_[bsite + 1];
 
-        // Use pre-allocated Vh buffer (avoids hot-path hipMalloc/hipFree)
+        // Use pre-allocated Vh buffer (avoids hot-path hipMalloc/hipFree).
+        // accurate_svd_gpu left Vh on device at ws.d_svd_Vh (full_k × n_svd,
+        // lda=full_k); copy the first new_k rows on-device into d_Vh_canonical.
+        // Previously this branch H2D'd from ws.h_svd_Vh, but the new GPU path
+        // never populates that host buffer — would have read uninitialized
+        // memory. D2D copy is also faster than the round-trip.
         size_t vh_size = (size_t)new_k * n_svd;
 
-        // Upload Vh[:new_k, :] (without S) to the pre-allocated buffer
         if (new_k == full_k) {
-            HIP_CHECK(hipMemcpyAsync(ws.d_Vh_canonical, ws.h_svd_Vh.data(),
+            HIP_CHECK(hipMemcpyAsync(ws.d_Vh_canonical, ws.d_svd_Vh,
                         vh_size * sizeof(Scalar),
-                        hipMemcpyHostToDevice, streams_[si]));
+                        hipMemcpyDeviceToDevice, streams_[si]));
         } else {
-            // Sync before reusing h_svd_tmp — the earlier async H2D copy (S·Vh upload)
-            // may still be reading from it.
-            HIP_CHECK(hipStreamSynchronize(streams_[si]));
-            for (int j = 0; j < n_svd; j++)
-                for (int i = 0; i < new_k; i++)
-                    ws.h_svd_tmp[i + j * new_k] = ws.h_svd_Vh[i + j * full_k];
-            HIP_CHECK(hipMemcpyAsync(ws.d_Vh_canonical, ws.h_svd_tmp.data(),
-                        vh_size * sizeof(Scalar),
-                        hipMemcpyHostToDevice, streams_[si]));
+            // Pack contiguous new_k rows from a (full_k × n_svd) col-major
+            // device buffer into a (new_k × n_svd) col-major buffer. pitch
+            // arguments are in BYTES, dimensions in ELEMENTS.
+            HIP_CHECK(hipMemcpy2DAsync(
+                ws.d_Vh_canonical,    new_k  * sizeof(Scalar),
+                ws.d_svd_Vh,          full_k * sizeof(Scalar),
+                new_k * sizeof(Scalar), n_svd,
+                hipMemcpyDeviceToDevice, streams_[si]));
         }
 
         // Swap Vh into MPS slot, build R_env, then restore S·Vh

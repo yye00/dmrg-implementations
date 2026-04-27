@@ -29,6 +29,24 @@
     } while(0)
 
 
+// RAII guard for rocBLAS pointer mode. Captures caller's mode, installs the
+// requested mode, restores caller's mode on destruction. Covers exception
+// unwinding paths through ROCBLAS_CHECK / HIP_CHECK throws inside Lanczos
+// device-mode regions.
+struct DmrgPointerModeGuard {
+    rocblas_handle handle;
+    rocblas_pointer_mode prev_mode;
+    DmrgPointerModeGuard(rocblas_handle h, rocblas_pointer_mode new_mode) : handle(h) {
+        rocblas_get_pointer_mode(h, &prev_mode);
+        rocblas_set_pointer_mode(h, new_mode);
+    }
+    ~DmrgPointerModeGuard() {
+        rocblas_set_pointer_mode(handle, prev_mode);  // best-effort
+    }
+    DmrgPointerModeGuard(const DmrgPointerModeGuard&) = delete;
+    DmrgPointerModeGuard& operator=(const DmrgPointerModeGuard&) = delete;
+};
+
 // ============================================================================
 // GPU kernels for batched GEMM pointer setup (eliminates CPU→GPU pointer copies)
 // ============================================================================
@@ -1064,8 +1082,15 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
         // w = H|v_i> (apply_heff uses host pointer mode internally)
         apply_heff(site, d_vi, d_heff_result_);
 
-        // Switch to device pointer mode for scalar operations
-        ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_device));
+        // Switch to device pointer mode for scalar operations. RAII guard
+        // (scoped to the nested block below) restores host mode on every
+        // exit path including throws — replaces the inline `set device ...
+        // set host` pattern that leaked device mode into the caller's
+        // handle on rocBLAS / HIP failure mid-iteration. The convergence
+        // check immediately after this block needs host mode, matching
+        // pre-guard semantics.
+        {
+        DmrgPointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
 
         // alpha_i = <v_i|w> → device
         ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_vi, 1, d_heff_result_, 1, d_dot_result_));
@@ -1141,8 +1166,7 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
             }
         }
 
-        // Switch back to host pointer mode
-        ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
+        }  // pm_guard destructs here → host pointer mode restored.
 
         // Convergence check every 3 iterations after iter >= 4.
         if (iter >= 4 && iter % 3 == 0) {
@@ -1207,22 +1231,27 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
                            d_steqr_C_, (hipDoubleComplex*)d_ritz_coeffs_, niter);
     }
 
-    // Use device pointer mode for finalization
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_device));
-    ROCBLAS_CHECK(Traits::gemv(
-        rocblas_h_, rocblas_operation_none,
-        n, niter, d_const_one_,
-        d_lanczos_v, n,
-        d_ritz_coeffs_, 1,
-        d_const_zero_, d_theta, 1
-    ));
+    // Use device pointer mode for finalization. RAII guard restores host mode
+    // on every exit path including throws from the 4 ROCBLAS_CHECK calls
+    // below — replaces the prior inline `set device ... set host` pattern
+    // which leaked device mode into the caller's handle on rocBLAS failure.
+    {
+        DmrgPointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
+        ROCBLAS_CHECK(Traits::gemv(
+            rocblas_h_, rocblas_operation_none,
+            n, niter, d_const_one_,
+            d_lanczos_v, n,
+            d_ritz_coeffs_, 1,
+            d_const_zero_, d_theta, 1
+        ));
 
-    // Normalize theta (device pointer mode)
-    ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
-    hipLaunchKernelGGL(invert_nrm_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
-                       d_nrm2_result_, d_inv_nrm_);
-    ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
+        // Normalize theta (device pointer mode)
+        ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
+        hipLaunchKernelGGL(invert_nrm_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
+                           d_nrm2_result_, d_inv_nrm_);
+        ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
+        // pm_guard destructor restores host mode on scope exit.
+    }
 
     t_lanczos_.end(stream_);
     return energy;

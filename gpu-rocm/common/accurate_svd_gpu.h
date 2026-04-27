@@ -54,6 +54,29 @@
         } \
     } while (0)
 
+// RAII guard for rocBLAS pointer mode. Captures caller's mode at construction,
+// installs the requested mode, restores caller's mode on destruction (including
+// when destruction fires via stack-unwinding from a thrown exception). Replaces
+// the previous inline `rocblas_set_pointer_mode(prev_pm)` calls scattered
+// before every throw / return — those couldn't cover the implicit ASVD_HIP_CHECK
+// throws inside step-6 hipMemcpyAsync blocks, leaking host-mode state into the
+// caller's handle on rare HIP failures.
+struct AsvdPointerModeGuard {
+    rocblas_handle handle;
+    rocblas_pointer_mode prev_mode;
+    AsvdPointerModeGuard(rocblas_handle h, rocblas_pointer_mode new_mode) : handle(h) {
+        rocblas_get_pointer_mode(h, &prev_mode);
+        rocblas_set_pointer_mode(h, new_mode);
+    }
+    ~AsvdPointerModeGuard() {
+        // Best-effort restore. Swallow errors: throwing from a destructor
+        // during stack unwinding would call std::terminate.
+        rocblas_set_pointer_mode(handle, prev_mode);
+    }
+    AsvdPointerModeGuard(const AsvdPointerModeGuard&) = delete;
+    AsvdPointerModeGuard& operator=(const AsvdPointerModeGuard&) = delete;
+};
+
 // ============================================================================
 // On-device split-point kernel.
 // Returns the smallest index p such that S[p] < epsilon * S[0], or k if none.
@@ -208,8 +231,12 @@ inline void accurate_svd_gpu(
     int full_k = (m < n) ? m : n;
     if (full_k == 0) return;
     if (depth >= AsvdScratch<Scalar>::MAX_DEPTH) {
-        // Recursion cap reached: fall back to plain SVD (still on device).
-        // In practice depth 2 is already exceptional; depth 5 is theoretical only.
+        // Defensive cap: the public-facing recursion gate at the
+        // `if (depth + 1 < MAX_DEPTH)` check below prevents recursion past
+        // depth = MAX_DEPTH-1 in normal operation, so this branch is dead
+        // code today. Kept to prevent OOB on `ws.d_*[depth]` if a future
+        // edit relaxes the gate without realloc'ing per-depth slots.
+        return;
     }
 
     // --- Step 1: Standard SVD on device ---
@@ -227,9 +254,12 @@ inline void accurate_svd_gpu(
             hipMemcpyDeviceToDevice, stream));
     }
 
-    rocblas_pointer_mode prev_pm;
-    rocblas_get_pointer_mode(handle, &prev_pm);
-    rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host);
+    // RAII pointer-mode guard: installs host mode, restores caller's mode on
+    // destruction — covers every exit path (return / throw / unwind) without
+    // per-block boilerplate. Replaces the prior pattern of inline
+    // `rocblas_set_pointer_mode(prev_pm); throw;` before each error site,
+    // which couldn't cover the implicit ASVD_HIP_CHECK throws in step 6.
+    AsvdPointerModeGuard pm_guard(handle, rocblas_pointer_mode_host);
 
     rocblas_status st = Traits::rocsolver_gesvd(
         handle,
@@ -243,7 +273,6 @@ inline void accurate_svd_gpu(
         rocblas_outofplace,
         ws.d_info[depth]);
     if (st != rocblas_status_success) {
-        rocblas_set_pointer_mode(handle, prev_pm);
         throw std::runtime_error("accurate_svd_gpu: rocsolver_gesvd failed status="
                                  + std::to_string((int)st));
     }
@@ -256,8 +285,7 @@ inline void accurate_svd_gpu(
                                    hipMemcpyDeviceToHost, stream));
     ASVD_HIP_CHECK(hipStreamSynchronize(stream));
     if (h_info != 0) {
-        rocblas_set_pointer_mode(handle, prev_pm);
-        return;
+        return;  // pm_guard restores caller's mode
     }
 
     // --- Step 2: Find split point p on device, read back the single int ---
@@ -273,8 +301,7 @@ inline void accurate_svd_gpu(
 
     // --- Step 3: No split needed → standard SVD is good enough, done ---
     if (h_p >= full_k) {
-        rocblas_set_pointer_mode(handle, prev_pm);
-        return;
+        return;  // pm_guard restores caller's mode
     }
 
     int sub_k = full_k - h_p;
@@ -296,7 +323,6 @@ inline void accurate_svd_gpu(
             &zero,
             ws.d_T[depth], sub_k);
         if (gst != rocblas_status_success) {
-            rocblas_set_pointer_mode(handle, prev_pm);
             throw std::runtime_error("accurate_svd_gpu: gemm T failed status="
                                      + std::to_string((int)gst));
         }
@@ -314,15 +340,16 @@ inline void accurate_svd_gpu(
             &zero,
             ws.d_X[depth], sub_k);
         if (gst != rocblas_status_success) {
-            rocblas_set_pointer_mode(handle, prev_pm);
             throw std::runtime_error("accurate_svd_gpu: gemm X failed status="
                                      + std::to_string((int)gst));
         }
     }
 
     // --- Step 5: Recursive accurate SVD of X (sub_k × sub_k) ---
-    // Outputs go into the next-depth slot's U/S/Vh buffers.
-    rocblas_set_pointer_mode(handle, prev_pm);  // restore for the recursive call
+    // Outputs go into the next-depth slot's U/S/Vh buffers. The recursive
+    // call manages its own AsvdPointerModeGuard — it sees host mode on entry
+    // (we're still in host mode here), captures it, and restores host on
+    // exit. No need to flip pointer mode around the recursion.
     accurate_svd_gpu<Scalar>(
         handle, stream,
         sub_k, sub_k,
@@ -334,7 +361,6 @@ inline void accurate_svd_gpu(
     // sub_U lives at ws.d_U[next_depth] (sub_k × sub_k, lda=sub_k)
     // sub_S lives at ws.d_S[next_depth] (sub_k)
     // sub_Vh lives at ws.d_Vh[next_depth] (sub_k × sub_k, lda=sub_k)
-    rocblas_set_pointer_mode(handle, rocblas_pointer_mode_host);
 
     // --- Step 6a: U[:, p:] ← U[:, p:] · sub_U   (m × sub_k) ---
     // Compute new_cols = U[:,p:] · sub_U into ws.d_block, then 2D copy back.
@@ -349,7 +375,6 @@ inline void accurate_svd_gpu(
             &zero,
             ws.d_block[depth], m);
         if (gst != rocblas_status_success) {
-            rocblas_set_pointer_mode(handle, prev_pm);
             throw std::runtime_error("accurate_svd_gpu: gemm U-update failed status="
                                      + std::to_string((int)gst));
         }
@@ -378,7 +403,6 @@ inline void accurate_svd_gpu(
             &zero,
             ws.d_block[depth], sub_k);
         if (gst != rocblas_status_success) {
-            rocblas_set_pointer_mode(handle, prev_pm);
             throw std::runtime_error("accurate_svd_gpu: gemm Vh-update failed status="
                                      + std::to_string((int)gst));
         }
@@ -395,7 +419,7 @@ inline void accurate_svd_gpu(
                                    sub_k * sizeof(RealType),
                                    hipMemcpyDeviceToDevice, stream));
 
-    rocblas_set_pointer_mode(handle, prev_pm);
+    // pm_guard destructor restores caller's mode.
 }
 
 #endif // ACCURATE_SVD_GPU_H

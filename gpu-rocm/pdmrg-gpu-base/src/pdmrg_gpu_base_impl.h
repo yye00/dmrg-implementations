@@ -184,6 +184,11 @@ void PDMRGGPUBase<Scalar>::allocate_stream_workspaces() {
 
         // Tiny host buffer for truncation-rank decision.
         ws.h_svd_S.resize(svd_max_k);
+
+        // GPU-native accurate SVD scratch — Stoudenmire is part of pdmrg's
+        // algorithmic definition (per feedback_pdmrg_requires_stoudenmire memory).
+        // Sized for the largest theta the boundary path will see.
+        ws.asvd.allocate(chi_max_ * d_, d_ * chi_max_);
     }
 }
 
@@ -237,6 +242,7 @@ void PDMRGGPUBase<Scalar>::free_gpu_resources() {
         if (ws.d_svdj_residual) hipFree(ws.d_svdj_residual);
         if (ws.d_svdj_n_sweeps) hipFree(ws.d_svdj_n_sweeps);
         if (ws.d_psi_R) hipFree(ws.d_psi_R);
+        ws.asvd.release();  // GPU-native accurate SVD scratch
     }
 
     for (auto& h : handles_) rocblas_destroy_handle(h);
@@ -1283,9 +1289,60 @@ double PDMRGGPUBase<Scalar>::merge_and_optimize_boundaries(int parity) {
 
         form_theta_with_V(bsite, b, si);
         energy = lanczos_eigensolver(bsite, ws.d_theta, theta_size, si);
-        svd_split(bsite, ws.d_theta, 'R', si);
 
-        int new_chi = bond_dims_[bsite + 1];
+        // Accurate SVD split (Stoudenmire recursive, GPU-native). Required
+        // for every pdmrg variant — V = 1/clip(S, 1e-12) amplifies plain
+        // gesvd's poor relative accuracy on small singular values, so the
+        // recursive refinement is part of the algorithm itself, not an
+        // optimization. The -base charter (no RSVD / no graph capture / no
+        // sparse MPO / no fused kernels) does NOT exclude Stoudenmire.
+        int m = cL * d_;
+        int n_svd = d_ * cR;
+        int full_k = std::min(m, n_svd);
+        int k_max = std::min(full_k, chi_max_);
+
+        accurate_svd_gpu<Scalar>(
+            handles_[si], streams_[si],
+            m, n_svd,
+            ws.d_theta, m,
+            ws.d_svd_U, m,
+            ws.d_svd_S,
+            ws.d_svd_Vh, full_k,
+            ws.asvd);
+
+        // Read back full_k singular values for truncation rank + boundary V.
+        // Tiny D2H (≤ chi_max doubles) — same pattern as svd_split above.
+        HIP_CHECK(hipMemcpyAsync(ws.h_svd_S.data(), ws.d_svd_S,
+                                 full_k * sizeof(RealType),
+                                 hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
+
+        int new_k = 0;
+        for (int j = 0; j < k_max; j++) {
+            if (ws.h_svd_S[j] > 1e-14) new_k++;
+            else break;
+        }
+        if (new_k == 0) new_k = 1;
+
+        // Direction='R': MPS[bsite] = U[:, :new_k], MPS[bsite+1] = S · Vh[:new_k, :].
+        allocate_mps_tensor(bsite, cL, new_k);
+        HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[bsite], ws.d_svd_U,
+                                 (size_t)m * new_k * sizeof(Scalar),
+                                 hipMemcpyDeviceToDevice, streams_[si]));
+
+        allocate_mps_tensor(bsite + 1, new_k, cR);
+        {
+            int total = new_k * n_svd;
+            int blocks = (total + 255) / 256;
+            hipLaunchKernelGGL((scale_rows_by_diag_kernel<Scalar, RealType>),
+                               dim3(blocks), dim3(256), 0, streams_[si],
+                               ws.d_svd_S, ws.d_svd_Vh, full_k,
+                               d_mps_tensors_[bsite + 1], new_k, new_k, n_svd);
+        }
+
+        bond_dims_[bsite + 1] = new_k;
+
+        int new_chi = new_k;
         boundary_states_[b].chi = new_chi;
         boundary_states_[b].V.resize(new_chi);
 
