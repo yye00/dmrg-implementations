@@ -4,6 +4,7 @@
 #include <cmath>
 #include <vector>
 #include <cstring>
+#include <cstdio>
 #include <string>
 
 // ============================================================================
@@ -207,7 +208,7 @@ int test_heisenberg(int L, int chi_max, int n_sweeps) {
         {8, -3.374932598688},
     };
 
-    DMRGGPUBase<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRGGPUBase<double> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.initialize_mps_random();
 
     std::vector<double*> h_mpo_tensors(L);
@@ -246,7 +247,7 @@ int test_tfim(int L, int chi_max, int n_sweeps) {
     printf("  J=%.4f, h=%.4f (hard-coded)\n", J_tfim, h_field);
     printf("======================================\n\n");
 
-    DMRGGPUBase<double> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRGGPUBase<double> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.initialize_mps_random();
 
     std::vector<double*> h_mpo_tensors(L);
@@ -280,7 +281,7 @@ int test_josephson(int L, int chi_max, int n_sweeps) {
     printf("  E_J=%.2f, E_C=%.2f, phi_ext=pi/4 (hard-coded)\n", E_J, E_C);
     printf("======================================\n\n");
 
-    DMRGGPUBase<Complex> dmrg(L, d, chi_max, D_mpo, 1e-12);
+    DMRGGPUBase<Complex> dmrg(L, d, chi_max, D_mpo, 1e-10);
     dmrg.initialize_mps_random();
 
     std::vector<Complex*> h_mpo_tensors(L);
@@ -310,7 +311,10 @@ int main(int argc, char** argv) {
         if (arg == "--josephson") { run_josephson = true; continue; }
         if (arg == "--tfim")      { run_tfim = true; continue; }
         if (arg == "--nmax" && i+1 < argc) { ++i; continue; }  // accepted+ignored for benchmark-runner compat
-        if (arg[0] == '-') continue;
+        if (arg[0] == '-') {
+            std::fprintf(stderr, "Unknown flag: %s\n", argv[i]);
+            return 1;
+        }
         if (pos == 0) L = std::atoi(argv[i]);
         else if (pos == 1) chi_max = std::atoi(argv[i]);
         else if (pos == 2) n_sweeps = std::atoi(argv[i]);

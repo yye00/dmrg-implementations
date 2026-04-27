@@ -9,16 +9,25 @@
 /**
  * GPU-native DMRG — NAIVE BASELINE (single-site)
  *
- * Unoptimized reference implementation of single-site DMRG on GPU.
- * Uses only rocBLAS single-GEMM calls (no gemm_batched), host-pointer mode
- * throughout, CPU LAPACK dstev for the Lanczos tridiagonal eigensolve, and
- * rocSOLVER gesvd followed by host-side truncation for the SVD. No fused
- * MPO tensors, no custom kernels (except the complex-conjugate helper that
- * is required for correctness of the bra contraction), no device-pointer
- * Lanczos, no batched pointer setup.
+ * Competent first-pass GPU implementation of single-site DMRG. All linear
+ * algebra runs on device (rocBLAS GEMM/GEMV/AXPY/DOT/NRM2 in device-pointer
+ * mode, rocSOLVER `dsteqr` for the Lanczos tridiagonal eigensolve,
+ * rocSOLVER `gesvd_auto` for the SVD, device-side truncation kernels for
+ * S-scaling and column extraction). No host-pointer rocBLAS, no CPU
+ * LAPACK calls, no per-iteration heap allocations, no host roundtrips of
+ * device-resident data.
  *
- * This class exists to provide a reference baseline for measuring the
- * speedup of the optimizations used in DMRGGPU (dmrg-gpu).
+ * Compared to DMRGGPU (the optimized variant), this baseline omits:
+ *   - dual-stream pipelining (apply_heff vs env_update overlap),
+ *   - HIP graph capture for the Lanczos inner loop,
+ *   - randomized SVD (RSVD),
+ *   - batched GEMM and the GpuOpts ablation framework,
+ *   - sparse-MPO compaction,
+ *   - D_PAD MFMA-friendly padding.
+ * The baseline uses single-GEMM-per-pair patterns where the optimized variant
+ * uses gemm_batched, a single rocBLAS handle on a single stream, and the
+ * standard non-fused Lanczos kernels. It is naive in algorithmic structure
+ * but does not waste time on CPU work that has a one-line GPU equivalent.
  *
  * Templated on Scalar: double (real) or hipDoubleComplex (complex128).
  */
@@ -81,22 +90,38 @@ private:
     int theta_size_max_;
     int max_lanczos_iter_;
 
-    // Host-side Lanczos tridiagonal (CPU LAPACK dstev)
-    std::vector<double> h_alpha_;
-    std::vector<double> h_beta_;
-    std::vector<double> h_steqr_work_;  // workspace for dstev
-    std::vector<double> h_steqr_Z_;     // eigenvectors from dstev
+    // Device-pointer-mode scratch for rocBLAS BLAS-1 results (one scalar each).
+    Scalar*   d_dot_result_;      // <v_i | w>          (per Lanczos iter)
+    RealType* d_nrm2_result_;     // ||w||              (per Lanczos iter)
+    RealType* d_inv_nrm_;         // 1/||w||            (computed by inv_real_kernel)
+    Scalar*   d_neg_alpha_;       // -alpha_i           (axpy multiplier)
+    Scalar*   d_neg_overlap_;     // -<v_j | w>         (reorth axpy multiplier)
+    Scalar*   d_neg_beta_scalars_;// -beta_i (per iter, indexed array)
 
-    // SVD workspace (pre-allocated at max size)
+    // Per-iteration alpha/beta arrays on device.
+    RealType* d_alpha_dev_;       // [max_lanczos_iter_]
+    RealType* d_beta_dev_;        // [max_lanczos_iter_]
+
+    // rocSOLVER dsteqr workspaces — fully on-device tridiagonal eigensolve.
+    double*      d_steqr_D_;      // diagonal (overwritten with eigenvalues)
+    double*      d_steqr_E_;      // subdiagonal (overwritten)
+    double*      d_steqr_C_;      // eigenvector matrix (max_iter × max_iter)
+    rocblas_int* d_steqr_info_;   // rocsolver info output
+
+    // SVD workspace (pre-allocated at max size). Truncation runs on device via
+    // extract_cols_kernel and scale_rows_by_diag_kernel from common/scalar_traits.h;
+    // only the singular-value vector S is read back to host (small: <= chi_max
+    // doubles per call) for the truncation-rank decision.
     Scalar* d_svd_A_;
     Scalar* d_svd_U_;
     RealType* d_svd_S_;
     Scalar* d_svd_Vh_;
+    Scalar* d_svd_work_;          // device-side scratch for S*Vh (or U*S)
     RealType* d_svd_E_;
     int* d_svd_info_;
 
-    // Host workspace for SVD results (copied back from GPU)
-    std::vector<Scalar> h_svd_U_, h_svd_Vh_, h_svd_tmp_;
+    // Tiny host buffer used only for the truncation-rank decision (one D2H
+    // of the singular values per SVD; <= chi_max * 8 bytes, control-flow scalar).
     std::vector<RealType> h_svd_S_;
 
     // Core algorithm
