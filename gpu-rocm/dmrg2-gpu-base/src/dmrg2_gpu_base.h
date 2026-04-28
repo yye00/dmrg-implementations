@@ -19,14 +19,19 @@
  * outside the timed sweep region) and reused across all Lanczos iterations,
  * matching the natural choice a first-pass implementer would make.
  *
- * Compared to DMRG2GPU (the optimized variant), this baseline omits:
+ * Compared to DMRG2GPU (the paper-reference variant), this baseline omits:
  *   - dual-stream pipelining (apply_heff vs env_update overlap),
  *   - HIP graph capture for the Lanczos inner loop,
  *   - randomized SVD (RSVD),
  *   - batched GEMM and the GpuOpts ablation framework,
  *   - sparse-MPO compaction,
- *   - D_PAD MFMA-friendly padding,
- *   - the on-device WW precompute kernel (uses host-side compute then H2D).
+ *   - D_PAD MFMA-friendly padding.
+ * The fused MPO (WW) precompute is host-side in EVERY tier (-base, -gpu,
+ * -gpu-opt) — set_mpo() time only, outside the timed sweep region. The
+ * earlier docstring claimed -gpu/-opt had an "on-device WW precompute
+ * kernel"; that was incorrect (round-7 H5 docstring correction). A future
+ * port to a device kernel would belong to the -opt tier as an explicit
+ * algorithmic improvement.
  * The baseline uses single-GEMM-per-pair patterns where the optimized variant
  * uses gemm_batched, a single rocBLAS handle on a single stream, and the
  * standard non-fused Lanczos kernels. It is naive in algorithmic structure
