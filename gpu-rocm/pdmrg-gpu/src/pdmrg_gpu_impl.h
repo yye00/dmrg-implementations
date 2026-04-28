@@ -18,25 +18,7 @@
 // the GPU-native common/accurate_svd_gpu.h pulled in via pdmrg_gpu.h. The host
 // header is retained on disk for historical reference / cross-validation only.
 
-#define HIP_CHECK(call) \
-    do { \
-        hipError_t err = call; \
-        if (err != hipSuccess) { \
-            std::cerr << "HIP error in " << __FILE__ << ":" << __LINE__ \
-                      << " - " << hipGetErrorString(err) << std::endl; \
-            throw std::runtime_error("HIP error"); \
-        } \
-    } while(0)
-
-#define ROCBLAS_CHECK(call) \
-    do { \
-        rocblas_status status = call; \
-        if (status != rocblas_status_success) { \
-            std::cerr << "rocBLAS error in " << __FILE__ << ":" << __LINE__ \
-                      << " - status " << status << std::endl; \
-            throw std::runtime_error("rocBLAS error"); \
-        } \
-    } while(0)
+#include "../../common/hip_check.h"
 
 // ============================================================================
 // GPU kernels for batched GEMM pointer setup (eliminates CPU loops + H2D copies)

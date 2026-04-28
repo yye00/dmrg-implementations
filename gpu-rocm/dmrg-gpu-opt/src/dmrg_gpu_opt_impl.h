@@ -8,25 +8,7 @@
 #include <cstring>
 #include <chrono>
 
-#define HIP_CHECK(call) \
-    do { \
-        hipError_t err = call; \
-        if (err != hipSuccess) { \
-            std::cerr << "HIP error in " << __FILE__ << ":" << __LINE__ \
-                      << " - " << hipGetErrorString(err) << std::endl; \
-            throw std::runtime_error("HIP error"); \
-        } \
-    } while(0)
-
-#define ROCBLAS_CHECK(call) \
-    do { \
-        rocblas_status status = call; \
-        if (status != rocblas_status_success) { \
-            std::cerr << "rocBLAS error in " << __FILE__ << ":" << __LINE__ \
-                      << " - status " << status << std::endl; \
-            throw std::runtime_error("rocBLAS error"); \
-        } \
-    } while(0)
+#include "../../common/hip_check.h"
 
 // Fused Lanczos update:  w := w + (-α)*v_i + [(-β_{im1})*v_{im1}]
 // d_neg_alpha and d_neg_beta_im1 are Scalar* on device (device-pointer mode).
