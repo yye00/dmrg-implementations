@@ -59,7 +59,6 @@ public:
     double get_energy() const { return energy_; }
     int    get_epochs() const { return n_epochs_done_; }
     void get_mps(std::vector<std::vector<Scalar>>& h_mps) const;
-    void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
 
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }
@@ -136,8 +135,6 @@ private:
     Scalar* d_svd_work_;
 
     int bond_size_max_;
-
-    bool use_cpu_svd_;
 
     // === Core methods ===
 

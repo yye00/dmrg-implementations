@@ -108,7 +108,7 @@ __global__ inline void radam_inv_real_kernel(const double* in, double* out) {
 template<typename Scalar>
 RAdamGPU<Scalar>::RAdamGPU(int L, int d, int chi_max, int D_mpo, double tol)
     : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), tol_(tol),
-      energy_(0.0), n_epochs_done_(0), use_cpu_svd_(true) {
+      energy_(0.0), n_epochs_done_(0) {
 
     bond_dims_.resize(L + 1);
     bond_dims_[0] = 1;

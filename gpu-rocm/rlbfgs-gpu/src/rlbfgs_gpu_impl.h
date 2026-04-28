@@ -30,6 +30,24 @@
         } \
     } while(0)
 
+// RAII guard for rocBLAS pointer mode. Captures caller's mode at entry,
+// installs the requested mode, restores caller's mode on destruction
+// (including throws). Round-6 fix: 6 helper functions previously set host
+// mode without restore, leaking it into caller's handle.
+struct RlbfgsPointerModeGuard {
+    rocblas_handle handle;
+    rocblas_pointer_mode prev_mode;
+    RlbfgsPointerModeGuard(rocblas_handle h, rocblas_pointer_mode new_mode) : handle(h) {
+        rocblas_get_pointer_mode(h, &prev_mode);
+        rocblas_set_pointer_mode(h, new_mode);
+    }
+    ~RlbfgsPointerModeGuard() {
+        rocblas_set_pointer_mode(handle, prev_mode);
+    }
+    RlbfgsPointerModeGuard(const RlbfgsPointerModeGuard&) = delete;
+    RlbfgsPointerModeGuard& operator=(const RlbfgsPointerModeGuard&) = delete;
+};
+
 // ============================================================================
 // Device kernels
 // ============================================================================
@@ -108,7 +126,7 @@ __global__ inline void radam_inv_real_kernel(const double* in, double* out) {
 template<typename Scalar>
 RLBFGSGPU<Scalar>::RLBFGSGPU(int L, int d, int chi_max, int D_mpo, double tol)
     : L_(L), d_(d), chi_max_(chi_max), D_mpo_(D_mpo), tol_(tol),
-      energy_(0.0), n_epochs_done_(0), use_cpu_svd_(true) {
+      energy_(0.0), n_epochs_done_(0) {
 
     bond_dims_.resize(L + 1);
     bond_dims_[0] = 1;
@@ -457,7 +475,7 @@ template<typename Scalar>
 void RLBFGSGPU<Scalar>::normalize_site0() {
     int sz = chi_L(0) * d_ * chi_R(0);
     RealType nrm;
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handle_, rocblas_pointer_mode_host));
+    RlbfgsPointerModeGuard pm_guard(handle_, rocblas_pointer_mode_host);
     ROCBLAS_CHECK(Traits::nrm2(handle_, sz, d_mps_[0], 1, &nrm));
     if (nrm > 1e-30) {
         RealType inv = 1.0 / nrm;
@@ -862,7 +880,7 @@ template<typename Scalar>
 double RLBFGSGPU<Scalar>::tangent_inner_real(const std::vector<Scalar*>& A,
                                              const std::vector<Scalar*>& B) const {
     double total = 0.0;
-    ROCBLAS_CHECK(rocblas_set_pointer_mode((rocblas_handle)handle_, rocblas_pointer_mode_host));
+    RlbfgsPointerModeGuard pm_guard((rocblas_handle)handle_, rocblas_pointer_mode_host);
     for (int i = 0; i < L_; i++) {
         int sz = chi_L(i) * d_ * chi_R(i);
         Scalar dot;
@@ -879,7 +897,7 @@ double RLBFGSGPU<Scalar>::tangent_inner_real(const std::vector<Scalar*>& A,
 template<typename Scalar>
 double RLBFGSGPU<Scalar>::tangent_norm_sq(const std::vector<Scalar*>& A) const {
     double total = 0.0;
-    ROCBLAS_CHECK(rocblas_set_pointer_mode((rocblas_handle)handle_, rocblas_pointer_mode_host));
+    RlbfgsPointerModeGuard pm_guard((rocblas_handle)handle_, rocblas_pointer_mode_host);
     for (int i = 0; i < L_; i++) {
         int sz = chi_L(i) * d_ * chi_R(i);
         RealType n;
@@ -892,7 +910,7 @@ double RLBFGSGPU<Scalar>::tangent_norm_sq(const std::vector<Scalar*>& A) const {
 
 template<typename Scalar>
 void RLBFGSGPU<Scalar>::tangent_scale(std::vector<Scalar*>& A, double alpha) {
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handle_, rocblas_pointer_mode_host));
+    RlbfgsPointerModeGuard pm_guard(handle_, rocblas_pointer_mode_host);
     RealType a = (RealType)alpha;
     for (int i = 0; i < L_; i++) {
         int sz = chi_L(i) * d_ * chi_R(i);
@@ -905,7 +923,7 @@ template<typename Scalar>
 void RLBFGSGPU<Scalar>::tangent_axpy(double alpha,
                                      const std::vector<Scalar*>& X,
                                      std::vector<Scalar*>& Y) {
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handle_, rocblas_pointer_mode_host));
+    RlbfgsPointerModeGuard pm_guard(handle_, rocblas_pointer_mode_host);
     Scalar a = Traits::make_scalar(alpha);
     for (int i = 0; i < L_; i++) {
         int sz = chi_L(i) * d_ * chi_R(i);
@@ -1051,17 +1069,15 @@ void RLBFGSGPU<Scalar>::lbfgs_two_loop() {
 
 template<typename Scalar>
 double RLBFGSGPU<Scalar>::trial_energy_at(double alpha) {
-    // Save caller's pointer mode so we can restore on every exit path
-    // (round-5 A11 fix). Previously this function set host mode and never
-    // restored, leaking it into the caller's handle and corrupting any
-    // subsequent device-mode rocBLAS call (e.g., compute_all_gradients).
-    rocblas_pointer_mode prev_mode;
-    rocblas_get_pointer_mode(handle_, &prev_mode);
+    // RAII guard restores caller's pointer mode on every exit path including
+    // throws (round-5 A11 + round-6 unification). Was inline save/restore in
+    // round-5; now uses the same RlbfgsPointerModeGuard pattern as the other
+    // 6 helper functions for uniform exception safety.
+    RlbfgsPointerModeGuard pm_guard(handle_, rocblas_pointer_mode_host);
 
     // d_trial_mps_ = d_mps_ + alpha * d_dir_
     tangent_copy(d_mps_, d_trial_mps_);
     Scalar a = Traits::make_scalar(alpha);
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handle_, rocblas_pointer_mode_host));
     for (int i = 0; i < L_; i++) {
         int sz = chi_L(i) * d_ * chi_R(i);
         ROCBLAS_CHECK(Traits::axpy(handle_, sz, &a, d_dir_[i], 1, d_trial_mps_[i], 1));
@@ -1075,8 +1091,6 @@ double RLBFGSGPU<Scalar>::trial_energy_at(double alpha) {
     double E = compute_energy_from_envs();
     std::swap(d_mps_, d_trial_mps_);    // restore original as "current"
     // NB: d_trial_mps_ now holds the canonicalized, normalized trial iterate.
-
-    rocblas_set_pointer_mode(handle_, prev_mode);
     return E;
 }
 
@@ -1102,8 +1116,10 @@ double RLBFGSGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int the
     std::vector<double> h_alpha(max_iter);
     std::vector<double> h_beta(max_iter);
 
+    // RAII guard restores caller's pointer mode on every exit path including
+    // throws (round-6 A11 fix). Lanczos uses host-pointer scalars throughout.
+    RlbfgsPointerModeGuard pm_guard(handle_, rocblas_pointer_mode_host);
     double norm;
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handle_, rocblas_pointer_mode_host));
     ROCBLAS_CHECK(Traits::nrm2(handle_, n, d_theta, 1, &norm));
 
     if (norm < 1e-14) {

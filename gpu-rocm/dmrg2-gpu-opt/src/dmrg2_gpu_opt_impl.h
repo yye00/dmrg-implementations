@@ -1722,17 +1722,25 @@ double DMRG2GPUOpt<Scalar>::optimize_bond(int site, char direction) {
     int cR = chi_R(site + 1);
     int theta_size = cL * d_ * d_ * cR;
 
+    // Profiling syncs gated by opts_.profile (round-6 fix). Default G1 path
+    // (profile=false) skips these syncs and lets svd_split_fallback queue
+    // behind the eigensolver via stream ordering — significant speedup.
     auto t0 = std::chrono::high_resolution_clock::now();
     double energy = use_davidson_ ? block_davidson_eigensolver(site, d_theta_, theta_size)
                                   : lanczos_eigensolver(site, d_theta_, theta_size);
-    auto t1 = std::chrono::high_resolution_clock::now();
-    prof_davidson_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    if (opts_.profile) {
+        HIP_CHECK(hipStreamSynchronize(stream_));
+        auto t1 = std::chrono::high_resolution_clock::now();
+        prof_davidson_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+        t0 = t1;
+    }
 
-    t0 = std::chrono::high_resolution_clock::now();
-    HIP_CHECK(hipStreamSynchronize(stream_));
     svd_split_fallback(site, d_theta_, direction);
-    t1 = std::chrono::high_resolution_clock::now();
-    prof_svd_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    if (opts_.profile) {
+        HIP_CHECK(hipStreamSynchronize(stream_));
+        auto t1 = std::chrono::high_resolution_clock::now();
+        prof_svd_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+    }
 
     prof_site_count++;
     return energy;
@@ -1748,12 +1756,15 @@ double DMRG2GPUOpt<Scalar>::sweep_left_to_right() {
 
     for (int site = 0; site < L_ - 1; site++) {
         energy = optimize_bond(site, 'R');
-        HIP_CHECK(hipStreamSynchronize(stream_));
+        // Env-update profiling syncs gated by opts_.profile (round-6 fix).
         auto te0 = std::chrono::high_resolution_clock::now();
+        if (opts_.profile) HIP_CHECK(hipStreamSynchronize(stream_));
         update_left_env(site);
-        HIP_CHECK(hipStreamSynchronize(stream_));
-        auto te1 = std::chrono::high_resolution_clock::now();
-        prof_env_ms += std::chrono::duration<double, std::milli>(te1 - te0).count();
+        if (opts_.profile) {
+            HIP_CHECK(hipStreamSynchronize(stream_));
+            auto te1 = std::chrono::high_resolution_clock::now();
+            prof_env_ms += std::chrono::duration<double, std::milli>(te1 - te0).count();
+        }
     }
 
     return energy;
@@ -1765,12 +1776,15 @@ double DMRG2GPUOpt<Scalar>::sweep_right_to_left() {
 
     for (int site = L_ - 2; site >= 0; site--) {
         energy = optimize_bond(site, 'L');
-        HIP_CHECK(hipStreamSynchronize(stream_));
+        // Env-update profiling syncs gated by opts_.profile (round-6 fix).
         auto te0 = std::chrono::high_resolution_clock::now();
+        if (opts_.profile) HIP_CHECK(hipStreamSynchronize(stream_));
         update_right_env(site + 1);
-        HIP_CHECK(hipStreamSynchronize(stream_));
-        auto te1 = std::chrono::high_resolution_clock::now();
-        prof_env_ms += std::chrono::duration<double, std::milli>(te1 - te0).count();
+        if (opts_.profile) {
+            HIP_CHECK(hipStreamSynchronize(stream_));
+            auto te1 = std::chrono::high_resolution_clock::now();
+            prof_env_ms += std::chrono::duration<double, std::milli>(te1 - te0).count();
+        }
     }
 
     return energy;
