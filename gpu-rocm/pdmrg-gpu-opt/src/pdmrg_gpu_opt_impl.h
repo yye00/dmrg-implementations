@@ -563,6 +563,8 @@ void PDMRGGPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
     int d = d_;
     for (int i = 0; i < L_; i++) {
         int size_use = D_use * d * d * D_use;
+        // M4-ext (round-8 self-audit): guard against double-call.
+        if (d_mpo_tensors_[i]) HIP_CHECK(hipFree(d_mpo_tensors_[i]));
         HIP_CHECK(hipMalloc(&d_mpo_tensors_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemset(d_mpo_tensors_[i], 0, size_use * sizeof(Scalar)));
 

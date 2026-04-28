@@ -139,6 +139,10 @@ private:
         RealType* d_svd_E;
         int* d_svd_info;
         Scalar* d_svd_work;
+        // Boundary R_env must be built from canonical Vh, not S·Vh — pre-
+        // allocated swap buffer (round-8 self-audit C-new1-ext; mirrors
+        // pdmrg-gpu and pdmrg-gpu-opt).
+        Scalar* d_Vh_canonical;
         // CPU SVD (fallback)
         std::vector<Scalar> h_svd_A, h_svd_U, h_svd_Vh, h_svd_work, h_svd_tmp;
         std::vector<RealType> h_svd_S;

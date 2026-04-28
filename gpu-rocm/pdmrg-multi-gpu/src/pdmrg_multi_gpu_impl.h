@@ -282,8 +282,10 @@ void PDMRGMultiGPU<Scalar>::allocate_device_resources() {
 
         HIP_CHECK(hipSetDevice(k));
 
-        // Create stream and handle
-        HIP_CHECK(hipStreamCreate(&dev.stream));
+        // Create stream and handle. Non-blocking flag is REQUIRED for
+        // correct concurrent boundary merges (H1-ext round-8 self-audit;
+        // mirrors pdmrg-gpu and pdmrg-gpu-opt).
+        HIP_CHECK(hipStreamCreateWithFlags(&dev.stream, hipStreamNonBlocking));
         ROCBLAS_CHECK(rocblas_create_handle(&dev.handle));
         ROCBLAS_CHECK(rocblas_set_stream(dev.handle, dev.stream));
 
@@ -375,6 +377,8 @@ void PDMRGMultiGPU<Scalar>::allocate_device_resources() {
         HIP_CHECK(hipMalloc(&dev.d_svd_Vh, (size_t)svd_max_k * svd_max_n * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&dev.d_svd_E, svd_max_k * sizeof(RealType)));
         HIP_CHECK(hipMalloc(&dev.d_svd_info, sizeof(int)));
+        // Round-8 self-audit C-new1-ext: pre-allocate canonical-Vh swap buffer.
+        HIP_CHECK(hipMalloc(&dev.d_Vh_canonical, theta_size_max_ * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&dev.d_svd_work, theta_size_max_ * sizeof(Scalar)));
 
         // CPU SVD workspace
@@ -523,6 +527,7 @@ void PDMRGMultiGPU<Scalar>::free_gpu_resources() {
         if (dev.d_svd_Vh) hipFree(dev.d_svd_Vh);
         if (dev.d_svd_E) hipFree(dev.d_svd_E);
         if (dev.d_svd_info) hipFree(dev.d_svd_info);
+        if (dev.d_Vh_canonical) hipFree(dev.d_Vh_canonical);
         if (dev.d_svd_work) hipFree(dev.d_svd_work);
         if (dev.d_rsvd_omega) hipFree(dev.d_rsvd_omega);
         if (dev.d_rsvd_Y) hipFree(dev.d_rsvd_Y);
@@ -2308,9 +2313,34 @@ double PDMRGMultiGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
             boundary_states_[b].V[i] = RealType(1.0) / s_val;
         }
 
-        // Step 5: Update environments from canonical tensors
+        // Step 5: Update environments from canonical tensors. R_env must
+        // be built from canonical Vh, NOT from S·Vh — otherwise R_env
+        // norm = S² ≠ I poisons N_eff = I in downstream Lanczos.
+        // (Round-8 self-audit C-new1-ext; mirrors pdmrg-gpu, pdmrg-gpu-opt,
+        // pdmrg-gpu-base.)
         update_left_env(bsite, di);
+
+        Scalar* d_SVh_tensor = get_mps(bsite + 1, di);
+        size_t vh_size = (size_t)new_k * n_svd;
+        if (new_k == full_k) {
+            HIP_CHECK(hipMemcpyAsync(dev.d_Vh_canonical, dev.d_svd_Vh,
+                        vh_size * sizeof(Scalar),
+                        hipMemcpyDeviceToDevice, dev.stream));
+        } else {
+            HIP_CHECK(hipMemcpy2DAsync(
+                dev.d_Vh_canonical,    new_k  * sizeof(Scalar),
+                dev.d_svd_Vh,          full_k * sizeof(Scalar),
+                new_k * sizeof(Scalar), n_svd,
+                hipMemcpyDeviceToDevice, dev.stream));
+        }
+        // Swap d_Vh_canonical into the MPS slot for the env update, then
+        // restore S·Vh (which is needed for the next Lanczos / wave-fn
+        // continuation).
+        int local = bsite + 1 - dev.seg_first;
+        Scalar* saved_local_mps = dev.d_mps[local];
+        dev.d_mps[local] = dev.d_Vh_canonical;
         update_right_env(bsite + 1, di);
+        dev.d_mps[local] = saved_local_mps;
 
         HIP_CHECK(hipStreamSynchronize(dev.stream));
 
@@ -2441,19 +2471,30 @@ double PDMRGMultiGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_
     energy_ = warmup_energy;
     bool outer_converged = false;
 
-    // Parallel sweep launcher: one CPU thread per device
+    // Parallel sweep launcher: one CPU thread per device. Exception-safe
+    // — captures HIP_CHECK throws per worker, rethrows after join.
+    // (H2-ext round-8 self-audit; mirrors pdmrg-gpu and pdmrg-gpu-opt.)
     auto parallel_sweep = [this](auto sweep_fn) {
         std::vector<std::thread> threads(n_segments_);
+        std::vector<std::exception_ptr> exceptions(n_segments_, nullptr);
         for (int k = 0; k < n_segments_; k++) {
-            threads[k] = std::thread([this, k, &sweep_fn]{
-                HIP_CHECK(hipSetDevice(devices_[k].device_id));
-                sweep_fn(this, k);
+            threads[k] = std::thread([this, k, &sweep_fn, &exceptions]{
+                try {
+                    HIP_CHECK(hipSetDevice(devices_[k].device_id));
+                    sweep_fn(this, k);
+                } catch (...) {
+                    exceptions[k] = std::current_exception();
+                }
             });
         }
         for (auto& t : threads) t.join();
-        // Sync all device streams
+        // Sync all device streams before boundary coupling.
         for (int s = 0; s < n_segments_; s++) {
             HIP_CHECK(hipStreamSynchronize(devices_[s].stream));
+        }
+        // Rethrow first captured exception after the barrier.
+        for (auto& e : exceptions) {
+            if (e) std::rethrow_exception(e);
         }
     };
 
