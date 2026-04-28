@@ -108,13 +108,27 @@ private:
     std::vector<int> L_env_alloc_chi_;
     std::vector<int> R_env_alloc_chi_;
 
-    // GPU handles
+    // GPU handles — dual-stream pipeline (round-6 J2 port from dmrg-gpu).
+    // svd_split_fallback records event_canon_ready_ once the canonical MPS
+    // tensor is written; stream_env_ waits on it and runs update_left/right_env
+    // in parallel with the trailing scale on stream_. Before the next
+    // iteration's form_theta_two_site + Lanczos, stream_ waits on
+    // event_env_done_.
     hipStream_t stream_;
+    hipStream_t stream_env_;
     rocblas_handle rocblas_h_;
+    rocblas_handle rocblas_h_env_;
+    hipEvent_t event_canon_ready_;
+    hipEvent_t event_env_done_;
+    bool env_update_pending_ = false;
 
-    // Contraction intermediates
+    // Contraction intermediates (main stream)
     Scalar* d_T1_;
     Scalar* d_T2_;
+    // Contraction intermediates (env stream) — disjoint from main-stream
+    // scratch so absorb and env_update can run concurrently.
+    Scalar* d_T1_env_;
+    Scalar* d_T2_env_;
 
     // Lanczos workspace (pre-allocated, used as fallback)
     Scalar* d_theta_;
@@ -124,10 +138,13 @@ private:
     int theta_size_max_;
     int max_lanczos_iter_;
 
-    // Batched GEMM pointer arrays (on device)
+    // Batched GEMM pointer arrays (on device) — main + env stream variants
     Scalar** d_batch_A_;
     Scalar** d_batch_B_;
     Scalar** d_batch_C_;
+    Scalar** d_batch_A_env_;
+    Scalar** d_batch_B_env_;
+    Scalar** d_batch_C_env_;
 
     // SVD workspace (on-device — replaces the previous host-LAPACK svd_split_fallback)
     Scalar* d_svd_A_;

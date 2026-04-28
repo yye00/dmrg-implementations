@@ -118,17 +118,24 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
         bond_dims_[i] = (exact_dim > chi_max_user_) ? chi_max_user_ : (int)exact_dim;
     }
 
-    // GPU handles
+    // GPU handles (main + env stream for forward/backward-sweep pipelining)
     HIP_CHECK(hipStreamCreate(&stream_));
+    HIP_CHECK(hipStreamCreate(&stream_env_));
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
     ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
+    ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_env_));
+    ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_env_, stream_env_));
+    HIP_CHECK(hipEventCreateWithFlags(&event_canon_ready_, hipEventDisableTiming));
+    HIP_CHECK(hipEventCreateWithFlags(&event_env_done_, hipEventDisableTiming));
 
     int dd = d_ * d_;  // d^2 for two-site
 
-    // Contraction intermediates: D*d^2*chi_max^2
+    // Contraction intermediates: D*d^2*chi_max^2 — disjoint buffers per stream
     int t_max = D_mpo_ * dd * chi_max_ * chi_max_;
     HIP_CHECK(hipMalloc(&d_T1_, t_max * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_T2_, t_max * sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_T1_env_, t_max * sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_T2_env_, t_max * sizeof(Scalar)));
 
     // MPS tensors
     d_mps_tensors_.resize(L, nullptr);
@@ -179,11 +186,16 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     HIP_CHECK(hipMalloc(&d_lanczos_v_, (size_t)max_lanczos_iter_ * theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_ritz_coeffs_, max_lanczos_iter_ * sizeof(Scalar)));
 
-    // Batched GEMM pointer arrays: D*d^2 batches for two-site
+    // Batched GEMM pointer arrays: D*d^2 batches for two-site — main + env
+    // stream variants so env_update and apply_heff/absorb don't clobber each
+    // other's pointer tables.
     int batch_max = D_mpo_ * dd;
     HIP_CHECK(hipMalloc(&d_batch_A_, batch_max * sizeof(Scalar*)));
     HIP_CHECK(hipMalloc(&d_batch_B_, batch_max * sizeof(Scalar*)));
     HIP_CHECK(hipMalloc(&d_batch_C_, batch_max * sizeof(Scalar*)));
+    HIP_CHECK(hipMalloc(&d_batch_A_env_, batch_max * sizeof(Scalar*)));
+    HIP_CHECK(hipMalloc(&d_batch_B_env_, batch_max * sizeof(Scalar*)));
+    HIP_CHECK(hipMalloc(&d_batch_C_env_, batch_max * sizeof(Scalar*)));
 
     // SVD workspace
     int svd_max_m = chi_max_ * d_;
@@ -306,9 +318,14 @@ void DMRG2GPUOpt<Scalar>::free_gpu_resources() {
     if (d_ritz_coeffs_) hipFree(d_ritz_coeffs_);
     if (d_T1_) hipFree(d_T1_);
     if (d_T2_) hipFree(d_T2_);
+    if (d_T1_env_) hipFree(d_T1_env_);
+    if (d_T2_env_) hipFree(d_T2_env_);
     if (d_batch_A_) hipFree(d_batch_A_);
     if (d_batch_B_) hipFree(d_batch_B_);
     if (d_batch_C_) hipFree(d_batch_C_);
+    if (d_batch_A_env_) hipFree(d_batch_A_env_);
+    if (d_batch_B_env_) hipFree(d_batch_B_env_);
+    if (d_batch_C_env_) hipFree(d_batch_C_env_);
     if (d_svd_A_) hipFree(d_svd_A_);
     if (d_svd_U_) hipFree(d_svd_U_);
     if (d_svd_S_) hipFree(d_svd_S_);
@@ -342,7 +359,11 @@ void DMRG2GPUOpt<Scalar>::free_gpu_resources() {
     if (d_heff_input_) hipFree(d_heff_input_);
 
     rocblas_destroy_handle(rocblas_h_);
+    rocblas_destroy_handle(rocblas_h_env_);
+    hipEventDestroy(event_canon_ready_);
+    hipEventDestroy(event_env_done_);
     hipStreamDestroy(stream_);
+    hipStreamDestroy(stream_env_);
 }
 
 // ============================================================================
@@ -784,6 +805,9 @@ void DMRG2GPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
 
 template<typename Scalar>
 void DMRG2GPUOpt<Scalar>::update_left_env(int site) {
+    // Runs on stream_env_ (side stream) using env-dedicated scratch buffers so
+    // it can overlap with the trailing scale on stream_. Caller must make
+    // stream_env_ wait on event_canon_ready_ first.
     int chi_in = bond_dims_[site];
     int chi_out = bond_dims_[site + 1];
     int D = D_mpo_, d = d_;
@@ -795,8 +819,8 @@ void DMRG2GPUOpt<Scalar>::update_left_env(int site) {
     Scalar* A = d_mps_tensors_[site];
     Scalar* W_mat = d_W_left_[site];
     Scalar* L_new = d_L_envs_[site + 1];
-    Scalar* V = d_T1_;
-    Scalar* U = d_T2_;
+    Scalar* V = d_T1_env_;
+    Scalar* U = d_T2_env_;
 
     // Step 1: V_ws[a',b] = L_w^T[a',a] * A_s[a,b]  (batched GEMM)
     {
@@ -808,22 +832,22 @@ void DMRG2GPUOpt<Scalar>::update_left_env(int site) {
                 h_B[ws] = A + s * chi_in;
                 h_C[ws] = V + ws * chi_in * chi_out;
             }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+        HIP_CHECK(hipMemcpyAsync(d_batch_A_env_, h_A.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_env_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_B_env_, h_B.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_env_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_C_env_, h_C.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_env_));
+        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_env_,
             Traits::op_t, rocblas_operation_none,
             chi_in, chi_out, chi_in,
             &one,
-            (const Scalar**)d_batch_A_, chi_in * D,
-            (const Scalar**)d_batch_B_, chi_in * d,
+            (const Scalar**)d_batch_A_env_, chi_in * D,
+            (const Scalar**)d_batch_B_env_, chi_in * d,
             &zero_val,
-            d_batch_C_, chi_in,
+            d_batch_C_env_, chi_in,
             D * d));
     }
 
     // Step 2: U = V * W_matrix
-    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+    ROCBLAS_CHECK(Traits::gemm(rocblas_h_env_,
         rocblas_operation_none, rocblas_operation_none,
         chi_in * chi_out, d * D, D * d,
         &one,
@@ -837,7 +861,7 @@ void DMRG2GPUOpt<Scalar>::update_left_env(int site) {
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
             int ws_out = wp * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_env_,
                 Traits::op_h, rocblas_operation_none,
                 chi_out, chi_out, chi_in,
                 &one,
@@ -849,7 +873,7 @@ void DMRG2GPUOpt<Scalar>::update_left_env(int site) {
     }
 
     if constexpr (Traits::is_complex) {
-        conjugate_inplace(L_new, chi_out * D * chi_out, stream_);
+        conjugate_inplace(L_new, chi_out * D * chi_out, stream_env_);
     }
 }
 
@@ -859,6 +883,7 @@ void DMRG2GPUOpt<Scalar>::update_left_env(int site) {
 
 template<typename Scalar>
 void DMRG2GPUOpt<Scalar>::update_right_env(int site) {
+    // Runs on stream_env_ (see update_left_env).
     int chi_in = bond_dims_[site + 1];
     int chi_out = bond_dims_[site];
     int D = D_mpo_, d = d_;
@@ -870,8 +895,8 @@ void DMRG2GPUOpt<Scalar>::update_right_env(int site) {
     Scalar* R_env = d_R_envs_[site + 1];
     Scalar* W_mat = d_W_right_[site];
     Scalar* R_new = d_R_envs_[site];
-    Scalar* V = d_T1_;
-    Scalar* U = d_T2_;
+    Scalar* V = d_T1_env_;
+    Scalar* U = d_T2_env_;
 
     // Step 1: V_ws[a,b'] = A_s[a,b] * R_w'[b,b']  (batched GEMM)
     {
@@ -883,22 +908,22 @@ void DMRG2GPUOpt<Scalar>::update_right_env(int site) {
                 h_B[ws] = R_env + wp * chi_in;
                 h_C[ws] = V + ws * chi_out * chi_in;
             }
-        HIP_CHECK(hipMemcpyAsync(d_batch_A_, h_A.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_B_, h_B.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        HIP_CHECK(hipMemcpyAsync(d_batch_C_, h_C.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_));
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+        HIP_CHECK(hipMemcpyAsync(d_batch_A_env_, h_A.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_env_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_B_env_, h_B.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_env_));
+        HIP_CHECK(hipMemcpyAsync(d_batch_C_env_, h_C.data(), D*d*sizeof(Scalar*), hipMemcpyHostToDevice, stream_env_));
+        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_env_,
             rocblas_operation_none, rocblas_operation_none,
             chi_out, chi_in, chi_in,
             &one,
-            (const Scalar**)d_batch_A_, chi_out * d,
-            (const Scalar**)d_batch_B_, chi_in * D,
+            (const Scalar**)d_batch_A_env_, chi_out * d,
+            (const Scalar**)d_batch_B_env_, chi_in * D,
             &zero_val,
-            d_batch_C_, chi_out,
+            d_batch_C_env_, chi_out,
             D * d));
     }
 
     // Step 2: U = V * W_matrix
-    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+    ROCBLAS_CHECK(Traits::gemm(rocblas_h_env_,
         rocblas_operation_none, rocblas_operation_none,
         chi_out * chi_in, d * D, D * d,
         &one,
@@ -912,7 +937,7 @@ void DMRG2GPUOpt<Scalar>::update_right_env(int site) {
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
             int ws_out = w * d + sp;
-            ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+            ROCBLAS_CHECK(Traits::gemm(rocblas_h_env_,
                 rocblas_operation_none, Traits::op_h,
                 chi_out, chi_out, chi_in,
                 &one,
@@ -949,10 +974,12 @@ void DMRG2GPUOpt<Scalar>::build_initial_environments() {
                             D_mpo_ * sizeof(Scalar), hipMemcpyHostToDevice));
     }
 
-    // Build all R environments from right to left
+    // Build all R environments from right to left (runs on stream_env_)
     for (int i = L_ - 1; i >= 0; i--) {
         update_right_env(i);
     }
+    // Ensure initial envs are visible to the first sweep on stream_.
+    HIP_CHECK(hipStreamSynchronize(stream_env_));
 }
 
 // ============================================================================
@@ -1358,6 +1385,9 @@ void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char dir
                                dim3((total + threads - 1) / threads), dim3(threads), 0, stream_,
                                d_svd_U_, m, d_mps_tensors_[site], m, m, new_k);
         }
+        // MPS[site] = U is queued. Signal env stream so update_left_env(site)
+        // can run concurrently with the trailing S*Vh -> MPS[site+1] scale.
+        HIP_CHECK(hipEventRecord(event_canon_ready_, stream_));
 
         // S*Vh → MPS[site+1] (scale rows of Vh by S on device). vh_lda = full_k
         // for full SVD, = b_k for RSVD.
@@ -1370,17 +1400,10 @@ void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char dir
                                d_mps_tensors_[site + 1], new_k, new_k, n_svd);
         }
     } else {  // direction == 'L'
-        // U*S → MPS[site] (scale columns of U by S on device).
-        allocate_mps_tensor(site, cL, new_k);
-        {
-            int total = m * new_k;
-            hipLaunchKernelGGL((scale_cols_by_diag_kernel<Scalar, RealType>),
-                               dim3((total + threads - 1) / threads), dim3(threads), 0, stream_,
-                               d_svd_S_, d_svd_U_, m,
-                               d_mps_tensors_[site], m, m, new_k);
-        }
-
-        // Vh → MPS[site+1] — extract first new_k rows from (vh_lda × n_svd) Vh.
+        // Order swapped vs. natural absorb-first: write MPS[site+1] = Vh
+        // (canonicalize) FIRST so we can signal the env stream early, then
+        // do the U*S -> MPS[site] absorb on stream_ concurrently with
+        // update_right_env(site+1) on stream_env_.
         allocate_mps_tensor(site + 1, new_k, cR);
         if (new_k == svd_k && vh_lda == new_k) {
             HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], d_svd_Vh_,
@@ -1393,6 +1416,17 @@ void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char dir
                                d_svd_Vh_, vh_lda,
                                d_mps_tensors_[site + 1], new_k,
                                new_k, n_svd);
+        }
+        HIP_CHECK(hipEventRecord(event_canon_ready_, stream_));
+
+        // U*S → MPS[site] (scale columns of U by S on device).
+        allocate_mps_tensor(site, cL, new_k);
+        {
+            int total = m * new_k;
+            hipLaunchKernelGGL((scale_cols_by_diag_kernel<Scalar, RealType>),
+                               dim3((total + threads - 1) / threads), dim3(threads), 0, stream_,
+                               d_svd_S_, d_svd_U_, m,
+                               d_mps_tensors_[site], m, m, new_k);
         }
     }
 
@@ -1752,19 +1786,38 @@ double DMRG2GPUOpt<Scalar>::optimize_bond(int site, char direction) {
 
 template<typename Scalar>
 double DMRG2GPUOpt<Scalar>::sweep_left_to_right() {
+    // Dual-stream pipeline (round-6 J2 port from dmrg-gpu pattern):
+    //   stream_     : Lanczos/Davidson + SVD + trailing scale (S*Vh into MPS[site+1])
+    //   stream_env_ : update_left_env(site) -> L[site+1]
+    // svd_split_fallback records event_canon_ready_ as soon as MPS[site] = U
+    // is queued; update_left_env runs concurrently with the trailing scale.
     double energy = 0.0;
 
     for (int site = 0; site < L_ - 1; site++) {
+        if (env_update_pending_) {
+            HIP_CHECK(hipStreamWaitEvent(stream_, event_env_done_, 0));
+            env_update_pending_ = false;
+        }
+
         energy = optimize_bond(site, 'R');
-        // Env-update profiling syncs gated by opts_.profile (round-6 fix).
+
+        // Env timing (gated by opts_.profile). When off, full dual-stream
+        // overlap; when on, briefly serialize on stream_env_ for accurate
+        // host-side timing.
         auto te0 = std::chrono::high_resolution_clock::now();
-        if (opts_.profile) HIP_CHECK(hipStreamSynchronize(stream_));
+        HIP_CHECK(hipStreamWaitEvent(stream_env_, event_canon_ready_, 0));
         update_left_env(site);
+        HIP_CHECK(hipEventRecord(event_env_done_, stream_env_));
+        env_update_pending_ = true;
         if (opts_.profile) {
-            HIP_CHECK(hipStreamSynchronize(stream_));
+            HIP_CHECK(hipStreamSynchronize(stream_env_));
             auto te1 = std::chrono::high_resolution_clock::now();
             prof_env_ms += std::chrono::duration<double, std::milli>(te1 - te0).count();
         }
+    }
+    if (env_update_pending_) {
+        HIP_CHECK(hipStreamWaitEvent(stream_, event_env_done_, 0));
+        env_update_pending_ = false;
     }
 
     return energy;
@@ -1772,19 +1825,32 @@ double DMRG2GPUOpt<Scalar>::sweep_left_to_right() {
 
 template<typename Scalar>
 double DMRG2GPUOpt<Scalar>::sweep_right_to_left() {
+    // Mirror of sweep_left_to_right: update_right_env(site+1) overlaps with
+    // the U*S -> MPS[site] absorb on stream_.
     double energy = 0.0;
 
     for (int site = L_ - 2; site >= 0; site--) {
+        if (env_update_pending_) {
+            HIP_CHECK(hipStreamWaitEvent(stream_, event_env_done_, 0));
+            env_update_pending_ = false;
+        }
+
         energy = optimize_bond(site, 'L');
-        // Env-update profiling syncs gated by opts_.profile (round-6 fix).
+
         auto te0 = std::chrono::high_resolution_clock::now();
-        if (opts_.profile) HIP_CHECK(hipStreamSynchronize(stream_));
+        HIP_CHECK(hipStreamWaitEvent(stream_env_, event_canon_ready_, 0));
         update_right_env(site + 1);
+        HIP_CHECK(hipEventRecord(event_env_done_, stream_env_));
+        env_update_pending_ = true;
         if (opts_.profile) {
-            HIP_CHECK(hipStreamSynchronize(stream_));
+            HIP_CHECK(hipStreamSynchronize(stream_env_));
             auto te1 = std::chrono::high_resolution_clock::now();
             prof_env_ms += std::chrono::duration<double, std::milli>(te1 - te0).count();
         }
+    }
+    if (env_update_pending_) {
+        HIP_CHECK(hipStreamWaitEvent(stream_, event_env_done_, 0));
+        env_update_pending_ = false;
     }
 
     return energy;

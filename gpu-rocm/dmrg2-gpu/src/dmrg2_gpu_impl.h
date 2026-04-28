@@ -921,7 +921,11 @@ void DMRG2GPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in, S
 
 template<typename Scalar>
 void DMRG2GPU<Scalar>::update_left_env(int site) {
-    t_env_update_.begin(stream_);
+    // Runs on stream_env_ (side stream) using env-dedicated scratch buffers so
+    // it can overlap with the trailing absorb on stream_. The caller must make
+    // stream_env_ wait on event_canon_ready_ so that MPS[site] = U has been
+    // written before this runs.
+    t_env_update_.begin(stream_env_);
     int chi_in = bond_dims_[site];
     int chi_out = bond_dims_[site + 1];
     int D = D_mpo_, d = d_;
@@ -933,28 +937,28 @@ void DMRG2GPU<Scalar>::update_left_env(int site) {
     Scalar* A = d_mps_tensors_[site];
     Scalar* W_mat = d_W_left_[site];
     Scalar* L_new = d_L_envs_[site + 1];
-    Scalar* V = d_T1_;
-    Scalar* U = d_T2_;
+    Scalar* V = d_T1_env_;
+    Scalar* U = d_T2_env_;
 
     // Step 1: V_ws[a',b] = L_w^T[a',a] * A_s[a,b]  (batched GEMM)
     {
-        hipLaunchKernelGGL(setup_batch_ptrs_wd<Scalar>, dim3(1), dim3(D*d), 0, stream_,
-                           d_batch_A_, d_batch_B_, d_batch_C_,
+        hipLaunchKernelGGL(setup_batch_ptrs_wd<Scalar>, dim3(1), dim3(D*d), 0, stream_env_,
+                           d_batch_A_env_, d_batch_B_env_, d_batch_C_env_,
                            L_env, A, V,
                            d, chi_in, chi_in, chi_in * chi_out);
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_env_,
             Traits::op_t, rocblas_operation_none,
             chi_in, chi_out, chi_in,
             &one,
-            (const Scalar**)d_batch_A_, chi_in * D,
-            (const Scalar**)d_batch_B_, chi_in * d,
+            (const Scalar**)d_batch_A_env_, chi_in * D,
+            (const Scalar**)d_batch_B_env_, chi_in * d,
             &zero_val,
-            d_batch_C_, chi_in,
+            d_batch_C_env_, chi_in,
             D * d));
     }
 
     // Step 2: U = V * W_matrix
-    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+    ROCBLAS_CHECK(Traits::gemm(rocblas_h_env_,
         rocblas_operation_none, rocblas_operation_none,
         chi_in * chi_out, d * D, D * d,
         &one,
@@ -968,27 +972,27 @@ void DMRG2GPU<Scalar>::update_left_env(int site) {
     {
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            hipLaunchKernelGGL(setup_batch_ptrs_env3<Scalar>, dim3(1), dim3(D), 0, stream_,
-                               d_batch_A_, d_batch_B_, d_batch_C_,
+            hipLaunchKernelGGL(setup_batch_ptrs_env3<Scalar>, dim3(1), dim3(D), 0, stream_env_,
+                               d_batch_A_env_, d_batch_B_env_, d_batch_C_env_,
                                U, A, L_new,
                                sp, d, chi_in * chi_out, chi_in, chi_out);
-            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_env_,
                 Traits::op_h, rocblas_operation_none,
                 chi_out, chi_out, chi_in,
                 &one,
-                (const Scalar**)d_batch_A_, chi_in,
-                (const Scalar**)d_batch_B_, chi_in * d,
+                (const Scalar**)d_batch_A_env_, chi_in,
+                (const Scalar**)d_batch_B_env_, chi_in * d,
                 &beta,
-                d_batch_C_, chi_out * D,
+                d_batch_C_env_, chi_out * D,
                 D));
         }
     }
 
     // For complex: L_new = conj(U^H * A) = U^T * conj(A), the correct bra contraction
     if constexpr (Traits::is_complex) {
-        conjugate_inplace(L_new, chi_out * D * chi_out, stream_);
+        conjugate_inplace(L_new, chi_out * D * chi_out, stream_env_);
     }
-    t_env_update_.end(stream_);
+    t_env_update_.end(stream_env_);
 }
 
 // ============================================================================
@@ -997,7 +1001,8 @@ void DMRG2GPU<Scalar>::update_left_env(int site) {
 
 template<typename Scalar>
 void DMRG2GPU<Scalar>::update_right_env(int site) {
-    t_env_update_.begin(stream_);
+    // Runs on stream_env_ (see update_left_env).
+    t_env_update_.begin(stream_env_);
     int chi_in = bond_dims_[site + 1];
     int chi_out = bond_dims_[site];
     int D = D_mpo_, d = d_;
@@ -1009,30 +1014,30 @@ void DMRG2GPU<Scalar>::update_right_env(int site) {
     Scalar* R_env = d_R_envs_[site + 1];
     Scalar* W_mat = d_W_right_[site];
     Scalar* R_new = d_R_envs_[site];
-    Scalar* V = d_T1_;
-    Scalar* U = d_T2_;
+    Scalar* V = d_T1_env_;
+    Scalar* U = d_T2_env_;
 
     // Step 1: V_ws[a,b'] = A_s[a,b] * R_w'[b,b']  (batched GEMM)
     // Note: A varies by s (inner dim) and B varies by w (outer dim) — opposite of
     // setup_batch_ptrs_wd convention, so swap output arrays and base/stride args.
     {
-        hipLaunchKernelGGL(setup_batch_ptrs_wd<Scalar>, dim3(1), dim3(D*d), 0, stream_,
-                           d_batch_B_, d_batch_A_, d_batch_C_,
+        hipLaunchKernelGGL(setup_batch_ptrs_wd<Scalar>, dim3(1), dim3(D*d), 0, stream_env_,
+                           d_batch_B_env_, d_batch_A_env_, d_batch_C_env_,
                            R_env, A, V,
                            d, chi_in, chi_out, chi_out * chi_in);
-        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+        ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_env_,
             rocblas_operation_none, rocblas_operation_none,
             chi_out, chi_in, chi_in,
             &one,
-            (const Scalar**)d_batch_A_, chi_out * d,
-            (const Scalar**)d_batch_B_, chi_in * D,
+            (const Scalar**)d_batch_A_env_, chi_out * d,
+            (const Scalar**)d_batch_B_env_, chi_in * D,
             &zero_val,
-            d_batch_C_, chi_out,
+            d_batch_C_env_, chi_out,
             D * d));
     }
 
     // Step 2: U = V * W_matrix
-    ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
+    ROCBLAS_CHECK(Traits::gemm(rocblas_h_env_,
         rocblas_operation_none, rocblas_operation_none,
         chi_out * chi_in, d * D, D * d,
         &one,
@@ -1046,22 +1051,22 @@ void DMRG2GPU<Scalar>::update_right_env(int site) {
     {
         for (int sp = 0; sp < d; sp++) {
             Scalar beta = (sp == 0) ? Traits::zero() : Traits::one();
-            hipLaunchKernelGGL(setup_batch_ptrs_env3<Scalar>, dim3(1), dim3(D), 0, stream_,
-                               d_batch_A_, d_batch_B_, d_batch_C_,
+            hipLaunchKernelGGL(setup_batch_ptrs_env3<Scalar>, dim3(1), dim3(D), 0, stream_env_,
+                               d_batch_A_env_, d_batch_B_env_, d_batch_C_env_,
                                U, A, R_new,
                                sp, d, chi_out * chi_in, chi_out, chi_out);
-            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_,
+            ROCBLAS_CHECK(Traits::gemm_batched(rocblas_h_env_,
                 rocblas_operation_none, Traits::op_h,
                 chi_out, chi_out, chi_in,
                 &one,
-                (const Scalar**)d_batch_A_, chi_out,
-                (const Scalar**)d_batch_B_, chi_out * d,
+                (const Scalar**)d_batch_A_env_, chi_out,
+                (const Scalar**)d_batch_B_env_, chi_out * d,
                 &beta,
-                d_batch_C_, chi_out * D,
+                d_batch_C_env_, chi_out * D,
                 D));
         }
     }
-    t_env_update_.end(stream_);
+    t_env_update_.end(stream_env_);
 }
 
 // ============================================================================
@@ -1086,10 +1091,12 @@ void DMRG2GPU<Scalar>::build_initial_environments() {
                             D_mpo_ * sizeof(Scalar), hipMemcpyHostToDevice));
     }
 
-    // Build all R environments from right to left
+    // Build all R environments from right to left (runs on stream_env_)
     for (int i = L_ - 1; i >= 0; i--) {
         update_right_env(i);
     }
+    // Ensure initial envs are visible to the first sweep on stream_.
+    HIP_CHECK(hipStreamSynchronize(stream_env_));
 }
 
 // ============================================================================
@@ -1415,6 +1422,10 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
             hipLaunchKernelGGL(extract_cols_kernel<Scalar>, dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
                                d_svd_U_, m, d_mps_tensors_[site], m, m, new_k);
         }
+        // MPS[site] = U is queued on stream_. Signal env stream so
+        // update_left_env(site) can start concurrently with the trailing
+        // S*Vh -> MPS[site+1] absorb on stream_.
+        HIP_CHECK(hipEventRecord(event_canon_ready_, stream_));
 
         // S*Vh — Vh has leading dim vh_lda (full_k or b_k)
         allocate_mps_tensor(site + 1, new_k, cR);
@@ -1425,13 +1436,10 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
         }
 
     } else {  // direction == 'L'
-        allocate_mps_tensor(site, cL, new_k);
-        {
-            int total = m * new_k;
-            hipLaunchKernelGGL((scale_cols_by_diag_kernel<Scalar, RealType>), dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
-                               d_svd_S_, d_svd_U_, m, d_mps_tensors_[site], m, m, new_k);
-        }
-
+        // Order swapped vs. natural absorb-first: write MPS[site+1] = Vh
+        // (canonicalize) FIRST so we can signal the env stream early, then
+        // do the U*S absorb into MPS[site] on stream_ concurrently with
+        // update_right_env(site+1) on stream_env_.
         allocate_mps_tensor(site + 1, new_k, cR);
         if (new_k == svd_k && vh_lda == new_k) {
             HIP_CHECK(hipMemcpyAsync(d_mps_tensors_[site + 1], d_svd_Vh_,
@@ -1441,6 +1449,14 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
             int total = new_k * n_svd;
             hipLaunchKernelGGL(extract_cols_kernel<Scalar>, dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
                                d_svd_Vh_, vh_lda, d_mps_tensors_[site + 1], new_k, new_k, n_svd);
+        }
+        HIP_CHECK(hipEventRecord(event_canon_ready_, stream_));
+
+        allocate_mps_tensor(site, cL, new_k);
+        {
+            int total = m * new_k;
+            hipLaunchKernelGGL((scale_cols_by_diag_kernel<Scalar, RealType>), dim3((total+threads-1)/threads), dim3(threads), 0, stream_,
+                               d_svd_S_, d_svd_U_, m, d_mps_tensors_[site], m, m, new_k);
         }
     }
 
@@ -1470,11 +1486,29 @@ double DMRG2GPU<Scalar>::optimize_bond(int site, char direction) {
 
 template<typename Scalar>
 double DMRG2GPU<Scalar>::sweep_left_to_right() {
+    // Dual-stream pipeline:
+    //   stream_     : Lanczos + SVD + trailing scale (S*Vh into MPS[site+1])
+    //   stream_env_ : update_left_env(site) -> L[site+1]
+    // svd_split records event_canon_ready_ as soon as MPS[site] = U is queued,
+    // so update_left_env runs concurrently with the trailing scale on stream_.
     double energy = 0.0;
 
     for (int site = 0; site < L_ - 1; site++) {
+        if (env_update_pending_) {
+            HIP_CHECK(hipStreamWaitEvent(stream_, event_env_done_, 0));
+            env_update_pending_ = false;
+        }
+
         energy = optimize_bond(site, 'R');
+
+        HIP_CHECK(hipStreamWaitEvent(stream_env_, event_canon_ready_, 0));
         update_left_env(site);
+        HIP_CHECK(hipEventRecord(event_env_done_, stream_env_));
+        env_update_pending_ = true;
+    }
+    if (env_update_pending_) {
+        HIP_CHECK(hipStreamWaitEvent(stream_, event_env_done_, 0));
+        env_update_pending_ = false;
     }
 
     return energy;
@@ -1482,11 +1516,26 @@ double DMRG2GPU<Scalar>::sweep_left_to_right() {
 
 template<typename Scalar>
 double DMRG2GPU<Scalar>::sweep_right_to_left() {
+    // Mirror of sweep_left_to_right: update_right_env(site+1) overlaps with
+    // the U*S -> MPS[site] absorb on stream_.
     double energy = 0.0;
 
     for (int site = L_ - 2; site >= 0; site--) {
+        if (env_update_pending_) {
+            HIP_CHECK(hipStreamWaitEvent(stream_, event_env_done_, 0));
+            env_update_pending_ = false;
+        }
+
         energy = optimize_bond(site, 'L');
+
+        HIP_CHECK(hipStreamWaitEvent(stream_env_, event_canon_ready_, 0));
         update_right_env(site + 1);
+        HIP_CHECK(hipEventRecord(event_env_done_, stream_env_));
+        env_update_pending_ = true;
+    }
+    if (env_update_pending_) {
+        HIP_CHECK(hipStreamWaitEvent(stream_, event_env_done_, 0));
+        env_update_pending_ = false;
     }
 
     return energy;

@@ -119,12 +119,30 @@ private:
     std::vector<int> R_env_alloc_chi_;
 
     // GPU handles
+    //
+    // Dual-stream pipeline (round-6 J2 port from dmrg-gpu):
+    //   stream_      : Lanczos/Davidson + SVD + absorb(S*Vh) into MPS[site+/-1]
+    //   stream_env_  : update_left_env(site) / update_right_env(site)
+    // After SVD writes U/Vh into MPS[site], event_canon_ready_ is recorded on
+    // stream_; stream_env_ waits on it before starting env_update so the env
+    // update runs concurrently with the absorb GEMM (disjoint memory). Before
+    // the next site's eigensolver, stream_ waits on event_env_done_ so that
+    // apply_heff sees the updated L[site+1] / R[site].
     hipStream_t stream_;
+    hipStream_t stream_env_;
     rocblas_handle rocblas_h_;
+    rocblas_handle rocblas_h_env_;
+    hipEvent_t event_canon_ready_;   // signaled after MPS[site] (U or Vh) is written
+    hipEvent_t event_env_done_;      // signaled after L[site+1] / R[site] is written
+    bool env_update_pending_ = false;
 
-    // Contraction intermediates
+    // Contraction intermediates (main stream)
     Scalar* d_T1_;
     Scalar* d_T2_;
+    // Contraction intermediates (env stream) — disjoint from main-stream
+    // scratch so absorb and env_update can run concurrently.
+    Scalar* d_T1_env_;
+    Scalar* d_T2_env_;
 
     // Lanczos workspace (pre-allocated, used as fallback)
     Scalar* d_theta_;
@@ -134,10 +152,14 @@ private:
     int theta_size_max_;
     int max_lanczos_iter_;
 
-    // Batched GEMM pointer arrays (on device)
+    // Batched GEMM pointer arrays (on device) — main stream
     Scalar** d_batch_A_;
     Scalar** d_batch_B_;
     Scalar** d_batch_C_;
+    // Batched GEMM pointer arrays (on device) — env stream
+    Scalar** d_batch_A_env_;
+    Scalar** d_batch_B_env_;
+    Scalar** d_batch_C_env_;
 
     // Step-3 batched GEMM pointer arrays (D*d entries for apply_heff/env update)
     Scalar** d_batch3_A_;

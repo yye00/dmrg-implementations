@@ -20,14 +20,17 @@
  * rocSOLVER `gesvd_auto` and device-side truncation kernels. No CPU
  * computation in the inner sweep loop.
  *
- * Compared to PDMRGGPU (the optimized variant), this baseline omits:
+ * Compared to PDMRGGPU (the paper-reference variant), this baseline omits:
  *   - HIP graph capture for the Lanczos inner loop,
  *   - randomized SVD (RSVD),
  *   - batched GEMM and the GpuOpts ablation framework,
  *   - sparse-MPO compaction,
  *   - D_PAD MFMA-friendly padding,
- *   - the on-device WW precompute kernel (uses host-side compute then H2D),
- *   - boundary `accurate_svd` (uses plain `rocsolver_gesvd_auto` instead).
+ *   - the on-device WW precompute kernel (uses host-side compute then H2D).
+ * The baseline DOES use the on-device Stoudenmire `accurate_svd_gpu` at
+ * segment-boundary merges (J1 lock — Stoudenmire is part of pdmrg's
+ * algorithm, not an optimization, and is therefore mandatory in every pdmrg
+ * variant including this baseline).
  * The baseline uses non-blocking streams (required for correct concurrent
  * boundary merges; not an optimization), single-GEMM-per-pair patterns
  * where the optimized variant uses gemm_batched, and the standard non-fused

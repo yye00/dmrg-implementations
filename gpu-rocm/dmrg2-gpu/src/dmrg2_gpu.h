@@ -79,13 +79,18 @@ private:
     std::vector<int> L_env_alloc_chi_;
     std::vector<int> R_env_alloc_chi_;
 
-    // GPU handles — dual-stream pipeline (env update ∥ absorb)
+    // GPU handles — dual-stream pipeline (env update ∥ absorb).
+    // svd_split records event_canon_ready_ once the canonical MPS tensor is
+    // written; stream_env_ waits on it and runs update_left/right_env in
+    // parallel with the trailing scale on stream_. Before the next iteration's
+    // form_theta + Lanczos, stream_ waits on event_env_done_.
     hipStream_t stream_;
     hipStream_t stream_env_;
     rocblas_handle rocblas_h_;
     rocblas_handle rocblas_h_env_;
     hipEvent_t event_canon_ready_;
     hipEvent_t event_env_done_;
+    bool env_update_pending_ = false;
 
     // Env-stream scratch (independent of stream_'s d_T1_/d_T2_)
     Scalar* d_T1_env_;
