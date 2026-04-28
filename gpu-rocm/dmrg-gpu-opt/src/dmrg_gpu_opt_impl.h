@@ -55,6 +55,11 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
       D_mpo_(D_mpo), D_mpo_actual_(D_mpo), tol_(tol), energy_(0.0) {
 
     opts_.load_from_env();
+    // Round-10 M-opt-rsvd-env: propagate env var to the use_rsvd_ flag
+    // that gates the actual RSVD code path. Without this, DMRG_GPU_OPT_RSVD=1
+    // is silently ignored at -opt tier (dmrg-gpu / dmrg2-gpu / pdmrg-gpu read
+    // opts_.rsvd directly; only -opt has the use_rsvd_ member as the gate).
+    use_rsvd_ = opts_.rsvd;
 
     // LANCZOS_GRAPH safeguard: dmrg-gpu-opt uses Block-Davidson as its
     // eigensolver, not Lanczos. Block-Davidson calls apply_heff(site, V+j*dim,

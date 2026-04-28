@@ -56,6 +56,8 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
       D_mpo_(D_mpo), D_mpo_actual_(D_mpo), tol_(tol), energy_(0.0) {
 
     opts_.load_from_env();
+    // Round-10 M-opt-rsvd-env: propagate env var to use_rsvd_ gate.
+    use_rsvd_ = opts_.rsvd;
 
     // LANCZOS_GRAPH safeguard: this variant uses Block-Davidson, which calls
     // apply_heff_two_site(site, V + j*dim, AV + j*dim) with a variable output

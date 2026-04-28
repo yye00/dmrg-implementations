@@ -202,7 +202,7 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
     davidson_max_sub_ = std::min(davidson_b_ * 8, theta_size_max_);
     use_cpu_svd_ = false;
     use_davidson_ = true;   // -opt's defining choice — sister -opt variants default true; round-7 fix.
-    use_rsvd_ = false;
+    use_rsvd_ = opts_.rsvd;  // round-10 M-opt-rsvd-env: env var must propagate
     lanczos_use_1site_ = false;
     use_batched_sweep_ = false;  // cross-segment batching: slower for n_segments=2 due to BLAS-1 serialization
     use_chebyshev_ = false;       // Chebyshev-filtered subspace iteration eigensolver

@@ -680,6 +680,8 @@ void PDMRGMultiGPU<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_m
         // Replicate to all devices
         for (int k = 0; k < n_devices_; k++) {
             HIP_CHECK(hipSetDevice(devices_[k].device_id));
+            // Round-10 H10-multi-WW-leak: M4-W guard extension to precompute.
+            if (devices_[k].d_WW[bond]) HIP_CHECK(hipFree(devices_[k].d_WW[bond]));
             HIP_CHECK(hipMalloc(&devices_[k].d_WW[bond], ww_size * sizeof(Scalar)));
             HIP_CHECK(hipMemcpy(devices_[k].d_WW[bond], h_WW.data(),
                                 ww_size * sizeof(Scalar), hipMemcpyHostToDevice));
