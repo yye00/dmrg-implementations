@@ -133,7 +133,6 @@ private:
     Scalar* d_svd_U_;
     RealType* d_svd_S_;
     Scalar* d_svd_Vh_;
-    Scalar* d_svd_work_;          // device scratch for S*Vh (or U*S)
     RealType* d_svd_E_;
     int* d_svd_info_;
     // rocsolver_gesvdj output scalars (residual + sweep count, on device).

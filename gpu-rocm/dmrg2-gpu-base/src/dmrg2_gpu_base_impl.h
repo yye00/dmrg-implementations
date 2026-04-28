@@ -102,8 +102,6 @@ DMRG2GPUBase<Scalar>::DMRG2GPUBase(int L, int d, int chi_max, int D_mpo, double 
     HIP_CHECK(hipMalloc(&d_svd_U_,    (size_t)svd_max_m * svd_max_k * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_svd_S_,    svd_max_k * sizeof(RealType)));
     HIP_CHECK(hipMalloc(&d_svd_Vh_,   (size_t)svd_max_k * svd_max_n * sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_svd_work_, std::max((size_t)svd_max_m * svd_max_k,
-                                                (size_t)svd_max_k * svd_max_n) * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_svd_E_,    svd_max_k * sizeof(RealType)));
     HIP_CHECK(hipMalloc(&d_svd_info_, sizeof(int)));
     HIP_CHECK(hipMalloc(&d_svdj_residual_, sizeof(double)));
@@ -158,7 +156,6 @@ void DMRG2GPUBase<Scalar>::free_gpu_resources() {
     if (d_svd_U_) hipFree(d_svd_U_);
     if (d_svd_S_) hipFree(d_svd_S_);
     if (d_svd_Vh_) hipFree(d_svd_Vh_);
-    if (d_svd_work_) hipFree(d_svd_work_);
     if (d_svd_E_) hipFree(d_svd_E_);
     if (d_svd_info_) hipFree(d_svd_info_);
     if (d_svdj_residual_) hipFree(d_svdj_residual_);
@@ -242,9 +239,11 @@ void DMRG2GPUBase<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
                         h_WL[(w*d+s) + (wp*d+sp) * D * d] = val;
                         h_WR[(wp*d+s) + (w*d+sp) * D * d] = val;
                     }
+        if (d_W_left_[i]) HIP_CHECK(hipFree(d_W_left_[i]));
         HIP_CHECK(hipMalloc(&d_W_left_[i], wm_size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_left_[i], h_WL.data(),
                             wm_size * sizeof(Scalar), hipMemcpyHostToDevice));
+        if (d_W_right_[i]) HIP_CHECK(hipFree(d_W_right_[i]));
         HIP_CHECK(hipMalloc(&d_W_right_[i], wm_size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_right_[i], h_WR.data(),
                             wm_size * sizeof(Scalar), hipMemcpyHostToDevice));
@@ -303,6 +302,7 @@ void DMRG2GPUBase<Scalar>::precompute_WW() {
                       h_WW[row + col * D * dd] = val;
                   }
 
+        if (d_WW_[site]) HIP_CHECK(hipFree(d_WW_[site]));
         HIP_CHECK(hipMalloc(&d_WW_[site], ww_size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_WW_[site], h_WW.data(),
                             ww_size * sizeof(Scalar), hipMemcpyHostToDevice));

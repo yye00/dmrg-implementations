@@ -102,8 +102,8 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     }
 
     // GPU handles (main + env stream for forward/backward-sweep pipelining)
-    HIP_CHECK(hipStreamCreate(&stream_));
-    HIP_CHECK(hipStreamCreate(&stream_env_));
+    HIP_CHECK(hipStreamCreateWithFlags(&stream_, hipStreamNonBlocking));
+    HIP_CHECK(hipStreamCreateWithFlags(&stream_env_, hipStreamNonBlocking));
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
     ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_env_));
@@ -489,9 +489,11 @@ void DMRG2GPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
                         h_WL[(w*d+s) + (wp*d+sp) * D_use * d] = val;
                         h_WR[(wp*d+s) + (w*d+sp) * D_use * d] = val;
                     }
+        if (d_W_left_[i]) HIP_CHECK(hipFree(d_W_left_[i]));
         HIP_CHECK(hipMalloc(&d_W_left_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_left_[i], h_WL.data(),
                             size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+        if (d_W_right_[i]) HIP_CHECK(hipFree(d_W_right_[i]));
         HIP_CHECK(hipMalloc(&d_W_right_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_right_[i], h_WR.data(),
                             size_use * sizeof(Scalar), hipMemcpyHostToDevice));
@@ -539,6 +541,7 @@ void DMRG2GPUOpt<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo
                                 h_WW[row + col * D_use * dd] = val;
                             }
 
+        if (d_WW_[bond]) HIP_CHECK(hipFree(d_WW_[bond]));
         HIP_CHECK(hipMalloc(&d_WW_[bond], ww_size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_WW_[bond], h_WW.data(),
                             ww_size * sizeof(Scalar), hipMemcpyHostToDevice));
@@ -570,11 +573,13 @@ void DMRG2GPUOpt<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo
             ww_nnz_rows_count_[bond] = (int)nnz_rows.size();
             ww_nnz_cols_count_[bond] = (int)nnz_cols.size();
             if (!nnz_rows.empty()) {
+                if (d_WW_nnz_rows_[bond]) HIP_CHECK(hipFree(d_WW_nnz_rows_[bond]));
                 HIP_CHECK(hipMalloc(&d_WW_nnz_rows_[bond], nnz_rows.size() * sizeof(int)));
                 HIP_CHECK(hipMemcpy(d_WW_nnz_rows_[bond], nnz_rows.data(),
                                     nnz_rows.size() * sizeof(int), hipMemcpyHostToDevice));
             }
             if (!nnz_cols.empty()) {
+                if (d_WW_nnz_cols_[bond]) HIP_CHECK(hipFree(d_WW_nnz_cols_[bond]));
                 HIP_CHECK(hipMalloc(&d_WW_nnz_cols_[bond], nnz_cols.size() * sizeof(int)));
                 HIP_CHECK(hipMemcpy(d_WW_nnz_cols_[bond], nnz_cols.data(),
                                     nnz_cols.size() * sizeof(int), hipMemcpyHostToDevice));

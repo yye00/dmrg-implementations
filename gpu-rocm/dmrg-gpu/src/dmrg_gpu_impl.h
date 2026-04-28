@@ -197,8 +197,8 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     }
 
     // GPU handles (main + env stream for forward/backward-sweep pipelining)
-    HIP_CHECK(hipStreamCreate(&stream_));
-    HIP_CHECK(hipStreamCreate(&stream_env_));
+    HIP_CHECK(hipStreamCreateWithFlags(&stream_, hipStreamNonBlocking));
+    HIP_CHECK(hipStreamCreateWithFlags(&stream_env_, hipStreamNonBlocking));
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
     ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_env_));
@@ -596,9 +596,11 @@ void DMRGGPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
                         h_WL[(w*d+s) + (wp*d+sp) * D_use * d] = val;
                         h_WR[(wp*d+s) + (w*d+sp) * D_use * d] = val;
                     }
+        if (d_W_left_[i]) HIP_CHECK(hipFree(d_W_left_[i]));
         HIP_CHECK(hipMalloc(&d_W_left_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_left_[i], h_WL.data(),
                             size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+        if (d_W_right_[i]) HIP_CHECK(hipFree(d_W_right_[i]));
         HIP_CHECK(hipMalloc(&d_W_right_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_right_[i], h_WR.data(),
                             size_use * sizeof(Scalar), hipMemcpyHostToDevice));
@@ -633,11 +635,13 @@ void DMRGGPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
             wl_nnz_rows_count_[i] = (int)nnz_rows.size();
             wl_nnz_cols_count_[i] = (int)nnz_cols.size();
             if (!nnz_rows.empty()) {
+                if (d_WL_nnz_rows_[i]) HIP_CHECK(hipFree(d_WL_nnz_rows_[i]));
                 HIP_CHECK(hipMalloc(&d_WL_nnz_rows_[i], nnz_rows.size() * sizeof(int)));
                 HIP_CHECK(hipMemcpy(d_WL_nnz_rows_[i], nnz_rows.data(),
                                     nnz_rows.size() * sizeof(int), hipMemcpyHostToDevice));
             }
             if (!nnz_cols.empty()) {
+                if (d_WL_nnz_cols_[i]) HIP_CHECK(hipFree(d_WL_nnz_cols_[i]));
                 HIP_CHECK(hipMalloc(&d_WL_nnz_cols_[i], nnz_cols.size() * sizeof(int)));
                 HIP_CHECK(hipMemcpy(d_WL_nnz_cols_[i], nnz_cols.data(),
                                     nnz_cols.size() * sizeof(int), hipMemcpyHostToDevice));

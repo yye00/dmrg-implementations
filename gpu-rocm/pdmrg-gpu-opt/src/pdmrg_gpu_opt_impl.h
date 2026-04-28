@@ -248,8 +248,18 @@ void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
         // === Block-Davidson workspace ===
         HIP_CHECK(hipMalloc(&ws.d_dav_V, (size_t)theta_size_max_ * davidson_max_sub_ * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_dav_AV, (size_t)theta_size_max_ * davidson_max_sub_ * sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&ws.d_dav_work, (size_t)theta_size_max_ * davidson_b_ * sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&ws.d_dav_work2, (size_t)theta_size_max_ * davidson_b_ * sizeof(Scalar)));
+        // Round-9 H-new1-pdmrg-opt: d_dav_work hosts BOTH the residual block
+        // (b·dim) AND the projected H matrix H_proj (k×k, k ≤ max_sub).
+        // Sequential not concurrent here, so size = max(b·dim_max, max_sub²).
+        // Without the second term, smoke tests with theta_size_max < max_sub²/b
+        // (= 256 at default davidson params) overrun the buffer.
+        {
+            size_t dav_work_sz = std::max(
+                (size_t)theta_size_max_ * davidson_b_,
+                (size_t)davidson_max_sub_ * davidson_max_sub_);
+            HIP_CHECK(hipMalloc(&ws.d_dav_work,  dav_work_sz * sizeof(Scalar)));
+            HIP_CHECK(hipMalloc(&ws.d_dav_work2, dav_work_sz * sizeof(Scalar)));
+        }
         ws.h_dav_H_proj.resize(davidson_max_sub_ * davidson_max_sub_);
         ws.h_dav_eigvals.resize(davidson_max_sub_);
         ws.h_dav_eigvecs.resize(davidson_max_sub_ * davidson_max_sub_);
@@ -594,9 +604,11 @@ void PDMRGGPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
                         h_WL[(w*d+s) + (wp*d+sp) * D_use * d] = val;
                         h_WR[(wp*d+s) + (w*d+sp) * D_use * d] = val;
                     }
+        if (d_W_left_[i]) HIP_CHECK(hipFree(d_W_left_[i]));
         HIP_CHECK(hipMalloc(&d_W_left_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_left_[i], h_WL.data(),
                             size_use * sizeof(Scalar), hipMemcpyHostToDevice));
+        if (d_W_right_[i]) HIP_CHECK(hipFree(d_W_right_[i]));
         HIP_CHECK(hipMalloc(&d_W_right_[i], size_use * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_right_[i], h_WR.data(),
                             size_use * sizeof(Scalar), hipMemcpyHostToDevice));
@@ -627,11 +639,13 @@ void PDMRGGPUOpt<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
             wl_nnz_rows_count_[i] = (int)nnz_rows.size();
             wl_nnz_cols_count_[i] = (int)nnz_cols.size();
             if (!nnz_rows.empty()) {
+                if (d_WL_nnz_rows_[i]) HIP_CHECK(hipFree(d_WL_nnz_rows_[i]));
                 HIP_CHECK(hipMalloc(&d_WL_nnz_rows_[i], nnz_rows.size() * sizeof(int)));
                 HIP_CHECK(hipMemcpy(d_WL_nnz_rows_[i], nnz_rows.data(),
                                     nnz_rows.size() * sizeof(int), hipMemcpyHostToDevice));
             }
             if (!nnz_cols.empty()) {
+                if (d_WL_nnz_cols_[i]) HIP_CHECK(hipFree(d_WL_nnz_cols_[i]));
                 HIP_CHECK(hipMalloc(&d_WL_nnz_cols_[i], nnz_cols.size() * sizeof(int)));
                 HIP_CHECK(hipMemcpy(d_WL_nnz_cols_[i], nnz_cols.data(),
                                     nnz_cols.size() * sizeof(int), hipMemcpyHostToDevice));
@@ -688,6 +702,7 @@ void PDMRGGPUOpt<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo
                                 h_WW[row + col * D_use * dd] = val;
                             }
 
+        if (d_WW_[bond]) HIP_CHECK(hipFree(d_WW_[bond]));
         HIP_CHECK(hipMalloc(&d_WW_[bond], ww_size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_WW_[bond], h_WW.data(),
                             ww_size * sizeof(Scalar), hipMemcpyHostToDevice));
@@ -717,11 +732,13 @@ void PDMRGGPUOpt<Scalar>::precompute_fused_mpo(const std::vector<Scalar*>& h_mpo
             ww_nnz_rows_count_[bond] = (int)nnz_rows.size();
             ww_nnz_cols_count_[bond] = (int)nnz_cols.size();
             if (!nnz_rows.empty()) {
+                if (d_WW_nnz_rows_[bond]) HIP_CHECK(hipFree(d_WW_nnz_rows_[bond]));
                 HIP_CHECK(hipMalloc(&d_WW_nnz_rows_[bond], nnz_rows.size() * sizeof(int)));
                 HIP_CHECK(hipMemcpy(d_WW_nnz_rows_[bond], nnz_rows.data(),
                                     nnz_rows.size() * sizeof(int), hipMemcpyHostToDevice));
             }
             if (!nnz_cols.empty()) {
+                if (d_WW_nnz_cols_[bond]) HIP_CHECK(hipFree(d_WW_nnz_cols_[bond]));
                 HIP_CHECK(hipMalloc(&d_WW_nnz_cols_[bond], nnz_cols.size() * sizeof(int)));
                 HIP_CHECK(hipMemcpy(d_WW_nnz_cols_[bond], nnz_cols.data(),
                                     nnz_cols.size() * sizeof(int), hipMemcpyHostToDevice));

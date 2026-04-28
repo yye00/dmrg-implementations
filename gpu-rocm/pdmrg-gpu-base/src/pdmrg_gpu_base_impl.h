@@ -339,9 +339,11 @@ void PDMRGGPUBase<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
                         h_WL[(w*d+s) + (wp*d+sp) * D * d] = val;
                         h_WR[(wp*d+s) + (w*d+sp) * D * d] = val;
                     }
+        if (d_W_left_[i]) HIP_CHECK(hipFree(d_W_left_[i]));
         HIP_CHECK(hipMalloc(&d_W_left_[i], wm_size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_left_[i], h_WL.data(),
                             wm_size * sizeof(Scalar), hipMemcpyHostToDevice));
+        if (d_W_right_[i]) HIP_CHECK(hipFree(d_W_right_[i]));
         HIP_CHECK(hipMalloc(&d_W_right_[i], wm_size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_W_right_[i], h_WR.data(),
                             wm_size * sizeof(Scalar), hipMemcpyHostToDevice));
@@ -392,6 +394,7 @@ void PDMRGGPUBase<Scalar>::precompute_WW() {
                       h_WW[row + col * D * dd] = val;
                   }
 
+        if (d_WW_[site]) HIP_CHECK(hipFree(d_WW_[site]));
         HIP_CHECK(hipMalloc(&d_WW_[site], ww_size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_WW_[site], h_WW.data(),
                             ww_size * sizeof(Scalar), hipMemcpyHostToDevice));
