@@ -201,9 +201,13 @@ private:
     Scalar* d_dav_AV_;
     Scalar* d_dav_work_;
     Scalar* d_dav_work2_;
-    std::vector<Scalar> h_dav_H_proj_;
+    // On-device Rayleigh-Ritz scratch (rocsolver_syevd path). Round-7 H6
+    // fix — replaces the host-LAPACK syev roundtrip in the inner Davidson
+    // loop. Tiny host mirror only for energy / eigenvalue control flow.
+    RealType*    d_dav_eigvals_ = nullptr;
+    RealType*    d_dav_E_       = nullptr;
+    rocblas_int* d_dav_info_    = nullptr;
     std::vector<RealType> h_dav_eigvals_;
-    std::vector<Scalar> h_dav_eigvecs_;
 
     // LANCZOS_GRAPH: cached HIP-graph exec per (site, cL, cR) for apply_heff.
     // d_heff_input_ is a fixed-address bounce buffer so captured graphs can

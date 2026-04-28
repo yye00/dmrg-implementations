@@ -280,9 +280,11 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
         HIP_CHECK(hipMalloc(&d_dav_work_,  dav_work_sz * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&d_dav_work2_, dav_work_sz * sizeof(Scalar)));
     }
-    h_dav_H_proj_.resize(davidson_max_sub_ * davidson_max_sub_);
+    // On-device Rayleigh-Ritz scratch (round-7 H6 fix).
+    HIP_CHECK(hipMalloc(&d_dav_eigvals_, davidson_max_sub_ * sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_dav_E_,       davidson_max_sub_ * sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_dav_info_,    sizeof(rocblas_int)));
     h_dav_eigvals_.resize(davidson_max_sub_);
-    h_dav_eigvecs_.resize(davidson_max_sub_ * davidson_max_sub_);
 
     // LANCZOS_GRAPH: bounce buffer so captured apply_heff_two_site graphs read
     // from a fixed address regardless of which Lanczos v_i the caller passes in.
@@ -351,6 +353,9 @@ void DMRG2GPUOpt<Scalar>::free_gpu_resources() {
     if (d_dav_AV_) hipFree(d_dav_AV_);
     if (d_dav_work_) hipFree(d_dav_work_);
     if (d_dav_work2_) hipFree(d_dav_work2_);
+    if (d_dav_eigvals_) hipFree(d_dav_eigvals_);
+    if (d_dav_E_) hipFree(d_dav_E_);
+    if (d_dav_info_) hipFree(d_dav_info_);
 
     // LANCZOS_GRAPH: destroy cached graph execs and bounce buffer
     for (auto& kv : apply_heff_graph_cache_) {
@@ -1512,78 +1517,41 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
     int k = b;  // current subspace size
 
     for (int iteration = 0; iteration < max_iter; iteration++) {
-        HIP_CHECK(hipStreamSynchronize(stream_));
-
-        // Rayleigh-Ritz: H_proj = V^H @ AV  -> (k, k)
+        // Rayleigh-Ritz: H_proj = V^H @ AV  -> (k, k), into d_dav_work2_
+        // (becomes the eigenvector buffer in-place after rocsolver_syevd).
+        // Round-7 H6 — replaces the host-LAPACK syev roundtrip.
         ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
             Traits::op_h, rocblas_operation_none,
-            k, k, dim, &one, V, dim, AV, dim, &zero_val, d_dav_work_, k));
+            k, k, dim, &one, V, dim, AV, dim, &zero_val, d_dav_work2_, k));
 
-        // Copy H_proj to host
-        HIP_CHECK(hipMemcpy(h_dav_H_proj_.data(), d_dav_work_,
-                            k * k * sizeof(Scalar), hipMemcpyDeviceToHost));
+        // On-device Hermitian eigendecomposition (uplo=upper; the projected
+        // matrix is exactly Hermitian up to roundoff, no explicit symmetrize
+        // needed).
+        ROCBLAS_CHECK(Traits::rocsolver_syevd(rocblas_h_,
+                rocblas_evect_original, rocblas_fill_upper,
+                k, d_dav_work2_, k, d_dav_eigvals_, d_dav_E_, d_dav_info_));
 
-        // Symmetrize on host: H_proj = 0.5 * (H_proj + H_proj^H)
-        for (int i = 0; i < k; i++) {
-            for (int j = i; j < k; j++) {
-                Scalar hij = h_dav_H_proj_[i + j * k];
-                Scalar hji = h_dav_H_proj_[j + i * k];
-                Scalar sym;
-                if constexpr (Traits::is_complex) {
-                    sym = make_hipDoubleComplex(
-                        0.5 * (hipCreal(hij) + hipCreal(hji)),
-                        0.5 * (hipCimag(hij) - hipCimag(hji)));
-                    h_dav_H_proj_[i + j * k] = sym;
-                    h_dav_H_proj_[j + i * k] = make_hipDoubleComplex(hipCreal(sym), -hipCimag(sym));
-                } else {
-                    sym = 0.5 * (hij + hji);
-                    h_dav_H_proj_[i + j * k] = sym;
-                    h_dav_H_proj_[j + i * k] = sym;
-                }
-            }
-        }
-
-        // Eigendecompose H_proj on CPU
-        std::copy(h_dav_H_proj_.begin(), h_dav_H_proj_.begin() + k * k,
-                  h_dav_eigvecs_.begin());
-        int info;
-        const char jobz = 'V', uplo = 'U';
-        int lwork = -1;
-        Scalar work_opt;
-        // Query workspace (need valid rwork for zheev_)
-        std::vector<RealType> syev_rwork_q(std::max(1, Traits::syev_rwork_size(k)));
-        Traits::lapack_syev(&jobz, &uplo, &k,
-                h_dav_eigvecs_.data(), &k, h_dav_eigvals_.data(),
-                &work_opt, &lwork,
-                syev_rwork_q.empty() ? nullptr : syev_rwork_q.data(), &info);
-        if constexpr (Traits::is_complex) {
-            lwork = (int)Traits::real_part(work_opt) + 1;
-        } else {
-            lwork = (int)work_opt + 1;
-        }
-        std::vector<Scalar> syev_work(lwork);
-        std::vector<RealType> syev_rwork(Traits::syev_rwork_size(k));
-        Traits::lapack_syev(&jobz, &uplo, &k,
-                h_dav_eigvecs_.data(), &k, h_dav_eigvals_.data(),
-                syev_work.data(), &lwork,
-                syev_rwork.empty() ? nullptr : syev_rwork.data(), &info);
-
-        if (info != 0) {
-            // Eigendecomp failed -- fall back to Lanczos
+        // Single-double D2H of lowest eigenvalue + info for control flow.
+        double energy;
+        HIP_CHECK(hipMemcpyAsync(&energy, d_dav_eigvals_, sizeof(double),
+                                  hipMemcpyDeviceToHost, stream_));
+        rocblas_int h_dav_info;
+        HIP_CHECK(hipMemcpyAsync(&h_dav_info, d_dav_info_, sizeof(rocblas_int),
+                                  hipMemcpyDeviceToHost, stream_));
+        HIP_CHECK(hipStreamSynchronize(stream_));
+        if (h_dav_info != 0) {
             return lanczos_eigensolver(site, d_theta, theta_size);
         }
+        if (energy < best_energy) best_energy = energy;
 
-        double energy = h_dav_eigvals_[0];  // lowest eigenvalue
+        // D2H lowest b eigenvalues for residual scaling below.
+        int b_use = std::min(b, k);
+        HIP_CHECK(hipMemcpyAsync(h_dav_eigvals_.data(), d_dav_eigvals_,
+                                  b_use * sizeof(RealType),
+                                  hipMemcpyDeviceToHost, stream_));
+        HIP_CHECK(hipStreamSynchronize(stream_));
 
-        if (energy < best_energy) {
-            best_energy = energy;
-        }
-
-        // Upload eigenvectors to GPU for Ritz vector computation
-        HIP_CHECK(hipMemcpy(d_dav_work2_, h_dav_eigvecs_.data(),
-                            k * k * sizeof(Scalar), hipMemcpyHostToDevice));
-
-        // x0 = V @ eigvecs[:, 0] -> (dim, 1)
+        // x0 = V @ eigvecs[:, 0] -> (dim, 1) (eigvecs in d_dav_work2_)
         ROCBLAS_CHECK(Traits::gemv(rocblas_h_, rocblas_operation_none,
             dim, k, &one, V, dim, d_dav_work2_, 1, &zero_val, d_theta, 1));
 
@@ -1596,7 +1564,6 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
         ROCBLAS_CHECK(Traits::axpy(rocblas_h_, dim, &neg_energy, d_theta, 1, d_heff_result_, 1));
 
         RealType res_norm;
-        HIP_CHECK(hipStreamSynchronize(stream_));
         ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_heff_result_, 1, &res_norm));
 
         if (res_norm < tol_dav && std::abs(energy - energy_prev) < tol_dav) {
@@ -1623,7 +1590,6 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             ROCBLAS_CHECK(Traits::axpy(rocblas_h_, dim, &one, d_heff_result_, 1, r_i, 1));
 
             RealType ri_norm;
-            HIP_CHECK(hipStreamSynchronize(stream_));
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, r_i, 1, &ri_norm));
 
             if (ri_norm > tol_dav * 0.01) {
@@ -1640,18 +1606,21 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             return energy;
         }
 
-        // Orthogonalize new vectors against V
+        // Orthogonalize new vectors against V. d_dav_work2_ still holds
+        // the eigvecs from syevd; route the overlap matrix through an
+        // offset of d_dav_work_ so we don't trash them.
         Scalar* W = d_dav_work_;
+        Scalar* overlap = d_dav_work_ + (size_t)n_new * dim;
 
         // overlap = V^H @ W -> (k, n_new)
         ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
             Traits::op_h, rocblas_operation_none,
-            k, n_new, dim, &one, V, dim, W, dim, &zero_val, d_dav_work2_, k));
+            k, n_new, dim, &one, V, dim, W, dim, &zero_val, overlap, k));
 
         // W -= V @ overlap
         ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
             rocblas_operation_none, rocblas_operation_none,
-            dim, n_new, k, &neg_one, V, dim, d_dav_work2_, k, &one, W, dim));
+            dim, n_new, k, &neg_one, V, dim, overlap, k, &one, W, dim));
 
         // Orthogonalize new vectors among themselves (CGS within the block)
         int n_good = 0;
@@ -1667,7 +1636,6 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             }
 
             RealType wi_norm;
-            HIP_CHECK(hipStreamSynchronize(stream_));
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, wi, 1, &wi_norm));
 
             if (wi_norm > 1e-14) {
@@ -1692,9 +1660,9 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
         if (k + n_good > max_sub) {
             int keep = std::min(b, k);
 
-            // X_keep = V @ eigvecs[:, :keep] -> (dim, keep)
-            HIP_CHECK(hipMemcpy(d_dav_work2_, h_dav_eigvecs_.data(),
-                                k * k * sizeof(Scalar), hipMemcpyHostToDevice));
+            // X_keep = V @ eigvecs[:, :keep] -> (dim, keep). Eigvecs are
+            // already in d_dav_work2_ from rocsolver_syevd; we preserved
+            // them by offsetting the overlap matrix in d_dav_work_.
             ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
                 rocblas_operation_none, rocblas_operation_none,
                 dim, keep, k, &one, V, dim, d_dav_work2_, k,
@@ -1715,7 +1683,6 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
                         V + (size_t)j * dim, 1, V + (size_t)i * dim, 1));
                 }
                 RealType vi_norm;
-                HIP_CHECK(hipStreamSynchronize(stream_));
                 ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, V + (size_t)i * dim, 1, &vi_norm));
                 RealType inv_vi = 1.0 / vi_norm;
                 ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_vi, V + (size_t)i * dim, 1));

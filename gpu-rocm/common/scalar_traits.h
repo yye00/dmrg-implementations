@@ -139,6 +139,17 @@ struct ScalarTraits<double> {
     }
     static int syev_rwork_size(int /*n*/) { return 0; }
 
+    // --- rocSOLVER eigendecomposition (on-device, for Block-Davidson) ---
+    // Replaces the host LAPACK syev roundtrip in the inner Davidson loop.
+    // A is overwritten with eigenvectors (jobz=evect_original); D receives
+    // eigenvalues; E is workspace (size n); info is on device.
+    static rocblas_status rocsolver_syevd(rocblas_handle h,
+            rocblas_evect evect, rocblas_fill uplo,
+            int n, double* A, int lda, double* D, double* E,
+            rocblas_int* info) {
+        return rocsolver_dsyevd(h, evect, uplo, n, A, lda, D, E, info);
+    }
+
     // --- rocSOLVER SVD ---
     static rocblas_status rocsolver_gesvd(rocblas_handle h,
             rocblas_svect lu, rocblas_svect rv,
@@ -316,6 +327,16 @@ struct ScalarTraits<hipDoubleComplex> {
         zheev_(jobz, uplo, n, a, lda, w, work, lwork, rwork, info);
     }
     static int syev_rwork_size(int n) { return std::max(1, 3*n - 2); }
+
+    // --- rocSOLVER eigendecomposition (on-device, for Block-Davidson) ---
+    // Hermitian eigendecomposition for complex Scalar.
+    static rocblas_status rocsolver_syevd(rocblas_handle h,
+            rocblas_evect evect, rocblas_fill uplo,
+            int n, Scalar* A, int lda, RealType* D, RealType* E,
+            rocblas_int* info) {
+        return rocsolver_zheevd(h, evect, uplo, n,
+            reinterpret_cast<rocblas_double_complex*>(A), lda, D, E, info);
+    }
 
     // --- rocSOLVER SVD ---
     static rocblas_status rocsolver_gesvd(rocblas_handle h,
