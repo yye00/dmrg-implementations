@@ -2,6 +2,7 @@
 #define DMRG2_GPU_IMPL_H
 
 #include <rocsolver/rocsolver.h>
+#include "../../common/pointer_mode_guard.h"
 #include <iostream>
 #include <cmath>
 #include <algorithm>
@@ -1137,8 +1138,9 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         // w = H|v_i> (apply_heff uses host pointer mode internally)
         apply_heff_two_site(site, d_vi, d_heff_result_);
 
-        // Switch to device pointer mode for scalar operations
-        ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_device));
+        // Switch to device pointer mode for scalar operations. RAII guard
+        // restores host mode at scope exit even on ROCBLAS_CHECK throw.
+        PointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
 
         // alpha_i = <v_i|w> → device
         ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_vi, 1, d_heff_result_, 1, d_dot_result_));
@@ -1204,8 +1206,8 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
             }
         }
 
-        // Switch back to host pointer mode
-        ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
+        // pm_guard destructor (end of for-iteration scope) restores host
+        // pointer mode automatically.
 
         // Convergence check every 3 iterations after iter >= 4
         if (iter >= 4 && iter % 3 == 0) {
@@ -1266,25 +1268,27 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
                            d_steqr_C_, (hipDoubleComplex*)d_ritz_coeffs_, niter);
     }
 
-    // Use device pointer mode for finalization to avoid implicit GPU syncs
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_device));
-    ROCBLAS_CHECK(Traits::gemv(
-        rocblas_h_, rocblas_operation_none,
-        n, niter, d_const_one_,
-        d_lanczos_v, n,
-        d_ritz_coeffs_, 1,
-        d_const_zero_, d_theta, 1
-    ));
+    // Use device pointer mode for finalization to avoid implicit GPU syncs.
+    // RAII guard restores host mode at scope exit (block below).
+    {
+        PointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
+        ROCBLAS_CHECK(Traits::gemv(
+            rocblas_h_, rocblas_operation_none,
+            n, niter, d_const_one_,
+            d_lanczos_v, n,
+            d_ritz_coeffs_, 1,
+            d_const_zero_, d_theta, 1
+        ));
 
-    ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
-    // Launch on stream_ (not default stream 0) so the immediately-following
-    // scal_real on rocblas_h_ (which is bound to stream_) sees d_inv_nrm_
-    // written. Cross-stream order with stream 0 is not guaranteed and could
-    // cause a silent data race producing corrupted Ritz vectors.
-    hipLaunchKernelGGL(invert_nrm_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
-                       d_nrm2_result_, d_inv_nrm_);
-    ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(rocblas_h_, rocblas_pointer_mode_host));
+        ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
+        // Launch on stream_ (not default stream 0) so the immediately-following
+        // scal_real on rocblas_h_ (which is bound to stream_) sees d_inv_nrm_
+        // written. Cross-stream order with stream 0 is not guaranteed and could
+        // cause a silent data race producing corrupted Ritz vectors.
+        hipLaunchKernelGGL(invert_nrm_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
+                           d_nrm2_result_, d_inv_nrm_);
+        ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
+    }
 
     t_lanczos_.end(stream_);
     return energy;

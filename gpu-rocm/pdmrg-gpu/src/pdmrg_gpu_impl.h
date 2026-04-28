@@ -2,6 +2,7 @@
 #define PDMRG_GPU_IMPL_H
 
 #include <rocsolver/rocsolver.h>
+#include "../../common/pointer_mode_guard.h"
 #include <iostream>
 #include <iomanip>
 #include <sstream>
@@ -357,9 +358,7 @@ PDMRGGPU<Scalar>::PDMRGGPU(int L, int d, int chi_max, int D_mpo, int n_segments,
     theta_size_max_ = chi_max_ * dd * chi_max_;
     max_lanczos_iter_ = std::min(100, theta_size_max_);
     use_cpu_svd_ = false;
-    // RSVD: the DMRG_GPU_OPT_RSVD env var controls this (use_rsvd_ can still
-    // be overridden at runtime via set_rsvd() if the caller prefers).
-    use_rsvd_ = opts_.rsvd;
+    // RSVD source-of-truth is opts_.rsvd (set by env var or by set_rsvd()).
     lanczos_use_1site_ = false;
     rsvd_oversampling_ = 20;
 
@@ -1335,11 +1334,13 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
 
     Scalar* d_lanczos_v = ws.d_lanczos_v;
 
-    // v[0] = theta / ||theta|| — use device pointer mode to avoid implicit sync
+    // v[0] = theta / ||theta|| — use device pointer mode to avoid implicit sync.
+    // RAII guard restores host mode at scope exit (block below).
     double norm;
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
-    ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
+    {
+        PointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_device);
+        ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
+    }
 
     // Check norm on host (need the value for near-zero check).
     // Use hipMemcpyAsync (stream-bound) + explicit stream sync rather than bare
@@ -1359,12 +1360,13 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &norm));
     }
 
-    // Normalize using device pointer mode
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
-    hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
-                       ws.d_nrm2_result, ws.d_inv_nrm);
-    ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
+    // Normalize using device pointer mode (RAII restore at block exit).
+    {
+        PointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_device);
+        hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
+                           ws.d_nrm2_result, ws.d_inv_nrm);
+        ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
+    }
     HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta, n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
 
     double prev_energy = 1e30;
@@ -1379,8 +1381,10 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         else
             apply_heff_two_site(site, d_vi, ws.d_heff_result, si);
 
-        // Switch to device pointer mode for scalar operations
-        ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
+        // Switch to device pointer mode for scalar operations. RAII guard
+        // restores host mode at the end of this for-iteration body even on
+        // a ROCBLAS_CHECK throw.
+        PointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_device);
 
         // alpha_i = <v_i|w> → device
         ROCBLAS_CHECK(Traits::dot(handles_[si], n, d_vi, 1, ws.d_heff_result, 1, ws.d_dot_result));
@@ -1470,8 +1474,8 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
             }
         }
 
-        // Switch back to host pointer mode (needed by apply_heff next iteration)
-        ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
+        // pm_guard destructor restores host pointer mode (needed by
+        // apply_heff in the next iteration).
 
         // Convergence check every 3 iterations after iter >= 4.
         // This is the ONLY sync point in the inner loop.
@@ -1543,21 +1547,23 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
                            ws.d_steqr_C, (hipDoubleComplex*)ws.d_ritz_coeffs, niter);
     }
 
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
-    ROCBLAS_CHECK(Traits::gemv(
-        handles_[si], rocblas_operation_none,
-        n, niter, ws.d_const_one,
-        d_lanczos_v, n,
-        ws.d_ritz_coeffs, 1,
-        ws.d_const_zero, d_theta, 1
-    ));
+    // Device pointer mode for finalization (RAII restore at block exit).
+    {
+        PointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_device);
+        ROCBLAS_CHECK(Traits::gemv(
+            handles_[si], rocblas_operation_none,
+            n, niter, ws.d_const_one,
+            d_lanczos_v, n,
+            ws.d_ritz_coeffs, 1,
+            ws.d_const_zero, d_theta, 1
+        ));
 
-    // Normalize on device
-    ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
-    hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
-                       ws.d_nrm2_result, ws.d_inv_nrm);
-    ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
+        // Normalize on device
+        ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
+        hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
+                           ws.d_nrm2_result, ws.d_inv_nrm);
+        ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
+    }
 
     return energy;
 }
@@ -1894,7 +1900,7 @@ double PDMRGGPU<Scalar>::optimize_bond(int site, char direction, int si) {
     // rocBLAS operations are ordered within a stream.
     double energy = lanczos_eigensolver(site, ws.d_theta, theta_size, si);
     // Lanczos already syncs internally (nrm2/dot read host results).
-    if (use_rsvd_)
+    if (opts_.rsvd)
         rsvd_split(site, ws.d_theta, direction, si);
     else
         svd_split(site, ws.d_theta, direction, si);

@@ -43,8 +43,13 @@ public:
     // Results
     double get_energy() const { return energy_; }
     void get_mps(std::vector<std::vector<Scalar>>& h_mps) const;
+    // Legacy public setters. set_cpu_svd toggles a class-internal flag
+    // (use_cpu_svd_ is intentionally not in GpuOpts). set_rsvd is now a
+    // thin alias for opts_.rsvd to keep a single source of truth — both
+    // routes converge on opts_.rsvd, so benchmark scripts that mix the
+    // two cannot drift apart.
     void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
-    void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
+    void set_rsvd(bool use_rsvd) { opts_.rsvd = use_rsvd; }
     void set_quiet(bool) {}  // no-op
 
     // Ablation controls (defaults loaded from DMRG_GPU_OPT_* env vars in ctor)
@@ -213,7 +218,6 @@ private:
     void report_timers();
 
     bool use_cpu_svd_;
-    bool use_rsvd_;
     bool lanczos_use_1site_;  // when true, Lanczos calls apply_heff_single_site
     int rsvd_oversampling_;
     int theta_size_max_;
