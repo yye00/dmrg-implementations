@@ -40,7 +40,12 @@ public:
     void initialize_mps_random(double scale = 0.1);
 
     // Run
-    double run(int n_outer_sweeps, int n_local_sweeps = 2, int n_warmup = 1, int n_polish = 0);
+    // n_recal: if >0, insert a serial full-chain two-site recalibration sweep
+    // every n_recal outer iters. Two-site so it can also adjust bond dims.
+    // Distinct from polish (single-site, post-outer); recalibration is interleaved
+    // mid-outer to prevent parallel segments from diverging into local minima.
+    double run(int n_outer_sweeps, int n_local_sweeps = 2, int n_warmup = 1,
+               int n_polish = 0, int n_recal = 0);
 
     // Results
     double get_energy() const { return energy_; }
@@ -200,6 +205,10 @@ private:
         RealType* d_svd_E;
         int* d_svd_info;
         Scalar* d_svd_work;
+        // Pre-allocated buffer for the right-canonical Vh used in the
+        // boundary-merge R_env build (avoids hot-path hipMalloc and the
+        // S·Vh-vs-Vh ambiguity — see merge_and_optimize_boundaries).
+        Scalar* d_Vh_canonical;       // size: chi_max*d × d*chi_max (theta_size_max)
         std::vector<Scalar> h_svd_A, h_svd_U, h_svd_Vh, h_svd_work, h_svd_tmp;
         std::vector<RealType> h_svd_S;
         std::vector<RealType> h_svd_rwork;

@@ -12,6 +12,7 @@
 #include <thread>
 #include <mutex>
 #include <atomic>
+#include <exception>
 #include <stdexcept>
 
 #define HIP_CHECK(call) \
@@ -308,6 +309,7 @@ void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
         HIP_CHECK(hipMalloc(&ws.d_svd_E, svd_max_k * sizeof(RealType)));
         HIP_CHECK(hipMalloc(&ws.d_svd_info, sizeof(int)));
         HIP_CHECK(hipMalloc(&ws.d_svd_work, theta_size_max_ * sizeof(Scalar)));
+        HIP_CHECK(hipMalloc(&ws.d_Vh_canonical, theta_size_max_ * sizeof(Scalar)));
 
         ws.h_svd_A.resize(theta_size_max_);
         ws.h_svd_U.resize((size_t)svd_max_m * svd_max_k);
@@ -439,6 +441,7 @@ void PDMRGGPUOpt<Scalar>::free_gpu_resources() {
         if (ws.d_svd_E) hipFree(ws.d_svd_E);
         if (ws.d_svd_info) hipFree(ws.d_svd_info);
         if (ws.d_svd_work) hipFree(ws.d_svd_work);
+        if (ws.d_Vh_canonical) hipFree(ws.d_Vh_canonical);
         // rSVD
         if (ws.d_rsvd_omega) hipFree(ws.d_rsvd_omega);
         if (ws.d_rsvd_Y) hipFree(ws.d_rsvd_Y);
@@ -3394,9 +3397,30 @@ double PDMRGGPUOpt<Scalar>::merge_and_optimize_boundaries(int parity) {
             boundary_states_[b].V[i] = RealType(1.0) / s_val;
         }
 
-        // Step 5: Update environments
+        // Step 5: Update environments.
+        // R_env must be built from the canonical Vh, NOT from S·Vh, otherwise
+        // norm = S² ≠ I and the standard eigenvalue assumption N_eff = I in
+        // subsequent Lanczos eigensolves breaks. Mirror pdmrg-gpu (impl
+        // lines 2521-2556) — round-7 J2 reinstatement (C6).
         update_left_env(bsite, si);
+
+        Scalar* d_SVh_tensor = d_mps_tensors_[bsite + 1];
+        size_t vh_size = (size_t)new_k * n_svd;
+        if (new_k == full_k) {
+            HIP_CHECK(hipMemcpyAsync(ws.d_Vh_canonical, ws.d_svd_Vh,
+                        vh_size * sizeof(Scalar),
+                        hipMemcpyDeviceToDevice, streams_[si]));
+        } else {
+            HIP_CHECK(hipMemcpy2DAsync(
+                ws.d_Vh_canonical,    new_k  * sizeof(Scalar),
+                ws.d_svd_Vh,          full_k * sizeof(Scalar),
+                new_k * sizeof(Scalar), n_svd,
+                hipMemcpyDeviceToDevice, streams_[si]));
+        }
+        d_mps_tensors_[bsite + 1] = ws.d_Vh_canonical;
         update_right_env(bsite + 1, si);
+        d_mps_tensors_[bsite + 1] = d_SVh_tensor;
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
     }
     return energy;
 }
@@ -3406,7 +3430,7 @@ double PDMRGGPUOpt<Scalar>::merge_and_optimize_boundaries(int parity) {
 // ============================================================================
 
 template<typename Scalar>
-double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup, int n_polish) {
+double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup, int n_polish, int n_recal) {
     const char* type_name = Traits::is_complex ? "complex128" : "float64";
     printf("=== PDMRG-GPU-OPT (MFMA-16 pad + %s, %s) ===\n",
            use_batched_sweep_ ? "cross-seg batched" : "per-seg streams", type_name);
@@ -3439,14 +3463,26 @@ double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_wa
     energy_ = warmup_energy;
 
     auto parallel_sweep = [this](auto sweep_fn) {
+        // Exception-safe: capture each worker thread's exception via
+        // std::exception_ptr; rethrow the first one after all threads have
+        // joined. Without this, a HIP_CHECK throw inside a worker calls
+        // std::terminate (round-7 H2 fix; mirrors pdmrg-gpu impl:2640-2657).
         std::vector<std::thread> threads(n_segments_);
+        std::vector<std::exception_ptr> exceptions(n_segments_, nullptr);
         for (int k = 0; k < n_segments_; k++) {
-            threads[k] = std::thread([this, k, &sweep_fn]{ sweep_fn(this, k); });
+            threads[k] = std::thread([this, k, &sweep_fn, &exceptions]{
+                try { sweep_fn(this, k); }
+                catch (...) { exceptions[k] = std::current_exception(); }
+            });
         }
         for (auto& t : threads) t.join();
         // Sync per-segment streams (not device-wide) before boundary coupling
         for (int s = 0; s < n_segments_; s++) {
             HIP_CHECK(hipStreamSynchronize(streams_[s]));
+        }
+        // Rethrow the first captured exception (if any) after the barrier.
+        for (auto& e : exceptions) {
+            if (e) std::rethrow_exception(e);
         }
     };
 
@@ -3487,6 +3523,18 @@ double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_wa
             break;
         }
         energy_prev = energy_;
+
+        // Recalibration: periodic serial full-chain two-site sweep to prevent
+        // parallel segments from diverging into local minima. Two-site so it
+        // can adjust bond dims and converges faster than single-site. Mirrors
+        // pdmrg-gpu (impl:2711-2718) — round-7 J2 reinstatement (C5).
+        if (n_recal > 0 && ((outer + 1) % n_recal == 0) && outer + 1 < n_outer_sweeps) {
+            build_initial_environments();
+            sweep_LR_full();
+            energy_ = sweep_RL_full();
+            energy_prev = energy_;
+            initialize_boundary_states();
+        }
     }
 
     // Polish phase: full-chain single-site sweeps to fix stale boundary

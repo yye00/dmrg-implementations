@@ -712,6 +712,37 @@ void PDMRGGPU<Scalar>::initialize_mps_random(double scale) {
     }
 }
 
+template<typename Scalar>
+void PDMRGGPU<Scalar>::initialize_mps_product() {
+    for (int i = 0; i < L_; i++) {
+        int cL = chi_L(i), cR = chi_R(i);
+        int size = cL * d_ * cR;
+        std::vector<Scalar> h_A(size, Traits::zero());
+        int chi_min = std::min(cL, cR);
+        for (int a = 0; a < chi_min; a++) {
+            h_A[a + 0*cL + a*cL*d_] = Traits::one();
+        }
+        HIP_CHECK(hipMemcpy(d_mps_tensors_[i], h_A.data(),
+                            size * sizeof(Scalar), hipMemcpyHostToDevice));
+    }
+}
+
+template<typename Scalar>
+void PDMRGGPU<Scalar>::initialize_mps_neel() {
+    for (int i = 0; i < L_; i++) {
+        int cL = chi_L(i), cR = chi_R(i);
+        int size = cL * d_ * cR;
+        std::vector<Scalar> h_A(size, Traits::zero());
+        int spin = (i % 2 == 0) ? 0 : 1;
+        int chi_min = std::min(cL, cR);
+        for (int a = 0; a < chi_min; a++) {
+            h_A[a + spin*cL + a*cL*d_] = Traits::one();
+        }
+        HIP_CHECK(hipMemcpy(d_mps_tensors_[i], h_A.data(),
+                            size * sizeof(Scalar), hipMemcpyHostToDevice));
+    }
+}
+
 // ============================================================================
 // MPO setup and fused two-site MPO precomputation
 // ============================================================================

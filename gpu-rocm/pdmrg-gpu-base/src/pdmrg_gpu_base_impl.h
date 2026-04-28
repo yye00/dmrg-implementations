@@ -336,6 +336,8 @@ void PDMRGGPUBase<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
     int D = D_mpo_, d = d_;
     for (int i = 0; i < L_; i++) {
         int size = D * d * d * D;
+        // Guard against double-call (round-7 M4): free previous MPO buffer.
+        if (d_mpo_tensors_[i]) HIP_CHECK(hipFree(d_mpo_tensors_[i]));
         HIP_CHECK(hipMalloc(&d_mpo_tensors_[i], size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_mpo_tensors[i],
                             size * sizeof(Scalar), hipMemcpyHostToDevice));

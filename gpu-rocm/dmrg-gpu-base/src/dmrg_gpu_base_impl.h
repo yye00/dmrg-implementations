@@ -237,6 +237,10 @@ void DMRGGPUBase<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
     int D = D_mpo_, d = d_;
     for (int i = 0; i < L_; i++) {
         int size = D * d * d * D;
+        // Guard against double-call: free the previous MPO buffer if set_mpo
+        // is invoked more than once (test harnesses can re-use a single
+        // instance across multiple problems).
+        if (d_mpo_tensors_[i]) HIP_CHECK(hipFree(d_mpo_tensors_[i]));
         HIP_CHECK(hipMalloc(&d_mpo_tensors_[i], size * sizeof(Scalar)));
         HIP_CHECK(hipMemcpy(d_mpo_tensors_[i], h_mpo_tensors[i],
                             size * sizeof(Scalar), hipMemcpyHostToDevice));

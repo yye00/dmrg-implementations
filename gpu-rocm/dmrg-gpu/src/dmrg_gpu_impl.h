@@ -247,8 +247,8 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     // Sparse-MPO index lists (populated in set_mpo when opts_.sparse_mpo is on)
     d_WL_nnz_rows_.resize(L, nullptr);
     d_WL_nnz_cols_.resize(L, nullptr);
-    nnz_rows_count_.assign(L, 0);
-    nnz_cols_count_.assign(L, 0);
+    wl_nnz_rows_count_.assign(L, 0);
+    wl_nnz_cols_count_.assign(L, 0);
 
     // Environments
     d_L_envs_.resize(L + 1, nullptr);
@@ -646,8 +646,8 @@ void DMRGGPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
                 }
                 if (nz) nnz_cols.push_back(c);
             }
-            nnz_rows_count_[i] = (int)nnz_rows.size();
-            nnz_cols_count_[i] = (int)nnz_cols.size();
+            wl_nnz_rows_count_[i] = (int)nnz_rows.size();
+            wl_nnz_cols_count_[i] = (int)nnz_cols.size();
             if (!nnz_rows.empty()) {
                 HIP_CHECK(hipMalloc(&d_WL_nnz_rows_[i], nnz_rows.size() * sizeof(int)));
                 HIP_CHECK(hipMemcpy(d_WL_nnz_rows_[i], nnz_rows.data(),
@@ -661,8 +661,8 @@ void DMRGGPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
             if (i == 0) {
                 std::fprintf(stderr,
                     "[SPARSE_MPO] site 0: W shape (%d x %d), nnz rows=%d, nnz cols=%d (%.0f%% sparse)\n",
-                    rows, cols, nnz_rows_count_[i], nnz_cols_count_[i],
-                    100.0 * (1.0 - (double)(nnz_rows_count_[i] * nnz_cols_count_[i]) / (rows * cols)));
+                    rows, cols, wl_nnz_rows_count_[i], wl_nnz_cols_count_[i],
+                    100.0 * (1.0 - (double)(wl_nnz_rows_count_[i] * wl_nnz_cols_count_[i]) / (rows * cols)));
             }
         }
     }
@@ -724,16 +724,16 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
     // must be zero, which we enforce with a memset before Step 1. Similarly
     // for Step 3 we zero the per-wp scratch in V before dispatching so the
     // final GEMV reduction doesn't pick up stale data from skipped slices.
-    const bool sparse = opts_.sparse_mpo && nnz_rows_count_[site] > 0
-                        && nnz_rows_count_[site] < D * d;
-    const bool sparse_s3 = opts_.sparse_mpo && nnz_cols_count_[site] > 0
-                           && nnz_cols_count_[site] < D * d;
+    const bool sparse = opts_.sparse_mpo && wl_nnz_rows_count_[site] > 0
+                        && wl_nnz_rows_count_[site] < D * d;
+    const bool sparse_s3 = opts_.sparse_mpo && wl_nnz_cols_count_[site] > 0
+                           && wl_nnz_cols_count_[site] < D * d;
 
     // Step 1: V_ws[a',b] = L_w^T[a',a] * theta_s[a,b]  (batched GEMM)
     {
         if (sparse) {
             HIP_CHECK(hipMemsetAsync(V, 0, D * d * cL * cR * sizeof(Scalar), stream_));
-            int nnz = nnz_rows_count_[site];
+            int nnz = wl_nnz_rows_count_[site];
             hipLaunchKernelGGL(setup_batch_ptrs_wd_sparse<Scalar>,
                                dim3(1), dim3(nnz), 0, stream_,
                                d_batch_A_, d_batch_B_, d_batch_C_,
@@ -783,7 +783,7 @@ void DMRGGPU<Scalar>::apply_heff(int site, const Scalar* d_theta_in, Scalar* d_r
         int slice_stride = cL * d * cR;
         if (sparse_s3) {
             HIP_CHECK(hipMemsetAsync(V, 0, D * slice_stride * sizeof(Scalar), stream_));
-            int nnz = nnz_cols_count_[site];
+            int nnz = wl_nnz_cols_count_[site];
             hipLaunchKernelGGL(setup_batch_ptrs_step3_full_sparse<Scalar>,
                                dim3(1), dim3(nnz), 0, stream_,
                                d_batch_A_, d_batch_B_, d_batch_C_,

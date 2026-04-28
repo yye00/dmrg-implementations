@@ -32,7 +32,12 @@
  * Algorithm-level differences from -gpu:
  * 1. Block-Davidson eigensolver replaces Lanczos (BLAS-3 dominant).
  * 2. Dimension padding to MFMA-16 multiples for MI300X tile alignment.
- * 3. Batched Step-3 GEMMs reduce kernel launch overhead.
+ * 3. Batched Step-3 GEMMs reduce kernel launch overhead. The
+ *    `gemm_strided_batched` fast path fires only when `cL>=16 && cR>=16
+ *    && D_mpo<=2`; outside that gate (e.g. d=3 ladder/dimer models, or
+ *    small chi during initial sweeps) Step-3 falls back to per-(wp,sp)
+ *    plain `gemm`. The gate is a tile-cache contention threshold, not
+ *    a correctness constraint.
  *
  * Correctness baseline matches -gpu (post round-4 C5 backport):
  * - Zero per-sweep host LAPACK on default code path (rocsolver_dsteqr for

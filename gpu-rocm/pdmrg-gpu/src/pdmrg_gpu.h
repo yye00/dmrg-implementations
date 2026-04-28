@@ -33,6 +33,8 @@ public:
     // Setup
     void set_mpo(const std::vector<Scalar*>& h_mpo_tensors);
     void initialize_mps_random(double scale = 0.1);
+    void initialize_mps_product();
+    void initialize_mps_neel();
 
     // Run
     // n_recal: if >0, insert a serial full-chain 1-site recalibration sweep every n_recal outer iters
