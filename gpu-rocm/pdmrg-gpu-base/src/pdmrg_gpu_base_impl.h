@@ -134,7 +134,6 @@ void PDMRGGPUBase<Scalar>::allocate_stream_workspaces() {
 
         HIP_CHECK(hipMalloc(&ws.d_T1, t_max * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_T2, t_max * sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&ws.d_T3, t_max * sizeof(Scalar)));
 
         HIP_CHECK(hipMalloc(&ws.d_theta, theta_size_max_ * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_heff_result, theta_size_max_ * sizeof(Scalar)));
@@ -207,7 +206,6 @@ void PDMRGGPUBase<Scalar>::free_gpu_resources() {
     for (auto& ws : workspaces_) {
         if (ws.d_T1) hipFree(ws.d_T1);
         if (ws.d_T2) hipFree(ws.d_T2);
-        if (ws.d_T3) hipFree(ws.d_T3);
         if (ws.d_theta) hipFree(ws.d_theta);
         if (ws.d_heff_result) hipFree(ws.d_heff_result);
         if (ws.d_lanczos_v) hipFree(ws.d_lanczos_v);
@@ -1111,28 +1109,10 @@ double PDMRGGPUBase<Scalar>::optimize_site_single(int site, char direction, int 
 // Full-chain sweep methods (two-site)
 // ============================================================================
 
-template<typename Scalar>
-double PDMRGGPUBase<Scalar>::sweep_LR_full() {
-    double energy = 0.0;
-    for (int site = 0; site < L_ - 1; site++) {
-        energy = optimize_bond(site, 'R', 0);
-        update_left_env(site, 0);
-    }
-    return energy;
-}
-
-template<typename Scalar>
-double PDMRGGPUBase<Scalar>::sweep_RL_full() {
-    double energy = 0.0;
-    for (int site = L_ - 2; site >= 0; site--) {
-        energy = optimize_bond(site, 'L', 0);
-        update_right_env(site + 1, 0);
-    }
-    return energy;
-}
-
 // ============================================================================
-// Full-chain single-site sweep methods (warmup and polish)
+// Full-chain single-site sweep methods (warmup and polish; per CLAUDE.md
+// PDMRG rules these are the only correct full-chain sweeps in this variant —
+// the dead two-site full-chain variants were removed as a foot-gun).
 // ============================================================================
 
 template<typename Scalar>

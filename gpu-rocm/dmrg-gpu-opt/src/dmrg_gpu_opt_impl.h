@@ -192,11 +192,6 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_batch_B_env_, batch_max * sizeof(Scalar*)));
     HIP_CHECK(hipMalloc(&d_batch_C_env_, batch_max * sizeof(Scalar*)));
 
-    // Batched GEMM pointer arrays (Step 3) — main stream only; -opt's batched
-    // Step-3 path runs inside apply_heff on stream_, never on the env path.
-    HIP_CHECK(hipMalloc(&d_batch3_A_, batch_max * sizeof(Scalar*)));
-    HIP_CHECK(hipMalloc(&d_batch3_B_, batch_max * sizeof(Scalar*)));
-    HIP_CHECK(hipMalloc(&d_batch3_C_, batch_max * sizeof(Scalar*)));
 
     // SVD workspace (on-device path is the new default; CPU path is opt-in)
     int svd_max_dim = chi_max_ * d_;
@@ -341,9 +336,6 @@ void DMRGGPUOpt<Scalar>::free_gpu_resources() {
     if (d_batch_A_env_) hipFree(d_batch_A_env_);
     if (d_batch_B_env_) hipFree(d_batch_B_env_);
     if (d_batch_C_env_) hipFree(d_batch_C_env_);
-    if (d_batch3_A_) hipFree(d_batch3_A_);
-    if (d_batch3_B_) hipFree(d_batch3_B_);
-    if (d_batch3_C_) hipFree(d_batch3_C_);
     if (d_svd_A_) hipFree(d_svd_A_);
     if (d_svd_U_) hipFree(d_svd_U_);
     if (d_svd_S_) hipFree(d_svd_S_);
@@ -1519,9 +1511,10 @@ double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta)
             dim, i, &neg_one, V, dim, d_dav_work_, 1,
             &one, V + (size_t)i * dim, 1));
 
-        // Normalize
+        // Normalize. nrm2 in host-pointer mode (default) syncs internally
+        // to return the result to host memory; explicit hipStreamSynchronize
+        // before is redundant.
         RealType nrm_v;
-        HIP_CHECK(hipStreamSynchronize(stream_));
         ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, V + (size_t)i * dim, 1, &nrm_v));
         if (nrm_v < 1e-14) {
             for (int j = 0; j < dim; j++) h_v[j] = Traits::random_val();
@@ -1542,7 +1535,8 @@ double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta)
     int k = b;  // current subspace size
 
     for (int iteration = 0; iteration < max_iter; iteration++) {
-        HIP_CHECK(hipStreamSynchronize(stream_));
+        // Same-stream rocBLAS gemm is ordered after the previous iteration's
+        // work on stream_; explicit sync at iteration entry is redundant.
 
         // Rayleigh-Ritz: H_proj = V^H @ AV  -> (k, k)
         ROCBLAS_CHECK(Traits::gemm(rocblas_h_,
@@ -1627,7 +1621,6 @@ double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta)
         ROCBLAS_CHECK(Traits::axpy(rocblas_h_, dim, &neg_energy, d_theta, 1, d_heff_result_, 1));
 
         RealType res_norm;
-        HIP_CHECK(hipStreamSynchronize(stream_));
         ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_heff_result_, 1, &res_norm));
 
         if (res_norm < tol_dav && std::abs(energy - energy_prev) < tol_dav) {
@@ -1654,7 +1647,6 @@ double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta)
             ROCBLAS_CHECK(Traits::axpy(rocblas_h_, dim, &one, d_heff_result_, 1, r_i, 1));
 
             RealType ri_norm;
-            HIP_CHECK(hipStreamSynchronize(stream_));
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, r_i, 1, &ri_norm));
 
             if (ri_norm > tol_dav * 0.01) {
@@ -1698,7 +1690,6 @@ double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta)
             }
 
             RealType wi_norm;
-            HIP_CHECK(hipStreamSynchronize(stream_));
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, wi, 1, &wi_norm));
 
             if (wi_norm > 1e-14) {
@@ -1746,7 +1737,6 @@ double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta)
                         V + (size_t)j * dim, 1, V + (size_t)i * dim, 1));
                 }
                 RealType vi_norm;
-                HIP_CHECK(hipStreamSynchronize(stream_));
                 ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, V + (size_t)i * dim, 1, &vi_norm));
                 RealType inv_vi = 1.0 / vi_norm;
                 ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_vi, V + (size_t)i * dim, 1));

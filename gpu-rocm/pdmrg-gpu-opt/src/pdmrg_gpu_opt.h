@@ -46,18 +46,23 @@ public:
     double get_energy() const { return energy_; }
     void get_mps(std::vector<std::vector<Scalar>>& h_mps) const;
     void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
+    // Toggling Davidson on disables lanczos_graph (graph capture is
+    // incompatible — apply_heff_two_site is called with AV + j*dim, variable
+    // output pointer per subspace column; capture locks in the first-seen
+    // address and Rayleigh-Ritz writes to the stale pointer, hanging the
+    // outer loop). Toggling Davidson OFF re-enables lanczos_graph if the
+    // user had it on at construction — symmetric round-trip for benchmark
+    // switches.
     void set_use_davidson(bool use_dav) {
         use_davidson_ = use_dav;
-        // LANCZOS_GRAPH + Block-Davidson is incompatible: apply_heff_two_site
-        // is called with AV + j*dim (variable output pointer per subspace
-        // column); graph capture locks in the first-seen address and replays
-        // write to the stale pointer, hanging Rayleigh-Ritz. Force the flag
-        // off here so Lanczos mode can keep using graph capture unaffected.
-        if (use_davidson_ && opts_.lanczos_graph) {
+        if (use_dav && opts_.lanczos_graph) {
             std::fprintf(stderr,
                 "[pdmrg-gpu-opt] LANCZOS_GRAPH=1 incompatible with --davidson; "
                 "disabling graph capture.\n");
             opts_.lanczos_graph = false;
+            lanczos_graph_was_user_enabled_ = true;
+        } else if (!use_dav && lanczos_graph_was_user_enabled_) {
+            opts_.lanczos_graph = true;
         }
     }
     void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
@@ -250,6 +255,9 @@ private:
     bool lanczos_use_1site_;  // when true, Lanczos calls apply_heff_single_site
     bool use_batched_sweep_;  // cross-segment batched GEMM in lock-step sweep
     bool use_chebyshev_;      // Chebyshev-filtered subspace iteration eigensolver
+    // Tracks whether set_use_davidson(true) disabled lanczos_graph, so the
+    // setter can re-enable it symmetrically when Davidson is toggled off.
+    bool lanczos_graph_was_user_enabled_ = false;
     int rsvd_oversampling_;
     int theta_size_max_;
     int max_lanczos_iter_;

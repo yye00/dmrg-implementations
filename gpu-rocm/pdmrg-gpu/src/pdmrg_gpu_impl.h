@@ -398,10 +398,6 @@ void PDMRGGPU<Scalar>::allocate_stream_workspaces() {
         HIP_CHECK(hipMalloc(&ws.d_batch_A, batch_max * sizeof(Scalar*)));
         HIP_CHECK(hipMalloc(&ws.d_batch_B, batch_max * sizeof(Scalar*)));
         HIP_CHECK(hipMalloc(&ws.d_batch_C, batch_max * sizeof(Scalar*)));
-        // Pinned host pointer arrays no longer needed — pointer setup done by GPU kernels
-        ws.h_batch_A_pinned = nullptr;
-        ws.h_batch_B_pinned = nullptr;
-        ws.h_batch_C_pinned = nullptr;
         // Cached apply_heff A/C pointers (separate device arrays)
         HIP_CHECK(hipMalloc(&ws.d_heff_batch_A, batch_max * sizeof(Scalar*)));
         HIP_CHECK(hipMalloc(&ws.d_heff_batch_C, batch_max * sizeof(Scalar*)));
@@ -1733,7 +1729,8 @@ void PDMRGGPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction, int
                             n_svd * r * sizeof(Scalar), hipMemcpyHostToDevice, streams_[si]));
     }
 
-    // Step 2: Y = theta @ Omega on GPU  (m x n_svd) @ (n_svd x r) -> (m x r)
+    // Step 2: Y = theta @ Omega on GPU  (m x n_svd) @ (n_svd x r) -> (m x r).
+    // No sync between steps — same-stream rocBLAS/rocsolver are already ordered.
     {
         Scalar one = Traits::one(), zero_val = Traits::zero();
         ROCBLAS_CHECK(Traits::gemm(handles_[si],
@@ -1743,7 +1740,6 @@ void PDMRGGPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction, int
             ws.d_rsvd_omega, n_svd,
             &zero_val,
             ws.d_rsvd_Y, m));
-        HIP_CHECK(hipStreamSynchronize(streams_[si]));
     }
 
     // Step 3: QR factorization of Y on GPU -> Q (m x r) stays on device
@@ -1751,7 +1747,6 @@ void PDMRGGPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction, int
                               hipMemcpyDeviceToDevice, streams_[si]));
     ROCBLAS_CHECK(Traits::rocsolver_geqrf(handles_[si], m, r, ws.d_rsvd_Q, m, ws.d_rsvd_ipiv));
     ROCBLAS_CHECK(Traits::rocsolver_orgqr(handles_[si], m, r, r, ws.d_rsvd_Q, m, ws.d_rsvd_ipiv));
-    HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
     // Step 4: B = Q^H @ theta on GPU  (r x m) @ (m x n_svd) -> (r x n_svd)
     {
@@ -1763,7 +1758,6 @@ void PDMRGGPU<Scalar>::rsvd_split(int site, Scalar* d_theta, char direction, int
             d_theta, m,
             &zero_val,
             ws.d_rsvd_B, r));
-        HIP_CHECK(hipStreamSynchronize(streams_[si]));
     }
 
     // Step 5: SVD of B on DEVICE — small (r × n_svd) matrix, but keeping it

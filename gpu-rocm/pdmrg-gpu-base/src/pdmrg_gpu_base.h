@@ -120,7 +120,6 @@ private:
         // Contraction intermediates
         Scalar* d_T1;
         Scalar* d_T2;
-        Scalar* d_T3;   // generic device scratch (kept for parity with -gpu)
 
         // Lanczos
         Scalar* d_theta;
@@ -204,8 +203,6 @@ private:
     void initialize_boundary_states();
 
     // === Sweep methods ===
-    double sweep_LR_full();
-    double sweep_RL_full();
     double sweep_LR_full_1site();
     double sweep_RL_full_1site();
     void segment_sweep_LR(int seg_idx);

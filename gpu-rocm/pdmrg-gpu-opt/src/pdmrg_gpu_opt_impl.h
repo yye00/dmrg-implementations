@@ -139,7 +139,7 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
     streams_.resize(n_segments_);
     handles_.resize(n_segments_);
     for (int k = 0; k < n_segments_; k++) {
-        HIP_CHECK(hipStreamCreate(&streams_[k]));
+        HIP_CHECK(hipStreamCreateWithFlags(&streams_[k], hipStreamNonBlocking));
         ROCBLAS_CHECK(rocblas_create_handle(&handles_[k]));
         ROCBLAS_CHECK(rocblas_set_stream(handles_[k], streams_[k]));
     }
@@ -152,7 +152,7 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
         worker_streams_[k].resize(n_workers_);
         worker_handles_[k].resize(n_workers_);
         for (int w = 0; w < n_workers_; w++) {
-            HIP_CHECK(hipStreamCreate(&worker_streams_[k][w]));
+            HIP_CHECK(hipStreamCreateWithFlags(&worker_streams_[k][w], hipStreamNonBlocking));
             ROCBLAS_CHECK(rocblas_create_handle(&worker_handles_[k][w]));
             ROCBLAS_CHECK(rocblas_set_stream(worker_handles_[k][w], worker_streams_[k][w]));
         }
@@ -218,7 +218,7 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
     davidson_b_ = 4;
     davidson_max_sub_ = std::min(davidson_b_ * 8, theta_size_max_);
     use_cpu_svd_ = false;
-    use_davidson_ = false;  // default: use Lanczos (device-pointer-mode, 2-3 syncs/bond)
+    use_davidson_ = true;   // -opt's defining choice — sister -opt variants default true; round-7 fix.
     use_rsvd_ = false;
     lanczos_use_1site_ = false;
     use_batched_sweep_ = false;  // cross-segment batching: slower for n_segments=2 due to BLAS-1 serialization

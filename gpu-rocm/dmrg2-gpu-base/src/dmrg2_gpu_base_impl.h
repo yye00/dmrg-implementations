@@ -59,10 +59,6 @@ DMRG2GPUBase<Scalar>::DMRG2GPUBase(int L, int d, int chi_max, int D_mpo, double 
     int t_max = D_mpo_ * dd * chi_max_ * chi_max_;
     HIP_CHECK(hipMalloc(&d_T1_, t_max * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_T2_, t_max * sizeof(Scalar)));
-    // d_T3_ retained as a generic scratch for symmetry with the optimized variant;
-    // the per-bond fused MPO (WW) lives in d_WW_[bond] precomputed at set_mpo time.
-    int ww_size = D_mpo_ * dd * dd * D_mpo_;
-    HIP_CHECK(hipMalloc(&d_T3_, ww_size * sizeof(Scalar)));
 
     // MPS tensors
     d_mps_tensors_.resize(L, nullptr);
@@ -164,7 +160,6 @@ void DMRG2GPUBase<Scalar>::free_gpu_resources() {
     if (d_ritz_coeffs_) hipFree(d_ritz_coeffs_);
     if (d_T1_) hipFree(d_T1_);
     if (d_T2_) hipFree(d_T2_);
-    if (d_T3_) hipFree(d_T3_);
     if (d_dot_result_) hipFree(d_dot_result_);
     if (d_nrm2_result_) hipFree(d_nrm2_result_);
     if (d_inv_nrm_) hipFree(d_inv_nrm_);

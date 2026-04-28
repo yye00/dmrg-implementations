@@ -93,7 +93,6 @@ private:
     // (chi*d) × (D*d*chi) for the two-site H_eff path.
     Scalar* d_T1_;
     Scalar* d_T2_;
-    Scalar* d_T3_;
 
     // Lanczos workspace
     Scalar* d_theta_;

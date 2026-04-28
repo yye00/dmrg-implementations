@@ -82,11 +82,12 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     // instead of AV + j*dim, Rayleigh-Ritz sees garbage, and the outer loop
     // hangs indefinitely. Force the flag off with a one-line warning; use
     // dmrg-gpu (Lanczos) or pdmrg-gpu for graph-captured apply_heff.
-    if (opts_.lanczos_graph) {
+    if (opts_.lanczos_graph && use_davidson_) {
         std::fprintf(stderr,
             "[dmrg2-gpu-opt] LANCZOS_GRAPH=1 is incompatible with Block-Davidson "
             "(variable output pointer per subspace column). Disabling.\n");
         opts_.lanczos_graph = false;
+        lanczos_graph_was_user_enabled_ = true;
     }
 
     // D_PAD: round MPO bond dim up to a multiple of 8 for MFMA-friendly

@@ -161,10 +161,6 @@ private:
     Scalar** d_batch_B_env_;
     Scalar** d_batch_C_env_;
 
-    // Step-3 batched GEMM pointer arrays (D*d entries for apply_heff/env update)
-    Scalar** d_batch3_A_;
-    Scalar** d_batch3_B_;
-    Scalar** d_batch3_C_;
 
     // SVD workspace (on-device — replaces the previous host-LAPACK svd_fallback)
     Scalar* d_svd_A_;

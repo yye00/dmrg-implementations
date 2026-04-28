@@ -65,7 +65,20 @@ public:
     // for flags genuinely N/A in two-site DMRG (set_use_batched_sweep,
     // set_use_chebyshev) are intentionally absent rather than no-ops.
     void set_cpu_svd(bool use_cpu) { use_cpu_svd_ = use_cpu; }
-    void set_use_davidson(bool use_dav) { use_davidson_ = use_dav; }
+    // Toggling Davidson on disables lanczos_graph (graph capture is
+    // incompatible with Davidson's variable output pointer per subspace
+    // column). Toggling Davidson OFF re-enables lanczos_graph if the user
+    // had it on at construction — symmetric round-trip for benchmark
+    // switches.
+    void set_use_davidson(bool use_dav) {
+        use_davidson_ = use_dav;
+        if (use_dav && opts_.lanczos_graph) {
+            opts_.lanczos_graph = false;
+            lanczos_graph_was_user_enabled_ = true;
+        } else if (!use_dav && lanczos_graph_was_user_enabled_) {
+            opts_.lanczos_graph = true;
+        }
+    }
     void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
     void set_quiet(bool) {}  // no-op (matches pdmrg-gpu-opt API surface)
 
@@ -211,6 +224,9 @@ private:
     bool use_cpu_svd_ = false;       // opt-in CPU LAPACK SVD path (legacy)
     bool use_davidson_ = true;       // -opt's defining choice; false → Lanczos
     bool use_rsvd_ = false;          // opt-in randomized SVD (round-5 port)
+    // Tracks whether the ctor disabled lanczos_graph because Davidson was
+    // on, so set_use_davidson(false) can re-enable it symmetrically.
+    bool lanczos_graph_was_user_enabled_ = false;
     PhaseTimer t_lanczos_;      // full lanczos_eigensolver call
     PhaseTimer t_apply_heff_;   // each apply_heff invocation
     PhaseTimer t_svd_;          // SVD bond splitting
