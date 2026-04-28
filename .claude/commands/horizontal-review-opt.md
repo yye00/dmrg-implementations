@@ -20,8 +20,21 @@ Plus the corresponding -gpu siblings (for J2 superset check) and
 
 ## Methodology
 
-Read `.claude/review-methodology.md` and follow techniques A through E
+Read `.claude/review-methodology.md` and follow techniques A through G
 in full. Skipping a technique invalidates the review.
+
+**Technique F (workspace-aliasing) is mandatory and CRITICAL for
+-opt.** The round-8 CR-D1 finding (`d_dav_work_` overrun in both
+dmrg-gpu-opt and dmrg2-gpu-opt) was exactly this miss — the H6 syev
+port introduced new buffer aliasing without updating the ctor sizing.
+Trace every shared scratch buffer in block_davidson_eigensolver and
+apply_heff for each -opt variant. Pay especial attention to commits
+that "ported" a feature from -gpu — those are the places aliasing
+gets out of sync.
+
+**Technique G (sibling fix-propagation) is mandatory.** For each
+fix in any -opt variant, verify the other two -opt siblings AND the
+matching -gpu / -base variants are consistent.
 
 ## J2 contract
 

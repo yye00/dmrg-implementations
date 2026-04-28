@@ -2,10 +2,21 @@
 
 Reusable methodology for the seven family/tier review commands in
 `.claude/commands/{vertical,horizontal,conformity}-review-*.md`.
-Encapsulates the lessons from rounds 4-6 — particularly the
-dmrg2-gpu dead-infrastructure miss caught only in round 7.
+Encapsulates lessons from rounds 4-8:
+- Round 7 caught the dmrg2-gpu dead-infrastructure miss → led to
+  technique A.
+- Round 7 caught dual-stream env-update overlap missing in -opt
+  variants despite -gpu sibling having it → led to technique B.
+- Round 7 caught the false `accurate_svd_gpu` claim in pdmrg-gpu-base
+  docstring → led to technique C.
+- Round 8 caught a regression I introduced (CR-D1: Davidson buffer
+  overrun from new aliasing without ctor resize) → leads to
+  **technique F** (workspace-aliasing audit).
+- Round 8 caught a fix that wasn't back-ported to a sibling variant
+  (C-new1: round-7 C6 fix in pdmrg-gpu-opt missed pdmrg-gpu-base) →
+  leads to **technique G** (sibling fix-class propagation).
 
-The five techniques (A-E) are MANDATORY. A review that skips any of
+The seven techniques (A-G) are MANDATORY. A review that skips any of
 them returns invalid even if it finds real defects, because the
 techniques exist to surface different *classes* of defect.
 
@@ -152,6 +163,100 @@ The reviewer reports each expected feature as `present` / `MISSING`
 
 ---
 
+## Technique F — Workspace-aliasing audit
+
+**Purpose**: catch buffer-sizing bugs when a single device buffer
+holds two or more concurrent regions. This is the round-8 CR-D1
+class: my round-7 H6 syev port routed the residual loop's overlap
+matrix into `d_dav_work_ + n_new*dim`, but the constructor sized
+`dav_work_sz` for residuals only. The aliasing logic was correct;
+the buffer was 128 Scalars short. Smoke tests with `dim < 256` ride
+the 1024-Scalar floor and pass; benchmark-sized runs corrupt the
+adjacent allocation.
+
+**Procedure**: identify every device buffer that is used as scratch
+in a hot-path function. For each:
+
+1. List the regions the buffer hosts during the function's execution
+   (e.g., `d_dav_work_` hosts: residuals W [0, n_new*dim), overlap
+   matrix [n_new*dim, n_new*dim + k*n_new), and possibly a third
+   region in the restart path).
+2. For each region pair, determine if their lifetimes are concurrent
+   (both live at the same point in execution) or sequential.
+3. Compute the required total size:
+   - **Concurrent regions**: `total = sum of region sizes`.
+   - **Sequential regions** (one dead before next is born):
+     `total = max of region sizes`.
+4. Find the buffer's allocation in the constructor (or
+   `allocate_*_workspaces` for per-stream variants). Verify the
+   allocation matches the required total.
+
+Apply this to every shared scratch buffer touched by recent code
+changes. The most common offenders:
+
+- `d_dav_work_` / `d_dav_work2_` (Block-Davidson — residuals,
+  overlap, projected H, eigvecs).
+- `d_T1_` / `d_T2_` (apply_heff — multiple roles per call).
+- `d_svd_work` / `d_svd_A` (SVD — input, output, scratch).
+- `d_rsvd_*` (randomized SVD — Y, Q, B, U_small).
+- `d_batch_*_` / `d_batch_*_env_` (batched-GEMM pointer tables —
+  must not be shared between concurrent streams).
+
+**Special attention** when a recent commit changed how a buffer is
+sliced — that is exactly where size requirements drift.
+
+**Output**: a table per shared buffer — `Buffer | Regions | Lifetime
+(concurrent/sequential) | Required size | Allocated size | Verdict`.
+Verdict is `OK` (allocated ≥ required) or `OVERRUN` (allocated <
+required by N elements).
+
+---
+
+## Technique G — Sibling fix-class propagation
+
+**Purpose**: catch defects that were fixed in one variant but never
+back-ported to its siblings. This is the round-8 C-new1 class:
+round-7 fixed C6 (canonical-Vh swap before R_env build) in
+pdmrg-gpu-opt — but pdmrg-gpu-base had the exact same defect and was
+never touched. Three rounds went by without anyone asking "if -opt
+needs this fix, do -base and -gpu need it too?"
+
+**Procedure**: for each defect class fixed in a recent commit:
+
+1. **Read the commit log** since the last conformity baseline (or
+   the most recent `reviews/conformity-*.md` if one exists).
+2. For each fix, identify the **defect class**, not just the file:
+   - "canonical-Vh swap before R_env" (defect class).
+   - "rocsolver_syevd replaces host LAPACK" (defect class).
+   - "non-blocking stream flag" (defect class).
+3. For each defect class, enumerate the **sibling variants** in
+   scope of the current review:
+   - Vertical review: -base, -gpu, -gpu-opt of the family.
+   - Horizontal review: same-tier siblings of other families.
+4. For each sibling, verify ONE of:
+   - **Already fixed**: the same fix was applied (cite file:line).
+   - **Genuinely immune**: the variant lacks the relevant feature
+     (e.g., -base has no Davidson, so the syev port doesn't apply).
+     Document the immunity.
+   - **Needs fixing**: the defect is present in the sibling and was
+     missed. **Flag as a CRITICAL or HIGH (severity matches the
+     original).**
+
+The "genuinely immune" leg is what distinguishes G from B. Technique
+B compares current code; technique G specifically asks "did the
+recent fix propagate, or did it stop at one variant?"
+
+**Output**: a table per recent fix — `Fix | Variant | Status (fixed
+/ immune / MISSING)`. Any MISSING entry is a finding.
+
+This technique is mandatory for vertical reviews (which see all
+three tiers of one family) and horizontal reviews (which see all
+three families of one tier). The orchestrator's brief embeds the
+last conformity report's "what was fixed in the most recent batch"
+list to make this concrete.
+
+---
+
 ## Output template
 
 Every review command emits a Markdown report with this structure:
@@ -168,6 +273,8 @@ Every review command emits a Markdown report with this structure:
 | C. Docstring verification | DONE / SKIPPED | n unverified claims |
 | D. clangd filter | DONE / SKIPPED / N-A | n real warnings |
 | E. Absence-naming brief | FOLLOWED | — |
+| F. Workspace-aliasing audit | DONE / SKIPPED | n shared buffers checked, n OVERRUN |
+| G. Sibling fix-propagation | DONE / SKIPPED | n recent fixes traced, n MISSING in siblings |
 
 A review with any technique SKIPPED that is not N-A is INVALID.
 
@@ -212,9 +319,29 @@ A review with any technique SKIPPED that is not N-A is INVALID.
 
 ## Reviewer mindset
 
-Reviewers default to "is this present and correct." The techniques
-above force the reviewer to also ask "is this complete and used."
+Reviewers default to "is this present and correct." The seven
+techniques force the reviewer to also ask:
+
+- "is this complete and used" (A, E),
+- "does this match its sibling" (B),
+- "does the doc match the code" (C),
+- "what real signal is in the noise" (D),
+- "does the workspace size match the workspace usage" (F),
+- "did the recent fix propagate to all variants that need it" (G).
 
 If a finding feels uncomfortable to write up because the code "looks
 fine" — write it up anyway. The dmrg2-gpu dead-stream miss looked
-fine for three rounds.
+fine for three rounds. The CR-D1 buffer overrun looked fine because
+the aliasing logic was correct — only the size was wrong, in a
+different file. The C-new1 missing canonical-Vh swap looked fine
+because pdmrg-gpu-base had always done it that way — but its
+sibling -opt had been fixed in the same commit cycle and the -base
+sibling never got the same audit.
+
+**Specifically watch for "regression-by-the-fix":** a fix in one
+variant that introduces aliasing or restructuring without updating
+the corresponding sizing or sibling code. Round-8 CR-D1 is the
+canonical example. Technique F catches this. **And specifically
+watch for "lonely fix": a defect-class fix in one variant whose
+siblings still have the defect.** Round-8 C-new1 is the canonical
+example. Technique G catches this.

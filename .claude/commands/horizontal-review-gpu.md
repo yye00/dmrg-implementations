@@ -20,8 +20,16 @@ Plus: `gpu-rocm/common/scalar_traits.h`, `gpu-rocm/common/gpu_opts.h`,
 
 ## Methodology
 
-Read `.claude/review-methodology.md` and follow techniques A through E
+Read `.claude/review-methodology.md` and follow techniques A through G
 in full. Skipping a technique invalidates the review.
+
+**Technique F (workspace-aliasing) is mandatory.** Multi-stream
+buffers in pdmrg-gpu (per-StreamWorkspace) are particularly easy to
+mis-size when refactored.
+
+**Technique G (sibling fix-propagation) is mandatory.** For each
+recent fix in any -gpu variant, verify the other two -gpu siblings
+either have the same fix or are genuinely immune.
 
 ## Required -gpu feature set (technique E expectations)
 

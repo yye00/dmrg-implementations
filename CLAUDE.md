@@ -118,6 +118,48 @@ rocm-smi --showproductname
 
 ---
 
+## Pre-GPU-run readiness gate (round-8 lesson)
+
+GPU time is expensive. Burning a window only to discover an
+overruning Davidson buffer or a missing canonical-Vh swap in the
+sibling -base is a 10× cost multiplier vs catching it in static
+review.
+
+**Before declaring "ready for GPU run" or invoking
+`/conformity-review-full`, ALWAYS run `/pre-commit-self-audit`
+first.**
+
+The self-audit forces:
+- **Technique F** (workspace-aliasing): for every shared scratch
+  buffer touched in this batch, list its concurrent regions and
+  verify the ctor allocation ≥ sum of region sizes. Round-8 CR-D1
+  was a 128-Scalar overrun in `d_dav_work_` introduced by my own
+  round-7 H6 syev port. The aliasing was correct; the buffer was
+  too small. Smoke tests with `dim < 256` ride a different code
+  path; benchmark sizes corrupt the next allocation.
+- **Technique G** (sibling fix-propagation): for every defect class
+  fixed in this batch, list the sibling variants (-base, -gpu,
+  -gpu-opt of the family; same-tier siblings of other families) and
+  verify each is fixed, immune, or flagged-MISSING. Round-8 C-new1
+  was the C6 canonical-Vh swap that was fixed in pdmrg-gpu-opt in
+  round-7 but never propagated to pdmrg-gpu-base — same defect, four
+  rounds undetected.
+
+The self-audit ALSO requires:
+- A regression watch over the prior `reviews/conformity-*.md`
+  baseline (verify earlier fixes didn't get reverted by the new
+  edits).
+- An explicit verdict: READY / NOT READY. NOT READY means do not
+  invoke the orchestrator and do not tell the user "ready for the
+  GPU run."
+
+The full review-methodology lives in
+`.claude/review-methodology.md` (techniques A through G). The
+sub-review commands in `.claude/commands/{vertical,horizontal,
+conformity}-review-*.md` enforce A-G in the orchestrator.
+
+---
+
 **Last Updated**: 2026-04-15
 **Purpose**: DMRG GPU implementations + PDMRG performance study
 

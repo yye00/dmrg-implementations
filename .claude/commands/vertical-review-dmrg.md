@@ -20,8 +20,18 @@ referenced.
 
 ## Methodology
 
-Read `.claude/review-methodology.md` and follow techniques A through E
+Read `.claude/review-methodology.md` and follow techniques A through G
 in full. Skipping a technique invalidates the review.
+
+**Technique F (workspace-aliasing) is mandatory for any review run
+after a commit that changed how a shared scratch buffer is used.** The
+round-8 CR-D1 regression (Davidson `d_dav_work_` overrun) is the
+canonical failure mode this technique catches.
+
+**Technique G (sibling fix-propagation) is mandatory.** Read
+`reviews/conformity-*.md` and the most recent commit log; for each
+recent fix, verify the same fix landed (or genuine immunity) in -gpu
+and -gpu-opt of this family.
 
 ## Hot-path functions for technique B (behavioral diff)
 

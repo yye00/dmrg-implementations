@@ -21,8 +21,15 @@ Plus: `gpu-rocm/common/scalar_traits.h`,
 
 ## Methodology
 
-Read `.claude/review-methodology.md` and follow techniques A through E
+Read `.claude/review-methodology.md` and follow techniques A through G
 in full. Skipping a technique invalidates the review.
+
+**Technique G (sibling fix-propagation) is the highest-leverage
+technique for the -base tier.** When a defect is fixed in a -opt or
+-gpu variant, the -base sibling almost never gets the same audit
+unless this technique forces it. The round-8 C-new1 finding (canonical
+Vh swap missing in pdmrg-gpu-base after C6 was fixed in -opt) was
+exactly this miss.
 
 ## What "conformity" means at the -base tier
 

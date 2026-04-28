@@ -16,6 +16,24 @@ Before major events:
 
 ## Procedure
 
+0. **Build the regression-watch list FIRST.** Before dispatching the
+   sub-reviews, build a list of fixes since the last conformity
+   baseline. This list MUST be embedded in each sub-reviewer's brief
+   so technique G (sibling fix-propagation) has concrete fixes to
+   trace. Procedure:
+
+   - Find the most recent `reviews/conformity-*.md` baseline (the
+     report from the previous orchestrator run).
+   - `git log --oneline <baseline-commit>..HEAD -- gpu-rocm/` to
+     enumerate fixes since.
+   - For each fix, identify the **defect class** (canonical-Vh swap
+     missing; Davidson `d_dav_work_` aliasing; pointer-mode RAII
+     missing; etc.), not just the file. Defect classes are what
+     siblings can also have.
+   - Pass the list to each sub-reviewer in their brief as the
+     "regression watch list" they must verify did NOT regress AND
+     did propagate to siblings.
+
 1. **Spawn 6 sub-reviews in parallel** — issue 6 Agent calls in a
    single message:
 
@@ -27,7 +45,7 @@ Before major events:
    - `/horizontal-review-opt`
 
    Each sub-review reads `.claude/review-methodology.md` and
-   follows techniques A-E. Each emits a standard Markdown report
+   follows techniques A-G. Each emits a standard Markdown report
    with criticals / highs / mediums / nits / false-positives.
 
 2. **Collect the 6 reports.** They will overlap — for example, a

@@ -21,8 +21,19 @@ Plus: `gpu-rocm/common/scalar_traits.h`, `gpu-rocm/common/gpu_opts.h`,
 
 ## Methodology
 
-Read `.claude/review-methodology.md` and follow techniques A through E
+Read `.claude/review-methodology.md` and follow techniques A through G
 in full. Skipping a technique invalidates the review.
+
+**Technique F (workspace-aliasing) is mandatory.** pdmrg-gpu-opt has
+the largest set of shared scratch buffers (per-StreamWorkspace
+multiples) — trace each buffer's regions and confirm sizing.
+
+**Technique G (sibling fix-propagation) is mandatory and CRITICAL
+for pdmrg.** The round-8 C-new1 finding was exactly this: round-7
+fixed the canonical-Vh swap (C6) in -opt but the same defect-class
+existed in -base and was missed. Read `reviews/conformity-*.md`,
+identify each defect-class fix, and verify it propagated across all
+three pdmrg tiers.
 
 ## Hot-path functions for technique B (behavioral diff)
 

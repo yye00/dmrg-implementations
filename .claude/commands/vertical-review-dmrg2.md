@@ -20,8 +20,17 @@ referenced.
 
 ## Methodology
 
-Read `.claude/review-methodology.md` and follow techniques A through E
+Read `.claude/review-methodology.md` and follow techniques A through G
 in full. Skipping a technique invalidates the review.
+
+**Technique F (workspace-aliasing) is mandatory.** dmrg2-gpu-opt's
+Block-Davidson `d_dav_work_` was the round-8 CR-D1 site — verify
+the buffer-size fix at ctor matches the residual+overlap concurrent
+layout at the inner loop.
+
+**Technique G (sibling fix-propagation) is mandatory.** Confirm any
+fix applied to -opt was also applied (or is immune in) -gpu and
+-base, and vice versa.
 
 ## Hot-path functions for technique B (behavioral diff)
 
