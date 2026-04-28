@@ -149,6 +149,9 @@ void PDMRGGPUBase<Scalar>::allocate_stream_workspaces() {
                                                       (size_t)svd_max_k * svd_max_n) * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_svd_E,    svd_max_k * sizeof(RealType)));
         HIP_CHECK(hipMalloc(&ws.d_svd_info, sizeof(int)));
+        // Round-8 fix (C-new1): boundary R_env must be built from canonical
+        // Vh, not from S*Vh — pre-allocate the swap buffer.
+        HIP_CHECK(hipMalloc(&ws.d_Vh_canonical, theta_size_max_ * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_svdj_residual, sizeof(double)));
         HIP_CHECK(hipMalloc(&ws.d_svdj_n_sweeps, sizeof(rocblas_int)));
 
@@ -211,6 +214,7 @@ void PDMRGGPUBase<Scalar>::free_gpu_resources() {
         if (ws.d_svd_work) hipFree(ws.d_svd_work);
         if (ws.d_svd_E) hipFree(ws.d_svd_E);
         if (ws.d_svd_info) hipFree(ws.d_svd_info);
+        if (ws.d_Vh_canonical) hipFree(ws.d_Vh_canonical);
         if (ws.d_svdj_residual) hipFree(ws.d_svdj_residual);
         if (ws.d_svdj_n_sweeps) hipFree(ws.d_svdj_n_sweeps);
         if (ws.d_psi_R) hipFree(ws.d_psi_R);
@@ -1310,7 +1314,27 @@ double PDMRGGPUBase<Scalar>::merge_and_optimize_boundaries(int parity) {
         }
 
         update_left_env(bsite, si);
+
+        // Round-8 fix (C-new1): R_env must be built from canonical Vh, NOT
+        // from S·Vh. Using S·Vh gives norm = S² ≠ I, breaking N_eff = I in
+        // downstream Lanczos eigensolves. Mirrors pdmrg-gpu and pdmrg-gpu-opt.
+        Scalar* d_SVh_tensor = d_mps_tensors_[bsite + 1];
+        size_t vh_size = (size_t)new_k * n_svd;
+        if (new_k == full_k) {
+            HIP_CHECK(hipMemcpyAsync(ws.d_Vh_canonical, ws.d_svd_Vh,
+                        vh_size * sizeof(Scalar),
+                        hipMemcpyDeviceToDevice, streams_[si]));
+        } else {
+            HIP_CHECK(hipMemcpy2DAsync(
+                ws.d_Vh_canonical,    new_k  * sizeof(Scalar),
+                ws.d_svd_Vh,          full_k * sizeof(Scalar),
+                new_k * sizeof(Scalar), n_svd,
+                hipMemcpyDeviceToDevice, streams_[si]));
+        }
+        d_mps_tensors_[bsite + 1] = ws.d_Vh_canonical;
         update_right_env(bsite + 1, si);
+        d_mps_tensors_[bsite + 1] = d_SVh_tensor;
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
     }
     return energy;
 }

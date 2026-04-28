@@ -152,6 +152,12 @@ private:
         RealType* d_svd_S;
         Scalar* d_svd_Vh;
         Scalar* d_svd_work;            // device scratch for S*Vh (or U*S)
+        // Pre-allocated buffer for the right-canonical Vh used in the
+        // boundary-merge R_env build (round-7 follow-up: build R_env from
+        // Vh, NOT from S*Vh, otherwise norm = S² ≠ I poisons N_eff = I in
+        // downstream Lanczos eigensolves). Mirrors the pdmrg-gpu and
+        // pdmrg-gpu-opt swap pattern.
+        Scalar* d_Vh_canonical;
         RealType* d_svd_E;
         int* d_svd_info;
         // rocsolver_gesvdj output scalars (residual + sweep count, on device).

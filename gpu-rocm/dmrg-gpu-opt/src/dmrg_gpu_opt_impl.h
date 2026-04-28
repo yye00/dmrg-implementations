@@ -297,8 +297,15 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_dav_V_,     (size_t)theta_size_max_ * davidson_max_sub_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_dav_AV_,    (size_t)theta_size_max_ * davidson_max_sub_ * sizeof(Scalar)));
     {
-        size_t dav_work_sz = std::max((size_t)theta_size_max_ * davidson_b_,
-                                       (size_t)davidson_max_sub_ * davidson_max_sub_);
+        // d_dav_work_ holds two regions concurrently inside the inner
+        // loop after the round-7 C2/H6 syev port: residuals W at offset 0
+        // (size up to b·dim) AND overlap matrix at offset n_new*dim
+        // (size up to max_sub·b). Without the second term, d_dav_work_
+        // overruns by max_sub·b Scalars on every Davidson iteration.
+        size_t dav_work_sz = std::max(
+            (size_t)theta_size_max_ * davidson_b_
+                + (size_t)davidson_max_sub_ * davidson_b_,
+            (size_t)davidson_max_sub_ * davidson_max_sub_);
         HIP_CHECK(hipMalloc(&d_dav_work_,  dav_work_sz * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&d_dav_work2_, dav_work_sz * sizeof(Scalar)));
     }
