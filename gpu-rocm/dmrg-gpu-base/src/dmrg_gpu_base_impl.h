@@ -35,7 +35,7 @@ DMRGGPUBase<Scalar>::DMRGGPUBase(int L, int d, int chi_max, int D_mpo, double to
     // GPU handles — single stream, single rocBLAS handle.
     // Pointer mode is set per-call (host for setup/SVD, device for the
     // Lanczos inner loop where BLAS-1 results stay on device).
-    HIP_CHECK(hipStreamCreate(&stream_));
+    HIP_CHECK(hipStreamCreateWithFlags(&stream_, hipStreamNonBlocking));
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
     ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
 

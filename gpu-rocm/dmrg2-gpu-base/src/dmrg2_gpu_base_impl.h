@@ -31,7 +31,7 @@ DMRG2GPUBase<Scalar>::DMRG2GPUBase(int L, int d, int chi_max, int D_mpo, double 
         bond_dims_[i] = (exact_dim > chi_max_) ? chi_max_ : (int)exact_dim;
     }
 
-    HIP_CHECK(hipStreamCreate(&stream_));
+    HIP_CHECK(hipStreamCreateWithFlags(&stream_, hipStreamNonBlocking));
     ROCBLAS_CHECK(rocblas_create_handle(&rocblas_h_));
     ROCBLAS_CHECK(rocblas_set_stream(rocblas_h_, stream_));
 

@@ -621,15 +621,20 @@ void PDMRGMultiGPU<Scalar>::set_mpo(const std::vector<Scalar*>& h_mpo_tensors) {
                         h_WR[(wp*d+s) + (w*d+sp) * D * d] = val;
                     }
 
-        // Replicate MPO to all devices
+        // Replicate MPO to all devices. Round-10 self-audit M4-W-multi:
+        // guard against double-call (mirrors round-9 M4-W fix in the
+        // single-host pdmrg variants).
         for (int k = 0; k < n_devices_; k++) {
             HIP_CHECK(hipSetDevice(devices_[k].device_id));
+            if (devices_[k].d_mpo[i]) HIP_CHECK(hipFree(devices_[k].d_mpo[i]));
             HIP_CHECK(hipMalloc(&devices_[k].d_mpo[i], size * sizeof(Scalar)));
             HIP_CHECK(hipMemcpy(devices_[k].d_mpo[i], h_mpo_tensors[i],
                                 size * sizeof(Scalar), hipMemcpyHostToDevice));
+            if (devices_[k].d_W_left[i]) HIP_CHECK(hipFree(devices_[k].d_W_left[i]));
             HIP_CHECK(hipMalloc(&devices_[k].d_W_left[i], wm_size * sizeof(Scalar)));
             HIP_CHECK(hipMemcpy(devices_[k].d_W_left[i], h_WL.data(),
                                 wm_size * sizeof(Scalar), hipMemcpyHostToDevice));
+            if (devices_[k].d_W_right[i]) HIP_CHECK(hipFree(devices_[k].d_W_right[i]));
             HIP_CHECK(hipMalloc(&devices_[k].d_W_right[i], wm_size * sizeof(Scalar)));
             HIP_CHECK(hipMemcpy(devices_[k].d_W_right[i], h_WR.data(),
                                 wm_size * sizeof(Scalar), hipMemcpyHostToDevice));

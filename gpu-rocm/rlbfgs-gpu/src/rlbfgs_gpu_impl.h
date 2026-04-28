@@ -118,7 +118,7 @@ RLBFGSGPU<Scalar>::RLBFGSGPU(int L, int d, int chi_max, int D_mpo, double tol)
         bond_dims_[i] = (exact > chi_max) ? chi_max : (int)exact;
     }
 
-    HIP_CHECK(hipStreamCreate(&stream_));
+    HIP_CHECK(hipStreamCreateWithFlags(&stream_, hipStreamNonBlocking));
     ROCBLAS_CHECK(rocblas_create_handle(&handle_));
     ROCBLAS_CHECK(rocblas_set_stream(handle_, stream_));
 
