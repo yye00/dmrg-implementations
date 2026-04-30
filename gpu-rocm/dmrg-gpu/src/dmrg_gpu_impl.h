@@ -9,25 +9,7 @@
 #include <chrono>
 
 #include "../../common/hip_check.h"
-
-
-// RAII guard for rocBLAS pointer mode. Captures caller's mode, installs the
-// requested mode, restores caller's mode on destruction. Covers exception
-// unwinding paths through ROCBLAS_CHECK / HIP_CHECK throws inside Lanczos
-// device-mode regions.
-struct DmrgPointerModeGuard {
-    rocblas_handle handle;
-    rocblas_pointer_mode prev_mode;
-    DmrgPointerModeGuard(rocblas_handle h, rocblas_pointer_mode new_mode) : handle(h) {
-        rocblas_get_pointer_mode(h, &prev_mode);
-        rocblas_set_pointer_mode(h, new_mode);
-    }
-    ~DmrgPointerModeGuard() {
-        rocblas_set_pointer_mode(handle, prev_mode);  // best-effort
-    }
-    DmrgPointerModeGuard(const DmrgPointerModeGuard&) = delete;
-    DmrgPointerModeGuard& operator=(const DmrgPointerModeGuard&) = delete;
-};
+#include "../../common/pointer_mode_guard.h"
 
 // ============================================================================
 // GPU kernels for batched GEMM pointer setup (eliminates CPU→GPU pointer copies)
@@ -1058,7 +1040,7 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
         // check immediately after this block needs host mode, matching
         // pre-guard semantics.
         {
-        DmrgPointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
+        PointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
 
         // alpha_i = <v_i|w> → device
         ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_vi, 1, d_heff_result_, 1, d_dot_result_));
@@ -1204,7 +1186,7 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     // below — replaces the prior inline `set device ... set host` pattern
     // which leaked device mode into the caller's handle on rocBLAS failure.
     {
-        DmrgPointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
+        PointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
         ROCBLAS_CHECK(Traits::gemv(
             rocblas_h_, rocblas_operation_none,
             n, niter, d_const_one_,

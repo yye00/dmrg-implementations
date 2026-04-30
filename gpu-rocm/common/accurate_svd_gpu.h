@@ -54,28 +54,7 @@
         } \
     } while (0)
 
-// RAII guard for rocBLAS pointer mode. Captures caller's mode at construction,
-// installs the requested mode, restores caller's mode on destruction (including
-// when destruction fires via stack-unwinding from a thrown exception). Replaces
-// the previous inline `rocblas_set_pointer_mode(prev_pm)` calls scattered
-// before every throw / return — those couldn't cover the implicit ASVD_HIP_CHECK
-// throws inside step-6 hipMemcpyAsync blocks, leaking host-mode state into the
-// caller's handle on rare HIP failures.
-struct AsvdPointerModeGuard {
-    rocblas_handle handle;
-    rocblas_pointer_mode prev_mode;
-    AsvdPointerModeGuard(rocblas_handle h, rocblas_pointer_mode new_mode) : handle(h) {
-        rocblas_get_pointer_mode(h, &prev_mode);
-        rocblas_set_pointer_mode(h, new_mode);
-    }
-    ~AsvdPointerModeGuard() {
-        // Best-effort restore. Swallow errors: throwing from a destructor
-        // during stack unwinding would call std::terminate.
-        rocblas_set_pointer_mode(handle, prev_mode);
-    }
-    AsvdPointerModeGuard(const AsvdPointerModeGuard&) = delete;
-    AsvdPointerModeGuard& operator=(const AsvdPointerModeGuard&) = delete;
-};
+#include "pointer_mode_guard.h"
 
 // ============================================================================
 // On-device split-point kernel.
@@ -272,7 +251,7 @@ inline void accurate_svd_gpu(
     // per-block boilerplate. Replaces the prior pattern of inline
     // `rocblas_set_pointer_mode(prev_pm); throw;` before each error site,
     // which couldn't cover the implicit ASVD_HIP_CHECK throws in step 6.
-    AsvdPointerModeGuard pm_guard(handle, rocblas_pointer_mode_host);
+    PointerModeGuard pm_guard(handle, rocblas_pointer_mode_host);
 
     rocblas_status st = Traits::rocsolver_gesvd(
         handle,
@@ -360,7 +339,7 @@ inline void accurate_svd_gpu(
 
     // --- Step 5: Recursive accurate SVD of X (sub_k × sub_k) ---
     // Outputs go into the next-depth slot's U/S/Vh buffers. The recursive
-    // call manages its own AsvdPointerModeGuard — it sees host mode on entry
+    // call manages its own PointerModeGuard — it sees host mode on entry
     // (we're still in host mode here), captures it, and restores host on
     // exit. No need to flip pointer mode around the recursion.
     accurate_svd_gpu<Scalar>(

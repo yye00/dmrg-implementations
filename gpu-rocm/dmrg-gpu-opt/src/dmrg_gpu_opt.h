@@ -96,7 +96,6 @@ public:
         }
     }
     void set_rsvd(bool use_rsvd) { use_rsvd_ = use_rsvd; }
-    void set_quiet(bool) {}  // no-op (matches pdmrg-gpu-opt API surface)
 
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }

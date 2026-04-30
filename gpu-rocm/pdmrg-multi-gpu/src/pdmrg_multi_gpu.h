@@ -13,13 +13,21 @@
 /**
  * Multi-GPU Stream-Parallel DMRG (PDMRG) across multiple MI300X devices
  *
- * Extends pdmrg-gpu: each segment is assigned to a separate GPU device
- * instead of separate HIP streams on the same device.
+ * Companion variant to pdmrg-gpu: each segment is assigned to a separate
+ * GPU device instead of separate HIP streams on the same device.
  *
  * - Each device owns its segment's MPS tensors, environments, and workspace
  * - MPO tensors are replicated to all devices (read-only, small)
  * - Boundary merges use P2P access or explicit D2D staging
  * - Warmup and polish phases gather MPS to device 0 for full-chain sweeps
+ *
+ * GpuOpts scope (round-12 doc fix): only `rsvd` and (implicitly via
+ * `set_use_davidson` in pdmrg-gpu-opt) `lanczos_graph` are honoured here.
+ * sparse_mpo / fuse_lanczos / d_pad / device_k / profile are NOT wired —
+ * pdmrg-multi-gpu's optimization charter is multi-device parallelism,
+ * not single-device kernel ablations. For those, run pdmrg-gpu-opt on
+ * one device. The opts_ field is kept so env-var loading still works
+ * uniformly, but unsupported flags are no-ops.
  *
  * Templated on Scalar: double (real) or hipDoubleComplex (complex128).
  */
@@ -35,6 +43,8 @@ public:
     // Setup
     void set_mpo(const std::vector<Scalar*>& h_mpo_tensors);
     void initialize_mps_random(double scale = 0.1);
+    void initialize_mps_product();
+    void initialize_mps_neel();
 
     // Run. PDMRG-rules-2026-04-15 lock: warmup and polish MUST be single-site,
     // capped at 2 each, and zero is a supported configuration. The CLI driver
@@ -183,10 +193,43 @@ private:
     int max_lanczos_iter_;
 
     // Environment-driven opt-in flags (DMRG_GPU_OPT_*). load_from_env() is
-    // called in the constructor so multi-GPU runs can enable RSVD / sparse
-    // MPO / device-k truncation / etc. via the same env-var interface as
-    // the single-device variants — restoring tier uniformity (round-4 A15).
+    // called in the constructor. Per the class docstring: only `rsvd` and
+    // `profile` are honoured here. Other flags load but are unused —
+    // pdmrg-multi-gpu's optimization charter is multi-device parallelism,
+    // not single-device kernel ablations (use pdmrg-gpu-opt for those).
     GpuOpts opts_;
+
+    // Phase timers (round-12 instrumentation). Recorded only when
+    // opts_.profile is on. Single-stream-pair instrumentation: events
+    // record on devices_[0].stream during full-chain warmup/polish; the
+    // segment_sweep paths (per-device parallel) are NOT timed to keep the
+    // panel cost-free in the parallel hot path.
+    PhaseTimer t_lanczos_;
+    PhaseTimer t_apply_heff_;
+    PhaseTimer t_svd_;
+    PhaseTimer t_absorb_;
+    PhaseTimer t_env_update_;
+    void init_timers() {
+        t_lanczos_.init("lanczos", opts_.profile);
+        t_apply_heff_.init("apply_heff", opts_.profile);
+        t_svd_.init("svd", opts_.profile);
+        t_absorb_.init("absorb", opts_.profile);
+        t_env_update_.init("env_update", opts_.profile);
+    }
+    void report_timers() {
+        if (!opts_.profile) return;
+        std::fprintf(stderr, "== pdmrg-multi-gpu phase timers (device 0 only) ==\n");
+        std::fprintf(stderr, "  lanczos      : %8.2f ms (%d calls)\n",
+                     t_lanczos_.total_ms(), t_lanczos_.calls());
+        std::fprintf(stderr, "  apply_heff   : %8.2f ms (%d calls)\n",
+                     t_apply_heff_.total_ms(), t_apply_heff_.calls());
+        std::fprintf(stderr, "  svd          : %8.2f ms (%d calls)\n",
+                     t_svd_.total_ms(), t_svd_.calls());
+        std::fprintf(stderr, "  absorb       : %8.2f ms (%d calls)\n",
+                     t_absorb_.total_ms(), t_absorb_.calls());
+        std::fprintf(stderr, "  env_update   : %8.2f ms (%d calls)\n",
+                     t_env_update_.total_ms(), t_env_update_.calls());
+    }
 public:
     GpuOpts& opts() { return opts_; }
 private:

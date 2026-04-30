@@ -157,6 +157,7 @@ PDMRGMultiGPU<Scalar>::PDMRGMultiGPU(int L, int d, int chi_max, int D_mpo, int n
     // round-4 A15). G1 baseline campaign passes no opt-in flags so this
     // is a no-op there; matters for ablation runs.
     opts_.load_from_env();
+    init_timers();
 
     // Allocate per-device resources
     allocate_device_resources();
@@ -587,6 +588,41 @@ void PDMRGMultiGPU<Scalar>::initialize_mps_random(double scale) {
     }
 }
 
+template<typename Scalar>
+void PDMRGMultiGPU<Scalar>::initialize_mps_product() {
+    for (int i = 0; i < L_; i++) {
+        int di = site_to_device_[i];
+        int cL = chi_L(i), cR = chi_R(i);
+        int size = cL * d_ * cR;
+        std::vector<Scalar> h_A(size, Traits::zero());
+        int chi_min = std::min(cL, cR);
+        for (int a = 0; a < chi_min; a++) {
+            h_A[a + 0*cL + a*cL*d_] = Traits::one();
+        }
+        HIP_CHECK(hipSetDevice(devices_[di].device_id));
+        HIP_CHECK(hipMemcpy(get_mps(i, di), h_A.data(),
+                            size * sizeof(Scalar), hipMemcpyHostToDevice));
+    }
+}
+
+template<typename Scalar>
+void PDMRGMultiGPU<Scalar>::initialize_mps_neel() {
+    for (int i = 0; i < L_; i++) {
+        int di = site_to_device_[i];
+        int cL = chi_L(i), cR = chi_R(i);
+        int size = cL * d_ * cR;
+        std::vector<Scalar> h_A(size, Traits::zero());
+        int spin = (i % 2 == 0) ? 0 : 1;
+        int chi_min = std::min(cL, cR);
+        for (int a = 0; a < chi_min; a++) {
+            h_A[a + spin*cL + a*cL*d_] = Traits::one();
+        }
+        HIP_CHECK(hipSetDevice(devices_[di].device_id));
+        HIP_CHECK(hipMemcpy(get_mps(i, di), h_A.data(),
+                            size * sizeof(Scalar), hipMemcpyHostToDevice));
+    }
+}
+
 // ============================================================================
 // MPO setup and fused two-site MPO precomputation
 // ============================================================================
@@ -714,6 +750,7 @@ void PDMRGMultiGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_
     int dd = d * d;
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& dev = devices_[di];
+    if (di == 0) t_apply_heff_.begin(dev.stream);
 
     Scalar* L_env = get_L_env(site, di);
     Scalar* R_env = get_R_env(site + 2, di);
@@ -774,6 +811,7 @@ void PDMRGMultiGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_
             }
         }
     }
+    if (di == 0) t_apply_heff_.end(dev.stream);
 }
 
 // ============================================================================
@@ -1118,6 +1156,9 @@ double PDMRGMultiGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int
     double tol_lanczos = 1e-12;
     double tol_eig_conv = 1e-12;
     auto& dev = devices_[di];
+    // Phase timer: only fires on device 0 (the timer panel is single-stream
+    // by design — per-device parallel sweeps stay un-instrumented).
+    if (di == 0) t_lanczos_.begin(dev.stream);
 
     Scalar* d_lanczos_v = dev.d_lanczos_v;
 
@@ -1286,6 +1327,7 @@ double PDMRGMultiGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int
         ROCBLAS_CHECK(Traits::scal_real(dev.handle, n, dev.d_inv_nrm, d_theta, 1));
     }
 
+    if (di == 0) t_lanczos_.end(dev.stream);
     return energy;
 }
 
@@ -1298,6 +1340,7 @@ void PDMRGMultiGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction,
     int cL = chi_L(site);
     int cR = chi_R(site + 1);
     auto& dev = devices_[di];
+    if (di == 0) t_svd_.begin(dev.stream);
 
     int m = cL * d_;
     int n_svd = d_ * cR;
@@ -1429,6 +1472,7 @@ void PDMRGMultiGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction,
 
     bond_dims_[site + 1] = new_k;
     dev.heff_cached_site = -1;
+    if (di == 0) t_svd_.end(dev.stream);
 }
 
 // ============================================================================
@@ -2457,6 +2501,7 @@ double PDMRGMultiGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_
     printf("Final energy: %.12f\n", energy_);
     printf("Total wall time: %.3f s (using %d GPUs)\n", total_time, n_devices_);
     printf("  env_build_sec: %.3f  timer_scope: include_env_build\n", env_time);
+    report_timers();
 
     return energy_;
 }
