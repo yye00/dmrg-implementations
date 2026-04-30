@@ -148,7 +148,6 @@ PDMRGMultiGPU<Scalar>::PDMRGMultiGPU(int L, int d, int chi_max, int D_mpo, int n
     theta_size_max_ = chi_max_ * dd * chi_max_;
     max_lanczos_iter_ = std::min(100, theta_size_max_);
     use_cpu_svd_ = false;
-    use_rsvd_ = false;
     lanczos_use_1site_ = false;
     rsvd_oversampling_ = 20;
 
@@ -157,6 +156,11 @@ PDMRGMultiGPU<Scalar>::PDMRGMultiGPU(int L, int d, int chi_max, int D_mpo, int n
     // round-4 A15). G1 baseline campaign passes no opt-in flags so this
     // is a no-op there; matters for ablation runs.
     opts_.load_from_env();
+    // Round-13 H13-multi-rsvd-prop: bind use_rsvd_ to opts_.rsvd so
+    // DMRG_GPU_OPT_RSVD=1 actually enables RSVD here. Same defect class
+    // as round-10 M-opt-rsvd-env in pdmrg-gpu-opt — was missed when
+    // round-12's docstring promised opts_.rsvd is honoured.
+    use_rsvd_ = opts_.rsvd;
     init_timers();
 
     // Allocate per-device resources

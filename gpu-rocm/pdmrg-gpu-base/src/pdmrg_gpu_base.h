@@ -38,8 +38,9 @@
  *
  * CLAUDE.md compliance: warmup and polish sweeps are SINGLE-SITE
  * (sweep_LR_full_1site / sweep_RL_full_1site). The number of warmup and
- * polish sweeps is configurable via run() parameters (default 1 each;
- * caller must supply n_polish explicitly to override).
+ * polish sweeps is configurable via run() parameters (defaults
+ * n_warmup=1, n_polish=0; caller must supply n_polish explicitly to
+ * enable the polish phase).
  *
  * Templated on Scalar: double (real) or hipDoubleComplex (complex128).
  */
@@ -68,8 +69,6 @@ public:
 
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }
-
-    void set_quiet(bool) {}  // no-op
 
 private:
     // === System parameters ===

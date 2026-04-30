@@ -952,6 +952,11 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
     int dd = d * d;
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& ws = workspaces_[si];
+    // Round-13 H13-pdmrg-phase-timer-dead: timer panel was always inert
+    // (init/report wired but no begin/end). Single-segment gating mirrors
+    // pdmrg-multi-gpu — PhaseTimer's std::vector::push_back is not
+    // thread-safe across parallel segments.
+    if (si == 0) t_apply_heff_.begin(streams_[si]);
 
     // LANCZOS_GRAPH: stage caller's theta into a fixed-address per-segment
     // bounce buffer BEFORE any capture window, then either replay the cached
@@ -1127,6 +1132,7 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
         ws.apply_heff_graph_cache[graph_key(/*two_site=*/true, site, cL, cR)] = exec;
         HIP_CHECK(hipGraphLaunch(exec, streams_[si]));
     }
+    if (si == 0) t_apply_heff_.end(streams_[si]);
 }
 
 // ============================================================================
@@ -1140,6 +1146,7 @@ void PDMRGGPU<Scalar>::update_left_env(int site, int si) {
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& ws = workspaces_[si];
+    if (si == 0) t_env_update_.begin(streams_[si]);
 
     ensure_L_env_alloc(site + 1, chi_out);
 
@@ -1201,6 +1208,7 @@ void PDMRGGPU<Scalar>::update_left_env(int site, int si) {
     if constexpr (Traits::is_complex) {
         conjugate_inplace(L_new, chi_out * D * chi_out, streams_[si]);
     }
+    if (si == 0) t_env_update_.end(streams_[si]);
 }
 
 // ============================================================================
@@ -1214,6 +1222,7 @@ void PDMRGGPU<Scalar>::update_right_env(int site, int si) {
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& ws = workspaces_[si];
+    if (si == 0) t_env_update_.begin(streams_[si]);
 
     ensure_R_env_alloc(site, chi_out);
 
@@ -1271,6 +1280,7 @@ void PDMRGGPU<Scalar>::update_right_env(int site, int si) {
                 D));
         }
     }
+    if (si == 0) t_env_update_.end(streams_[si]);
 }
 
 // ============================================================================
@@ -1317,6 +1327,7 @@ void PDMRGGPU<Scalar>::build_initial_environments() {
 
 template<typename Scalar>
 double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int theta_size, int si) {
+    if (si == 0) t_lanczos_.begin(streams_[si]);
     int n = theta_size;
     int max_iter = std::min(max_lanczos_iter_, n);
     double tol_lanczos = 1e-12;
@@ -1556,6 +1567,7 @@ double PDMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
         ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
     }
 
+    if (si == 0) t_lanczos_.end(streams_[si]);
     return energy;
 }
 
@@ -1568,6 +1580,7 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
     int cL = chi_L(site);
     int cR = chi_R(site + 1);
     auto& ws = workspaces_[si];
+    if (si == 0) t_svd_.begin(streams_[si]);
 
     int m = cL * d_;
     int n_svd = d_ * cR;
@@ -1723,6 +1736,7 @@ void PDMRGGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction, int 
 
     // Invalidate heff pointer cache (bond dims changed)
     ws.heff_cached_site = -1;
+    if (si == 0) t_svd_.end(streams_[si]);
 }
 
 // ============================================================================

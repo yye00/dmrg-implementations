@@ -21,9 +21,10 @@
  * - Boundary merges use P2P access or explicit D2D staging
  * - Warmup and polish phases gather MPS to device 0 for full-chain sweeps
  *
- * GpuOpts scope (round-12 doc fix): only `rsvd` and (implicitly via
- * `set_use_davidson` in pdmrg-gpu-opt) `lanczos_graph` are honoured here.
- * sparse_mpo / fuse_lanczos / d_pad / device_k / profile are NOT wired —
+ * GpuOpts scope (round-12 doc fix): only `rsvd` and `profile` are
+ * honoured. pdmrg-multi-gpu is Lanczos-only (no Davidson path), so
+ * `lanczos_graph` is N-A here. sparse_mpo / fuse_lanczos / d_pad /
+ * device_k are NOT wired —
  * pdmrg-multi-gpu's optimization charter is multi-device parallelism,
  * not single-device kernel ablations. For those, run pdmrg-gpu-opt on
  * one device. The opts_ field is kept so env-var loading still works
@@ -219,16 +220,20 @@ private:
     void report_timers() {
         if (!opts_.profile) return;
         std::fprintf(stderr, "== pdmrg-multi-gpu phase timers (device 0 only) ==\n");
-        std::fprintf(stderr, "  lanczos      : %8.2f ms (%d calls)\n",
-                     t_lanczos_.total_ms(), t_lanczos_.calls());
-        std::fprintf(stderr, "  apply_heff   : %8.2f ms (%d calls)\n",
-                     t_apply_heff_.total_ms(), t_apply_heff_.calls());
-        std::fprintf(stderr, "  svd          : %8.2f ms (%d calls)\n",
-                     t_svd_.total_ms(), t_svd_.calls());
-        std::fprintf(stderr, "  absorb       : %8.2f ms (%d calls)\n",
-                     t_absorb_.total_ms(), t_absorb_.calls());
-        std::fprintf(stderr, "  env_update   : %8.2f ms (%d calls)\n",
-                     t_env_update_.total_ms(), t_env_update_.calls());
+        // Skip uninstrumented phases — printing 0.00 ms / 0 calls would be
+        // noise. Currently lanczos / apply_heff / svd are wired; absorb
+        // and env_update remain available for forward instrumentation
+        // without changing the panel layout.
+        auto print_if_used = [](const char* lbl, PhaseTimer& t) {
+            if (t.calls() == 0) return;
+            std::fprintf(stderr, "  %-12s : %8.2f ms (%d calls)\n",
+                         lbl, t.total_ms(), t.calls());
+        };
+        print_if_used("lanczos",    t_lanczos_);
+        print_if_used("apply_heff", t_apply_heff_);
+        print_if_used("svd",        t_svd_);
+        print_if_used("absorb",     t_absorb_);
+        print_if_used("env_update", t_env_update_);
     }
 public:
     GpuOpts& opts() { return opts_; }

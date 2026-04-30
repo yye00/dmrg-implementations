@@ -13,6 +13,7 @@
 #include <string>
 
 #include "../../common/hip_check.h"
+#include "../../common/pointer_mode_guard.h"
 
 // promote_double_to_complex now defined in common/scalar_traits.h
 // (round-5 single-source-of-truth promotion).
@@ -738,7 +739,10 @@ double PDMRGGPUBase<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta,
 
     Scalar* d_lanczos_v = ws.d_lanczos_v;
 
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
+    // Round-13 M1-base-prop: RAII guard restores host mode on scope exit.
+    int niter = 0;
+    {
+        PointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_device);
 
     // v[0] = theta / ||theta||
     ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
@@ -799,10 +803,9 @@ double PDMRGGPUBase<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta,
         }
     }
 
-    int niter = iter;
+    niter = iter;
     if (niter <= 0) niter = 1;
-
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
+    }  // PointerModeGuard restores host mode here.
 
     // Tridiagonal eigensolve on device.
     HIP_CHECK(hipMemcpyAsync(ws.d_steqr_D, ws.d_alpha_dev,
@@ -839,12 +842,13 @@ double PDMRGGPUBase<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta,
         ws.d_ritz_coeffs, 1,
         &zero_val, d_theta, 1));
 
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
-    ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
-    hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
-                       ws.d_nrm2_result, ws.d_inv_nrm);
-    ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
+    {
+        PointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_device);
+        ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
+        hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
+                           ws.d_nrm2_result, ws.d_inv_nrm);
+        ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
+    }
 
     return energy;
 }
