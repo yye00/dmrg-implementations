@@ -8,6 +8,7 @@
 #include "scalar_traits.h"
 #include "../../common/gpu_opts.h"
 #include "../../common/accurate_svd_gpu.h"
+#include "../../common/pointer_mode_guard.h"
 
 /**
  * Multi-GPU Stream-Parallel DMRG (PDMRG) across multiple MI300X devices
@@ -35,8 +36,11 @@ public:
     void set_mpo(const std::vector<Scalar*>& h_mpo_tensors);
     void initialize_mps_random(double scale = 0.1);
 
-    // Run
-    double run(int n_outer_sweeps, int n_local_sweeps = 2, int n_warmup = 3);
+    // Run. PDMRG-rules-2026-04-15 lock: warmup and polish MUST be single-site,
+    // capped at 2 each, and zero is a supported configuration. The CLI driver
+    // is required to pass --warmup and --polish explicitly so that compiled-in
+    // defaults cannot drift unnoticed across rebench campaigns.
+    double run(int n_outer_sweeps, int n_local_sweeps = 2, int n_warmup = 1, int n_polish = 0);
 
     // Results
     double get_energy() const { return energy_; }
@@ -110,9 +114,6 @@ private:
         Scalar** d_batch_A;
         Scalar** d_batch_B;
         Scalar** d_batch_C;
-        Scalar** h_batch_A_pinned;
-        Scalar** h_batch_B_pinned;
-        Scalar** h_batch_C_pinned;
         Scalar** d_heff_batch_A;
         Scalar** d_heff_batch_C;
         int heff_cached_site;
@@ -155,8 +156,6 @@ private:
         Scalar* d_rsvd_ipiv;
         Scalar* d_rsvd_U_full;
         Scalar* d_rsvd_U_small; // (r, r) on-device U_small from rocsolver_gesvd of B
-        std::vector<Scalar> h_rsvd_B;       // legacy host buffer (kept for fallback paths)
-        std::vector<Scalar> h_rsvd_U_small; // legacy host buffer (kept for fallback paths)
 
         // GPU-native accurate SVD scratch for Stoudenmire boundary merges
         // (algorithmic upgrade — multi-gpu previously used plain svd_split).
@@ -165,9 +164,6 @@ private:
         // Segment info
         int seg_first, seg_last;
         int seg_len;     // = seg_last - seg_first + 1
-
-        // Staging buffer for boundary merge cross-device copies
-        Scalar* d_boundary_staging;
     };
     std::vector<DeviceContext> devices_;
 
@@ -236,14 +232,11 @@ private:
     void scatter_mps_from_device0();     // scatter MPS from device 0 back to owning devices
     void gather_envs_to_device0();       // gather environments to device 0
     void scatter_envs_from_device0();    // scatter environments back to owning devices
-    void copy_boundary_mps_to_device(int boundary_idx, int target_device);
 
     // === Sweep methods ===
     // Full-chain sweeps on device 0 (warmup/polish)
     double sweep_LR_full_1site();
     double sweep_RL_full_1site();
-    double sweep_LR_full();   // two-site (for polish)
-    double sweep_RL_full();   // two-site (for polish)
     // Segment sweeps (each on its own device)
     void segment_sweep_LR(int seg_idx);
     void segment_sweep_RL(int seg_idx);

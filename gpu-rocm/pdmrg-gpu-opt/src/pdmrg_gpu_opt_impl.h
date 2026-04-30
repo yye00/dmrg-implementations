@@ -208,6 +208,23 @@ PDMRGGPUOpt<Scalar>::PDMRGGPUOpt(int L, int d, int chi_max, int D_mpo, int n_seg
     use_chebyshev_ = false;       // Chebyshev-filtered subspace iteration eigensolver
     rsvd_oversampling_ = 20;
 
+    // Round-12 H-opt-pdmrg: ctor-time gate matching dmrg-gpu-opt and
+    // dmrg2-gpu-opt. Block-Davidson calls apply_heff_two_site with
+    // AV + j*dim — a variable output pointer per subspace column, which
+    // is incompatible with HIP-graph capture (capture locks in the
+    // first-seen address; Rayleigh-Ritz then writes garbage and the
+    // outer loop hangs). The runtime set_use_davidson() guard handles
+    // late toggles; this ctor block handles the env-var path
+    // (PDMRG_GPU_OPT_LANCZOS_GRAPH=1) where opts_.lanczos_graph is true
+    // when use_davidson_ is also true.
+    if (opts_.lanczos_graph && use_davidson_) {
+        std::fprintf(stderr,
+            "[pdmrg-gpu-opt] LANCZOS_GRAPH=1 is incompatible with Block-Davidson "
+            "(variable output pointer per subspace column). Disabling.\n");
+        opts_.lanczos_graph = false;
+        lanczos_graph_was_user_enabled_ = true;
+    }
+
     allocate_stream_workspaces();
 }
 

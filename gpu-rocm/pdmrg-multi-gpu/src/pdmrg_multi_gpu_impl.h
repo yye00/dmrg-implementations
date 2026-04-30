@@ -336,9 +336,6 @@ void PDMRGMultiGPU<Scalar>::allocate_device_resources() {
         HIP_CHECK(hipMalloc(&dev.d_batch_A, batch_max * sizeof(Scalar*)));
         HIP_CHECK(hipMalloc(&dev.d_batch_B, batch_max * sizeof(Scalar*)));
         HIP_CHECK(hipMalloc(&dev.d_batch_C, batch_max * sizeof(Scalar*)));
-        dev.h_batch_A_pinned = nullptr;
-        dev.h_batch_B_pinned = nullptr;
-        dev.h_batch_C_pinned = nullptr;
         HIP_CHECK(hipMalloc(&dev.d_heff_batch_A, batch_max * sizeof(Scalar*)));
         HIP_CHECK(hipMalloc(&dev.d_heff_batch_C, batch_max * sizeof(Scalar*)));
         dev.heff_cached_site = -1;
@@ -427,8 +424,6 @@ void PDMRGMultiGPU<Scalar>::allocate_device_resources() {
             HIP_CHECK(hipMalloc(&dev.d_rsvd_ipiv, (size_t)rsvd_r * sizeof(Scalar)));
             HIP_CHECK(hipMalloc(&dev.d_rsvd_U_full, (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
             HIP_CHECK(hipMalloc(&dev.d_rsvd_U_small, (size_t)rsvd_r * rsvd_r * sizeof(Scalar)));
-            dev.h_rsvd_B.resize((size_t)rsvd_r * rsvd_n);
-            dev.h_rsvd_U_small.resize((size_t)rsvd_r * rsvd_r);
 
             // GPU-native accurate SVD scratch for boundary merges.
             dev.asvd.allocate(chi_max_ * d_, d_ * chi_max_);
@@ -455,10 +450,6 @@ void PDMRGMultiGPU<Scalar>::allocate_device_resources() {
                 }
             }
         }
-
-        // Staging buffer for boundary merge cross-device copies
-        size_t boundary_staging_size = (size_t)chi_max_ * d_ * chi_max_ * sizeof(Scalar);
-        HIP_CHECK(hipMalloc(&dev.d_boundary_staging, boundary_staging_size));
     }
 }
 
@@ -537,7 +528,6 @@ void PDMRGMultiGPU<Scalar>::free_gpu_resources() {
         if (dev.d_rsvd_U_full) hipFree(dev.d_rsvd_U_full);
         if (dev.d_rsvd_U_small) hipFree(dev.d_rsvd_U_small);
         dev.asvd.release();  // GPU-native accurate SVD scratch
-        if (dev.d_boundary_staging) hipFree(dev.d_boundary_staging);
 
         rocblas_destroy_handle(dev.handle);
         hipStreamDestroy(dev.stream);
@@ -1113,22 +1103,9 @@ void PDMRGMultiGPU<Scalar>::scatter_envs_from_device0() {
     }
 }
 
-template<typename Scalar>
-void PDMRGMultiGPU<Scalar>::copy_boundary_mps_to_device(int boundary_idx, int target_device) {
-    // Copy MPS tensors at boundary bond to target device's staging buffer
-    int bsite = boundary_bonds_[boundary_idx];
-    int k_left = site_to_device_[bsite];
-    int k_right = site_to_device_[bsite + 1];
-    int d0_id = devices_[target_device].device_id;
-
-    // Copy MPS[bsite] from owning device to target
-    {
-        int src_id = devices_[k_left].device_id;
-        int mps_size = chi_L(bsite) * d_ * chi_R(bsite) * sizeof(Scalar);
-        HIP_CHECK(hipMemcpyPeer(devices_[target_device].d_boundary_staging, d0_id,
-                                 get_mps(bsite, k_left), src_id, mps_size));
-    }
-}
+// copy_boundary_mps_to_device removed in round-12: declared and defined
+// but never called. The d_boundary_staging buffer it wrote to was the
+// only customer of this method.
 
 // ============================================================================
 // Lanczos eigensolver (device-aware)
@@ -1146,9 +1123,10 @@ double PDMRGMultiGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int
 
     // v[0] = theta / ||theta||
     double norm;
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(dev.handle, rocblas_pointer_mode_device));
-    ROCBLAS_CHECK(Traits::nrm2(dev.handle, n, d_theta, 1, dev.d_nrm2_result));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(dev.handle, rocblas_pointer_mode_host));
+    {
+        PointerModeGuard pm(dev.handle, rocblas_pointer_mode_device);
+        ROCBLAS_CHECK(Traits::nrm2(dev.handle, n, d_theta, 1, dev.d_nrm2_result));
+    }
 
     HIP_CHECK(hipMemcpy(&norm, dev.d_nrm2_result, sizeof(double), hipMemcpyDeviceToHost));
     if (norm < 1e-14) {
@@ -1160,11 +1138,12 @@ double PDMRGMultiGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int
     }
 
     // Normalize using device pointer mode
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(dev.handle, rocblas_pointer_mode_device));
-    hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, dev.stream,
-                       dev.d_nrm2_result, dev.d_inv_nrm);
-    ROCBLAS_CHECK(Traits::scal_real(dev.handle, n, dev.d_inv_nrm, d_theta, 1));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(dev.handle, rocblas_pointer_mode_host));
+    {
+        PointerModeGuard pm(dev.handle, rocblas_pointer_mode_device);
+        hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, dev.stream,
+                           dev.d_nrm2_result, dev.d_inv_nrm);
+        ROCBLAS_CHECK(Traits::scal_real(dev.handle, n, dev.d_inv_nrm, d_theta, 1));
+    }
     HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta, n * sizeof(Scalar), hipMemcpyDeviceToDevice, dev.stream));
 
     double prev_energy = 1e30;
@@ -1179,58 +1158,58 @@ double PDMRGMultiGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int
         else
             apply_heff_two_site(site, d_vi, dev.d_heff_result, di);
 
-        ROCBLAS_CHECK(rocblas_set_pointer_mode(dev.handle, rocblas_pointer_mode_device));
+        {
+            PointerModeGuard pm(dev.handle, rocblas_pointer_mode_device);
 
-        // alpha_i = <v_i|w>
-        ROCBLAS_CHECK(Traits::dot(dev.handle, n, d_vi, 1, dev.d_heff_result, 1, dev.d_dot_result));
+            // alpha_i = <v_i|w>
+            ROCBLAS_CHECK(Traits::dot(dev.handle, n, d_vi, 1, dev.d_heff_result, 1, dev.d_dot_result));
 
-        hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, dev.stream,
-                           dev.d_dot_result, dev.d_neg_alpha, dev.d_alpha_dev, iter);
+            hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, dev.stream,
+                               dev.d_dot_result, dev.d_neg_alpha, dev.d_alpha_dev, iter);
 
-        // w -= alpha_i * v_i
-        ROCBLAS_CHECK(Traits::axpy(dev.handle, n, dev.d_neg_alpha, d_vi, 1, dev.d_heff_result, 1));
+            // w -= alpha_i * v_i
+            ROCBLAS_CHECK(Traits::axpy(dev.handle, n, dev.d_neg_alpha, d_vi, 1, dev.d_heff_result, 1));
 
-        // w -= beta_{i-1} * v_{i-1}
-        if (iter > 0) {
-            ROCBLAS_CHECK(Traits::axpy(dev.handle, n,
-                dev.d_neg_beta_scalars + (iter - 1),
-                d_lanczos_v + (size_t)(iter - 1) * n, 1,
-                dev.d_heff_result, 1));
+            // w -= beta_{i-1} * v_{i-1}
+            if (iter > 0) {
+                ROCBLAS_CHECK(Traits::axpy(dev.handle, n,
+                    dev.d_neg_beta_scalars + (iter - 1),
+                    d_lanczos_v + (size_t)(iter - 1) * n, 1,
+                    dev.d_heff_result, 1));
+            }
+
+            // Full reorthogonalization
+            if (iter > 0) {
+                ROCBLAS_CHECK(Traits::gemv(dev.handle, Traits::op_h,
+                    n, iter + 1, dev.d_const_one,
+                    d_lanczos_v, n,
+                    dev.d_heff_result, 1,
+                    dev.d_const_zero, dev.d_ritz_coeffs, 1));
+                ROCBLAS_CHECK(Traits::gemv(dev.handle, rocblas_operation_none,
+                    n, iter + 1, dev.d_const_neg_one,
+                    d_lanczos_v, n,
+                    dev.d_ritz_coeffs, 1,
+                    dev.d_const_one, dev.d_heff_result, 1));
+            } else {
+                ROCBLAS_CHECK(Traits::dot(dev.handle, n, d_lanczos_v, 1, dev.d_heff_result, 1, dev.d_dot_result));
+                hipLaunchKernelGGL(negate_scalar_kernel<Scalar>, dim3(1), dim3(1), 0, dev.stream,
+                                   dev.d_dot_result, dev.d_neg_overlap);
+                ROCBLAS_CHECK(Traits::axpy(dev.handle, n, dev.d_neg_overlap, d_lanczos_v, 1, dev.d_heff_result, 1));
+            }
+
+            // beta_i = ||w||
+            ROCBLAS_CHECK(Traits::nrm2(dev.handle, n, dev.d_heff_result, 1, dev.d_nrm2_result));
+
+            hipLaunchKernelGGL(lanczos_process_beta_kernel<Scalar>, dim3(1), dim3(1), 0, dev.stream,
+                               dev.d_nrm2_result, dev.d_inv_nrm, dev.d_beta_dev, dev.d_neg_beta_scalars, iter);
+
+            // v_{i+1} = w / beta_i
+            if (iter + 1 < max_iter) {
+                Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
+                HIP_CHECK(hipMemcpyAsync(d_vip1, dev.d_heff_result, n * sizeof(Scalar), hipMemcpyDeviceToDevice, dev.stream));
+                ROCBLAS_CHECK(Traits::scal_real(dev.handle, n, dev.d_inv_nrm, d_vip1, 1));
+            }
         }
-
-        // Full reorthogonalization
-        if (iter > 0) {
-            ROCBLAS_CHECK(Traits::gemv(dev.handle, Traits::op_h,
-                n, iter + 1, dev.d_const_one,
-                d_lanczos_v, n,
-                dev.d_heff_result, 1,
-                dev.d_const_zero, dev.d_ritz_coeffs, 1));
-            ROCBLAS_CHECK(Traits::gemv(dev.handle, rocblas_operation_none,
-                n, iter + 1, dev.d_const_neg_one,
-                d_lanczos_v, n,
-                dev.d_ritz_coeffs, 1,
-                dev.d_const_one, dev.d_heff_result, 1));
-        } else {
-            ROCBLAS_CHECK(Traits::dot(dev.handle, n, d_lanczos_v, 1, dev.d_heff_result, 1, dev.d_dot_result));
-            hipLaunchKernelGGL(negate_scalar_kernel<Scalar>, dim3(1), dim3(1), 0, dev.stream,
-                               dev.d_dot_result, dev.d_neg_overlap);
-            ROCBLAS_CHECK(Traits::axpy(dev.handle, n, dev.d_neg_overlap, d_lanczos_v, 1, dev.d_heff_result, 1));
-        }
-
-        // beta_i = ||w||
-        ROCBLAS_CHECK(Traits::nrm2(dev.handle, n, dev.d_heff_result, 1, dev.d_nrm2_result));
-
-        hipLaunchKernelGGL(lanczos_process_beta_kernel<Scalar>, dim3(1), dim3(1), 0, dev.stream,
-                           dev.d_nrm2_result, dev.d_inv_nrm, dev.d_beta_dev, dev.d_neg_beta_scalars, iter);
-
-        // v_{i+1} = w / beta_i
-        if (iter + 1 < max_iter) {
-            Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
-            HIP_CHECK(hipMemcpyAsync(d_vip1, dev.d_heff_result, n * sizeof(Scalar), hipMemcpyDeviceToDevice, dev.stream));
-            ROCBLAS_CHECK(Traits::scal_real(dev.handle, n, dev.d_inv_nrm, d_vip1, 1));
-        }
-
-        ROCBLAS_CHECK(rocblas_set_pointer_mode(dev.handle, rocblas_pointer_mode_host));
 
         // Convergence check every 3 iterations after iter >= 4
         if (iter >= 4 && iter % 3 == 0) {
@@ -1290,21 +1269,22 @@ double PDMRGMultiGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int
                            dev.d_steqr_C, (hipDoubleComplex*)dev.d_ritz_coeffs, niter);
     }
 
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(dev.handle, rocblas_pointer_mode_device));
-    ROCBLAS_CHECK(Traits::gemv(
-        dev.handle, rocblas_operation_none,
-        n, niter, dev.d_const_one,
-        d_lanczos_v, n,
-        dev.d_ritz_coeffs, 1,
-        dev.d_const_zero, d_theta, 1
-    ));
+    {
+        PointerModeGuard pm(dev.handle, rocblas_pointer_mode_device);
+        ROCBLAS_CHECK(Traits::gemv(
+            dev.handle, rocblas_operation_none,
+            n, niter, dev.d_const_one,
+            d_lanczos_v, n,
+            dev.d_ritz_coeffs, 1,
+            dev.d_const_zero, d_theta, 1
+        ));
 
-    // Normalize
-    ROCBLAS_CHECK(Traits::nrm2(dev.handle, n, d_theta, 1, dev.d_nrm2_result));
-    hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, dev.stream,
-                       dev.d_nrm2_result, dev.d_inv_nrm);
-    ROCBLAS_CHECK(Traits::scal_real(dev.handle, n, dev.d_inv_nrm, d_theta, 1));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(dev.handle, rocblas_pointer_mode_host));
+        // Normalize
+        ROCBLAS_CHECK(Traits::nrm2(dev.handle, n, d_theta, 1, dev.d_nrm2_result));
+        hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, dev.stream,
+                           dev.d_nrm2_result, dev.d_inv_nrm);
+        ROCBLAS_CHECK(Traits::scal_real(dev.handle, n, dev.d_inv_nrm, d_theta, 1));
+    }
 
     return energy;
 }
@@ -1994,101 +1974,10 @@ double PDMRGMultiGPU<Scalar>::sweep_RL_full_1site() {
 // Full-chain two-site sweep methods (for polish on device 0)
 // ============================================================================
 
-template<typename Scalar>
-double PDMRGMultiGPU<Scalar>::sweep_LR_full() {
-    int di = 0;
-    auto& dev = devices_[di];
-    HIP_CHECK(hipSetDevice(dev.device_id));
-
-    auto saved_mps = dev.d_mps;
-    auto saved_L_envs = dev.d_L_envs;
-    auto saved_R_envs = dev.d_R_envs;
-    auto saved_L_alloc = dev.L_env_alloc_chi;
-    auto saved_R_alloc = dev.R_env_alloc_chi;
-    int saved_seg_first = dev.seg_first;
-    int saved_seg_last = dev.seg_last;
-    int saved_seg_len = dev.seg_len;
-
-    dev.d_mps = d0_mps_tensors_;
-    dev.d_L_envs = d0_L_envs_;
-    dev.d_R_envs = d0_R_envs_;
-    dev.L_env_alloc_chi = d0_L_env_alloc_chi_;
-    dev.R_env_alloc_chi = d0_R_env_alloc_chi_;
-    dev.seg_first = 0;
-    dev.seg_last = L_ - 1;
-    dev.seg_len = L_;
-
-    double energy = 0.0;
-    for (int site = 0; site < L_ - 1; site++) {
-        energy = optimize_bond(site, 'R', di);
-        update_left_env(site, di);
-    }
-
-    d0_mps_tensors_ = dev.d_mps;
-    d0_L_envs_ = dev.d_L_envs;
-    d0_R_envs_ = dev.d_R_envs;
-    d0_L_env_alloc_chi_ = dev.L_env_alloc_chi;
-    d0_R_env_alloc_chi_ = dev.R_env_alloc_chi;
-
-    dev.d_mps = saved_mps;
-    dev.d_L_envs = saved_L_envs;
-    dev.d_R_envs = saved_R_envs;
-    dev.L_env_alloc_chi = saved_L_alloc;
-    dev.R_env_alloc_chi = saved_R_alloc;
-    dev.seg_first = saved_seg_first;
-    dev.seg_last = saved_seg_last;
-    dev.seg_len = saved_seg_len;
-
-    return energy;
-}
-
-template<typename Scalar>
-double PDMRGMultiGPU<Scalar>::sweep_RL_full() {
-    int di = 0;
-    auto& dev = devices_[di];
-    HIP_CHECK(hipSetDevice(dev.device_id));
-
-    auto saved_mps = dev.d_mps;
-    auto saved_L_envs = dev.d_L_envs;
-    auto saved_R_envs = dev.d_R_envs;
-    auto saved_L_alloc = dev.L_env_alloc_chi;
-    auto saved_R_alloc = dev.R_env_alloc_chi;
-    int saved_seg_first = dev.seg_first;
-    int saved_seg_last = dev.seg_last;
-    int saved_seg_len = dev.seg_len;
-
-    dev.d_mps = d0_mps_tensors_;
-    dev.d_L_envs = d0_L_envs_;
-    dev.d_R_envs = d0_R_envs_;
-    dev.L_env_alloc_chi = d0_L_env_alloc_chi_;
-    dev.R_env_alloc_chi = d0_R_env_alloc_chi_;
-    dev.seg_first = 0;
-    dev.seg_last = L_ - 1;
-    dev.seg_len = L_;
-
-    double energy = 0.0;
-    for (int site = L_ - 2; site >= 0; site--) {
-        energy = optimize_bond(site, 'L', di);
-        update_right_env(site + 1, di);
-    }
-
-    d0_mps_tensors_ = dev.d_mps;
-    d0_L_envs_ = dev.d_L_envs;
-    d0_R_envs_ = dev.d_R_envs;
-    d0_L_env_alloc_chi_ = dev.L_env_alloc_chi;
-    d0_R_env_alloc_chi_ = dev.R_env_alloc_chi;
-
-    dev.d_mps = saved_mps;
-    dev.d_L_envs = saved_L_envs;
-    dev.d_R_envs = saved_R_envs;
-    dev.L_env_alloc_chi = saved_L_alloc;
-    dev.R_env_alloc_chi = saved_R_alloc;
-    dev.seg_first = saved_seg_first;
-    dev.seg_last = saved_seg_last;
-    dev.seg_len = saved_seg_len;
-
-    return energy;
-}
+// Two-site sweep_LR_full / sweep_RL_full removed in round-12: PDMRG
+// rules lock (CLAUDE.md, 2026-04-15) requires polish to be single-site.
+// The single-site equivalents sweep_LR_full_1site / sweep_RL_full_1site
+// above are the only polish path the run() driver uses.
 
 // ============================================================================
 // Segment sweep methods (each segment on its own device)
@@ -2445,7 +2334,7 @@ double PDMRGMultiGPU<Scalar>::merge_and_optimize_boundaries(int parity) {
 // ============================================================================
 
 template<typename Scalar>
-double PDMRGMultiGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup) {
+double PDMRGMultiGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_warmup, int n_polish) {
     // Timer starts BEFORE env build — includes env build in total (timer_scope=include_env_build)
     auto t_start = std::chrono::high_resolution_clock::now();
 
@@ -2543,17 +2432,16 @@ double PDMRGMultiGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_
         energy_prev = energy_;
     }
 
-    // === Polish phase: two-site full-chain sweeps on device 0 ===
-    // Two-site sweeps can re-optimize bond dimensions across segment
-    // boundaries, escaping local minima that single-site polish cannot.
-    if (n_segments_ > 1) {
+    // === Polish phase: single-site full-chain sweeps on device 0 ===
+    // PDMRG-rules-2026-04-15 lock: polish MUST be single-site and capped at
+    // n_polish ≤ 2; n_polish == 0 is supported. Two-site polish was removed
+    // in round-12 — the rule applies to ALL pdmrg variants.
+    if (n_segments_ > 1 && n_polish > 0) {
         gather_mps_to_device0();
-
-        int n_polish = 10;
         build_initial_environments();
         for (int sw = 0; sw < n_polish; sw++) {
-            sweep_LR_full();
-            double eRL = sweep_RL_full();
+            sweep_LR_full_1site();
+            double eRL = sweep_RL_full_1site();
             double dE = std::abs(eRL - energy_);
             energy_ = eRL;
             if (dE < tol_) {
@@ -2561,7 +2449,6 @@ double PDMRGMultiGPU<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_
                 break;
             }
         }
-
         scatter_mps_from_device0();
     }
 
