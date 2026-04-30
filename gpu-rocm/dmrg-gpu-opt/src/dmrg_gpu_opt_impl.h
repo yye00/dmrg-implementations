@@ -70,11 +70,12 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     // the flag off here; users that want captured apply_heff should use
     // dmrg-gpu (Lanczos, reuses one Hv buffer) or pdmrg-gpu (fixed bounce
     // buffer pattern). Print once so benchmark drivers can log the override.
-    if (opts_.lanczos_graph) {
+    if (opts_.lanczos_graph && use_davidson_) {
         std::fprintf(stderr,
             "[dmrg-gpu-opt] LANCZOS_GRAPH=1 is incompatible with Block-Davidson "
             "(variable output pointer per subspace column). Disabling.\n");
         opts_.lanczos_graph = false;
+        lanczos_graph_was_user_enabled_ = true;
     }
 
     // D_PAD: round MPO bond dim up to a multiple of 8 for MFMA-friendly
