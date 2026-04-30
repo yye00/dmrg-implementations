@@ -146,15 +146,12 @@ private:
     Scalar* d_svd_Vh_;
     RealType* d_svd_E_;
     int* d_svd_info_;
-    Scalar* d_svd_work_;
     // R3-F2: device scalars required by rocsolver_gesvdj (it writes residual
     // and n_sweeps to GPU memory — host pointers cause silent hangs).
     double* d_svdj_residual_;
     rocblas_int* d_svdj_n_sweeps_;
 
     // CPU workspace (for receiving GPU SVD results and truncation/scaling)
-    std::vector<Scalar> h_svd_U_, h_svd_Vh_, h_svd_tmp_;
-    std::vector<RealType> h_svd_S_;
 
     // RSVD workspace (allocated only when opts_.rsvd is on)
     static constexpr int RSVD_OVERSAMPLE_ = 10;

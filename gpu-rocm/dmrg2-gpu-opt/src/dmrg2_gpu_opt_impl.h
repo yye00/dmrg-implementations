@@ -193,7 +193,6 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     HIP_CHECK(hipMalloc(&d_svd_Vh_,   (size_t)svd_max_k * svd_max_n * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_svd_E_,    svd_max_k * sizeof(RealType)));
     HIP_CHECK(hipMalloc(&d_svd_info_, sizeof(int)));
-    HIP_CHECK(hipMalloc(&d_svd_work_, theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_svdj_residual_, sizeof(double)));
     HIP_CHECK(hipMalloc(&d_svdj_n_sweeps_, sizeof(rocblas_int)));
 
@@ -230,7 +229,6 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     h_svd_U_.resize((size_t)svd_max_m * svd_max_k);
     h_svd_S_.resize(svd_max_k);
     h_svd_Vh_.resize((size_t)svd_max_k * svd_max_n);
-    h_svd_tmp_.resize(std::max((size_t)svd_max_m * svd_max_k, (size_t)svd_max_k * svd_max_n));
     h_svd_rwork_.resize(Traits::svd_rwork_size(svd_max_m, svd_max_n));
 
     // Query optimal LAPACK SVD workspace
@@ -326,7 +324,6 @@ void DMRG2GPUOpt<Scalar>::free_gpu_resources() {
     if (d_svd_Vh_) hipFree(d_svd_Vh_);
     if (d_svd_E_) hipFree(d_svd_E_);
     if (d_svd_info_) hipFree(d_svd_info_);
-    if (d_svd_work_) hipFree(d_svd_work_);
     if (d_svdj_residual_) hipFree(d_svdj_residual_);
     if (d_svdj_n_sweeps_) hipFree(d_svdj_n_sweeps_);
     if (d_steqr_D_) hipFree(d_steqr_D_);

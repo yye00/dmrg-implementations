@@ -315,15 +315,6 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_svdj_residual_, sizeof(double)));
     HIP_CHECK(hipMalloc(&d_svdj_n_sweeps_, sizeof(rocblas_int)));
 
-    // Host workspace for SVD results (copied back from GPU)
-    h_svd_U_.resize(svd_max_dim * chi_max_);
-    // S and E sized to accommodate the small-SVD output inside RSVD, which
-    // can produce up to r = chi_max + OVERSAMPLE singular values.
-    int s_alloc = chi_max_ + (opts_.rsvd ? RSVD_OVERSAMPLE_ : 0);
-    h_svd_S_.resize(s_alloc);
-    h_svd_Vh_.resize(chi_max_ * svd_max_dim);
-    h_svd_tmp_.resize(svd_max_dim * chi_max_);
-
     if (opts_.lanczos_graph) {
         // Bounce buffer so captured apply_heff graphs read from a fixed
         // address regardless of which Lanczos v_i the caller passes in.

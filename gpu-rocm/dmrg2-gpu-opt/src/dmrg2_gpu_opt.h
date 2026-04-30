@@ -166,7 +166,6 @@ private:
     Scalar* d_svd_Vh_;
     RealType* d_svd_E_;
     int* d_svd_info_;
-    Scalar* d_svd_work_;
     double* d_svdj_residual_ = nullptr;
     rocblas_int* d_svdj_n_sweeps_ = nullptr;
 
@@ -190,7 +189,7 @@ private:
 
     // CPU SVD workspace (legacy — only used by the init-time workspace query;
     // runtime SVD is fully on-device).
-    std::vector<Scalar> h_svd_A_, h_svd_U_, h_svd_Vh_, h_svd_work_, h_svd_tmp_;
+    std::vector<Scalar> h_svd_A_, h_svd_U_, h_svd_Vh_, h_svd_work_;
     std::vector<RealType> h_svd_S_;
     std::vector<RealType> h_svd_rwork_;
 

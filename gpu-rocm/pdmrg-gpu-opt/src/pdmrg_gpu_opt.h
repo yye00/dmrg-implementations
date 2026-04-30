@@ -173,7 +173,6 @@ private:
         std::vector<RealType> h_dav_eigvals;   // (max_sub)
         std::vector<Scalar> h_dav_eigvecs;     // (max_sub, max_sub)
         std::vector<RealType> h_dav_syev_work; // workspace for dsyev rwork
-        std::vector<Scalar> h_dav_V_copy;      // for restart QR on host
 
         // === Lanczos fallback workspace ===
         Scalar* d_lanczos_v;
@@ -221,8 +220,6 @@ private:
         Scalar* d_rsvd_ipiv;    // (r) QR tau on GPU (rocSOLVER)
         Scalar* d_rsvd_U_full;  // (m, r) U = Q @ U_small on GPU
         Scalar* d_rsvd_U_small; // (r, r) U_small from on-device rocsolver_gesvd of B
-        std::vector<Scalar> h_rsvd_B;       // legacy host buffer (kept for fallback paths if needed)
-        std::vector<Scalar> h_rsvd_U_small; // legacy host buffer (kept for fallback paths if needed)
 
         // GPU-native accurate SVD scratch for Stoudenmire boundary merges
         // (algorithmic upgrade — opt previously used plain svd_split + clip,

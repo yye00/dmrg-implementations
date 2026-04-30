@@ -311,16 +311,9 @@ DMRG2GPU<Scalar>::DMRG2GPU(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_svd_Vh_,   (size_t)svd_max_k * svd_max_n * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_svd_E_,    svd_max_k * sizeof(RealType)));
     HIP_CHECK(hipMalloc(&d_svd_info_, sizeof(int)));
-    HIP_CHECK(hipMalloc(&d_svd_work_, theta_size_max_ * sizeof(Scalar)));
     // R3-F2: rocsolver_dgesvdj requires device pointers for residual/n_sweeps.
     HIP_CHECK(hipMalloc(&d_svdj_residual_, sizeof(double)));
     HIP_CHECK(hipMalloc(&d_svdj_n_sweeps_, sizeof(rocblas_int)));
-
-    // CPU workspace (for receiving GPU SVD results and truncation/scaling)
-    h_svd_U_.resize((size_t)svd_max_m * svd_max_k);
-    h_svd_S_.resize(svd_max_k);
-    h_svd_Vh_.resize((size_t)svd_max_k * svd_max_n);
-    h_svd_tmp_.resize(std::max((size_t)svd_max_m * svd_max_k, (size_t)svd_max_k * svd_max_n));
 
     // SPARSE_MPO nnz lists (populated in precompute_fused_mpo)
     d_WW_nnz_rows_.resize(L - 1, nullptr);
@@ -433,7 +426,6 @@ void DMRG2GPU<Scalar>::free_gpu_resources() {
     if (d_svd_Vh_) hipFree(d_svd_Vh_);
     if (d_svd_E_) hipFree(d_svd_E_);
     if (d_svd_info_) hipFree(d_svd_info_);
-    if (d_svd_work_) hipFree(d_svd_work_);
     if (d_svdj_residual_) hipFree(d_svdj_residual_);
     if (d_svdj_n_sweeps_) hipFree(d_svdj_n_sweeps_);
 

@@ -264,7 +264,6 @@ void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
         ws.h_dav_eigvals.resize(davidson_max_sub_);
         ws.h_dav_eigvecs.resize(davidson_max_sub_ * davidson_max_sub_);
         ws.h_dav_syev_work.resize(Traits::syev_rwork_size(davidson_max_sub_));
-        ws.h_dav_V_copy.resize((size_t)theta_size_max_ * davidson_b_);
 
         // === Lanczos fallback workspace ===
         HIP_CHECK(hipMalloc(&ws.d_lanczos_v, (size_t)max_lanczos_iter_ * theta_size_max_ * sizeof(Scalar)));
@@ -348,8 +347,6 @@ void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
             HIP_CHECK(hipMalloc(&ws.d_rsvd_ipiv,  (size_t)rsvd_r * sizeof(Scalar)));
             HIP_CHECK(hipMalloc(&ws.d_rsvd_U_full, (size_t)rsvd_m * rsvd_r * sizeof(Scalar)));
             HIP_CHECK(hipMalloc(&ws.d_rsvd_U_small, (size_t)rsvd_r * rsvd_r * sizeof(Scalar)));
-            ws.h_rsvd_B.resize((size_t)rsvd_r * rsvd_n);
-            ws.h_rsvd_U_small.resize((size_t)rsvd_r * rsvd_r);
         }
 
         // GPU-native accurate SVD scratch (Stoudenmire boundary merges).

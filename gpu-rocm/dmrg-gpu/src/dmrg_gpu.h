@@ -161,8 +161,6 @@ private:
     rocblas_int* d_svdj_n_sweeps_;
 
     // Host workspace for SVD results (copied back from GPU)
-    std::vector<Scalar> h_svd_U_, h_svd_Vh_, h_svd_tmp_;
-    std::vector<RealType> h_svd_S_;
 
     // Randomized SVD workspace (allocated only when opts_.rsvd is on).
     // All sized at worst-case shapes derived from (chi_max, d) and the

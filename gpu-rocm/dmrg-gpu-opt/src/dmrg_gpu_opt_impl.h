@@ -170,35 +170,6 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     HIP_CHECK(hipMalloc(&d_lanczos_v_, (size_t)max_lanczos_iter_ * theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_ritz_coeffs_, max_lanczos_iter_ * sizeof(Scalar)));
 
-    // Device scalars for sync-free Lanczos (device pointer mode). Ported
-    // from dmrg-gpu for the H10 device-pointer Lanczos path.
-    HIP_CHECK(hipMalloc(&d_dot_result_, sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_nrm2_result_, sizeof(RealType)));
-    HIP_CHECK(hipMalloc(&d_neg_alpha_, sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_neg_overlap_, sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_inv_nrm_, sizeof(RealType)));
-    HIP_CHECK(hipMalloc(&d_alpha_dev_, max_lanczos_iter_ * sizeof(RealType)));
-    HIP_CHECK(hipMalloc(&d_beta_dev_, max_lanczos_iter_ * sizeof(RealType)));
-    HIP_CHECK(hipMalloc(&d_neg_beta_scalars_, max_lanczos_iter_ * sizeof(Scalar)));
-
-    HIP_CHECK(hipMalloc(&d_const_one_, sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_const_zero_, sizeof(Scalar)));
-    HIP_CHECK(hipMalloc(&d_const_neg_one_, sizeof(Scalar)));
-    {
-        Scalar one = Traits::one(), zero = Traits::zero(), neg_one = Traits::neg(one);
-        HIP_CHECK(hipMemcpy(d_const_one_, &one, sizeof(Scalar), hipMemcpyHostToDevice));
-        HIP_CHECK(hipMemcpy(d_const_zero_, &zero, sizeof(Scalar), hipMemcpyHostToDevice));
-        HIP_CHECK(hipMemcpy(d_const_neg_one_, &neg_one, sizeof(Scalar), hipMemcpyHostToDevice));
-    }
-
-    // Length-D ones vector for the R3-F1 full-batched-collapse Step-3 path
-    HIP_CHECK(hipMalloc(&d_ones_D_, D_mpo_ * sizeof(Scalar)));
-    {
-        std::vector<Scalar> h_ones(D_mpo_, Traits::one());
-        HIP_CHECK(hipMemcpy(d_ones_D_, h_ones.data(),
-                            D_mpo_ * sizeof(Scalar), hipMemcpyHostToDevice));
-    }
-
     // Batched GEMM pointer arrays (Step 1) — main + env stream variants so
     // env_update and apply_heff/absorb don't clobber each other's pointer tables.
     int batch_max = D_mpo_ * d_;
@@ -265,7 +236,6 @@ DMRGGPUOpt<Scalar>::DMRGGPUOpt(int L, int d, int chi_max, int D_mpo, double tol)
     h_svd_U_.resize((size_t)svd_max_dim * chi_max_);
     h_svd_S_.resize(chi_max_);
     h_svd_Vh_.resize((size_t)chi_max_ * svd_max_dim);
-    h_svd_tmp_.resize((size_t)svd_max_dim * chi_max_);
     h_svd_rwork_.resize(Traits::svd_rwork_size(svd_max_dim, svd_max_dim));
 
     // Query optimal LAPACK workspace for ALL possible (m, n) combinations
@@ -359,18 +329,6 @@ void DMRGGPUOpt<Scalar>::free_gpu_resources() {
     if (d_T2_) hipFree(d_T2_);
     if (d_T1_env_) hipFree(d_T1_env_);
     if (d_T2_env_) hipFree(d_T2_env_);
-    if (d_dot_result_) hipFree(d_dot_result_);
-    if (d_nrm2_result_) hipFree(d_nrm2_result_);
-    if (d_neg_alpha_) hipFree(d_neg_alpha_);
-    if (d_neg_overlap_) hipFree(d_neg_overlap_);
-    if (d_inv_nrm_) hipFree(d_inv_nrm_);
-    if (d_alpha_dev_) hipFree(d_alpha_dev_);
-    if (d_beta_dev_) hipFree(d_beta_dev_);
-    if (d_neg_beta_scalars_) hipFree(d_neg_beta_scalars_);
-    if (d_const_one_) hipFree(d_const_one_);
-    if (d_const_zero_) hipFree(d_const_zero_);
-    if (d_const_neg_one_) hipFree(d_const_neg_one_);
-    if (d_ones_D_) hipFree(d_ones_D_);
     if (d_batch_A_) hipFree(d_batch_A_);
     if (d_batch_B_) hipFree(d_batch_B_);
     if (d_batch_C_) hipFree(d_batch_C_);
