@@ -185,9 +185,11 @@ scan "D12: Lanczos host-stack alpha/beta scalars (per-iter host roundtrip)" \
      --include='*_impl.h'
 
 # ----- D13: per-iter Step-3 host loop (instead of R3-F1 batched collapse) -----
-# Heuristic: Step 3 in apply_heff with a `for (int wp = 0; wp < D; wp++)` AND
-# `for (int sp = 0; sp < d; sp++)` AND a Traits::gemm( inside. These should
-# use gemm_batched + setup_batch_ptrs_step3_full kernel instead.
+# Heuristic: Step 3 in apply_heff with a `for (int wp = 0; wp < D; wp++)`
+# enclosing ANY rocBLAS gemm call (bare gemm OR small-batch gemm_batched).
+# R19M19 widening: a per-wp loop wrapping a `gemm_batched(... d)` (d small,
+# ≤ 4) is just as bad as bare gemm — D launches per call, missing the
+# R3-F1 (D·d full-batched) collapse.
 echo
 echo "===================================================================="
 echo "DEFECT CLASS: D13 — Step 3 per-element host loop in apply_heff"
@@ -199,15 +201,22 @@ for variant in "${VARIANTS[@]}"; do
     matches=$(grep -E 'apply_heff' "$variant"/src/*_impl.h 2>/dev/null \
         | head -1 || true)
     [[ -z "$matches" ]] && continue
-    # Look inside the impl for the pattern "for (int wp = 0; wp < D; wp++)" with
-    # a single Traits::gemm( inside, NOT a gemm_batched / gemm_strided_batched.
     inline=$(awk '
         /apply_heff/{ in_func=1; depth=0 }
         in_func && /\{/{ depth++ }
         in_func && /\}/{ depth--; if (depth<=0) in_func=0 }
-        in_func && /for[[:space:]]+\(int wp = 0; wp < D; wp\+\+\)/{ wploop_line=NR; wploop=1 }
-        in_func && wploop && /Traits::gemm\(/ && !/gemm_batched|gemm_strided/{
-            print FILENAME":"wploop_line": apply_heff per-wp host loop with non-batched gemm";
+        in_func && /for[[:space:]]+\(int wp = 0; wp < D; wp\+\+\)/{
+            wploop_line=NR; wploop=1
+        }
+        # R19M19: any gemm/gemm_batched/gemm_strided_batched inside the
+        # per-wp host loop is a defect. Suppresses on `;` (statement-end
+        # of any non-gemm line) only after we have flagged.
+        in_func && wploop && (/Traits::gemm\(/ || /Traits::gemm_batched\(/ \
+                              || /Traits::gemm_strided_batched\(/) {
+            kind = "non-batched gemm";
+            if (/gemm_batched/)         kind = "small-batch gemm_batched (still D launches)";
+            if (/gemm_strided_batched/) kind = "small-batch gemm_strided_batched (still D launches)";
+            print FILENAME":"wploop_line": apply_heff per-wp host loop with " kind;
             wploop=0
         }
     ' "$variant"/src/*_impl.h 2>/dev/null || true)

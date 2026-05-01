@@ -34,6 +34,24 @@ __global__ void setup_heff_ss_step3_ptrs(Scalar** A, Scalar** B, Scalar** C,
     }
 }
 
+// apply_heff_single_site Step 3 (R3-F1 full-batched): single launch for all D*d
+// tiles. idx = wp*d + sp. Replaces the per-wp host loop. Each wp writes to its
+// own slice_stride slice in scratch; slices reduced via gemv afterwards.
+// Mirrors pdmrg-gpu impl :49-59 (local copy until shared/promoted to
+// common/batch_ptrs_kernels.h — see R18 M-multi-gpu-local-kernels-dup).
+template<typename Scalar>
+__global__ void setup_heff_ss_step3_full_ptrs(Scalar** A, Scalar** B, Scalar** C,
+                                               Scalar* base_U, Scalar* base_R, Scalar* base_C_scratch,
+                                               int d, int strideA, int strideB,
+                                               int strideC_tile, int slice_stride) {
+    int idx = threadIdx.x;  // wp*d + sp
+    int wp = idx / d;
+    int sp = idx % d;
+    A[idx] = base_U + (wp * d + sp) * strideA;
+    B[idx] = base_R + wp * strideB;
+    C[idx] = base_C_scratch + wp * slice_stride + sp * strideC_tile;
+}
+
 // update_left_env Step 3: per sp iteration, D pointers
 template<typename Scalar>
 __global__ void setup_lenv_step3_ptrs(Scalar** dA, Scalar** dB, Scalar** dC,
@@ -1716,24 +1734,39 @@ void PDMRGMultiGPU<Scalar>::apply_heff_single_site(int site, const Scalar* d_the
         &zero_val,
         U, cL * cR));
 
-    // Step 3: result_s'[a',b'] = sum_w' U_{w'd+s'}[a',b] * R_w'[b,b']
+    // Step 3 (R3-F1 full-batched collapse): single batched GEMM over all D*d
+    // tiles, writing per-wp scratch slices in V (= dev.d_T1, dead after
+    // Step 2), then one gemv reduce over D into d_result. Round-19 R19H19
+    // port from pdmrg-gpu impl :1992-2018 — replaces the per-wp host loop
+    // (D launches) with 1 setup kernel + 1 batched GEMM + 1 GEMV.
+    // T1 sized t_max = D·dd·chi_max² ≥ D·slice_stride, so V scratch is safe.
     {
-        for (int wp = 0; wp < D; wp++) {
-            Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
-            hipLaunchKernelGGL(setup_heff_ss_step3_ptrs<Scalar>, dim3(1), dim3(d), 0, dev.stream,
-                               dev.d_batch_A, dev.d_batch_B, dev.d_batch_C,
-                               U, R_env, d_result,
-                               wp, d, cL * cR, cR, cL);
-            ROCBLAS_CHECK(Traits::gemm_batched(dev.handle,
-                rocblas_operation_none, rocblas_operation_none,
-                cL, cR, cR,
-                &one,
-                (const Scalar**)dev.d_batch_A, cL,
-                (const Scalar**)dev.d_batch_B, cR * D,
-                &beta,
-                dev.d_batch_C, cL * d,
-                d));
-        }
+        int slice_stride = cL * d * cR;
+        int batch_count = D * d;
+        hipLaunchKernelGGL(setup_heff_ss_step3_full_ptrs<Scalar>,
+                           dim3(1), dim3(batch_count), 0, dev.stream,
+                           dev.d_batch_A, dev.d_batch_B, dev.d_batch_C,
+                           U, R_env, V,
+                           d, cL * cR, cR, cL, slice_stride);
+        ROCBLAS_CHECK(Traits::gemm_batched(dev.handle,
+            rocblas_operation_none, rocblas_operation_none,
+            cL, cR, cR,
+            &one,
+            (const Scalar**)dev.d_batch_A, cL,
+            (const Scalar**)dev.d_batch_B, cR * D,
+            &zero_val,
+            dev.d_batch_C, cL * d,
+            batch_count));
+
+        // Reduce D slices into d_result: d_result = V[slice_stride x D] * ones_D
+        ROCBLAS_CHECK(Traits::gemv(dev.handle,
+            rocblas_operation_none,
+            slice_stride, D,
+            &one,
+            V, slice_stride,
+            dev.d_ones_D, 1,
+            &zero_val,
+            d_result, 1));
     }
     if (di == 0) t_apply_heff_.end(dev.stream);
 }
