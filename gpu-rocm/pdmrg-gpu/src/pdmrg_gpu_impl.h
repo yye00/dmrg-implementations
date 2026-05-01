@@ -19,6 +19,7 @@
 // header is retained on disk for historical reference / cross-validation only.
 
 #include "../../common/hip_check.h"
+#include "../../common/batch_ptrs_kernels.h"
 
 // ============================================================================
 // GPU kernels for batched GEMM pointer setup (eliminates CPU loops + H2D copies)
@@ -84,70 +85,9 @@ __global__ void setup_heff_ts_step3_full_ptrs(Scalar** A, Scalar** B, Scalar** C
 // by the caller (hipMemsetAsync on V / scratch) so Step 2's dense GEMM reads
 // a correct layout and the Step-3 GEMV reduction doesn't pick up stale data.
 
-// Sparse single-site Step 1: lays out L_env and theta pointers on nnz rows.
-template<typename Scalar>
-__global__ void setup_batch_ptrs_wd_sparse(Scalar** A, Scalar** B, Scalar** C,
-                                           Scalar* base_A, Scalar* base_B, Scalar* base_C,
-                                           const int* nnz_ws, int d,
-                                           int strideA, int strideB, int strideC) {
-    int idx = threadIdx.x;
-    int ws = nnz_ws[idx];
-    int w = ws / d;
-    int s = ws % d;
-    A[idx] = base_A + w * strideA;
-    B[idx] = base_B + s * strideB;
-    C[idx] = base_C + ws * strideC;
-}
-
-// Sparse single-site Step 3-full: indexes nnz (wp, sp) columns of W_left.
-template<typename Scalar>
-__global__ void setup_batch_ptrs_step3_full_sparse(Scalar** A, Scalar** B, Scalar** C,
-                                                   Scalar* base_A, Scalar* base_B, Scalar* base_C_scratch,
-                                                   const int* nnz_wpsp, int d,
-                                                   int strideA, int strideB,
-                                                   int strideC_tile, int slice_stride) {
-    int idx = threadIdx.x;
-    int wpsp = nnz_wpsp[idx];
-    int wp = wpsp / d;
-    int sp = wpsp % d;
-    A[idx] = base_A + wpsp * strideA;
-    B[idx] = base_B + wp * strideB;
-    C[idx] = base_C_scratch + wp * slice_stride + sp * strideC_tile;
-}
-
-// Sparse two-site Step 1: A[idx] = L_env + w*strideA, B[idx] = theta offset
-// for (s1, s2), C[idx] = T1 + packed*strideC. packed = w*dd + s1*d + s2.
-template<typename Scalar>
-__global__ void setup_batch_ptrs_wd_twosite_sparse(Scalar** A, Scalar** B, Scalar** C,
-                                                    Scalar* base_A, Scalar* base_B, Scalar* base_C,
-                                                    const int* nnz_wss, int d, int dd,
-                                                    int strideA, int strideB, int strideC) {
-    int idx = threadIdx.x;
-    int packed = nnz_wss[idx];
-    int w  = packed / dd;
-    int ss = packed % dd;
-    int s1 = ss / d, s2 = ss % d;
-    A[idx] = base_A + w * strideA;
-    B[idx] = base_B + (s1 + s2 * d) * strideB;
-    C[idx] = base_C + packed * strideC;
-}
-
-// Sparse two-site Step 3-full: indexes nnz (n, s1p, s2p) columns of WW.
-template<typename Scalar>
-__global__ void setup_batch_ptrs_step3_twosite_full_sparse(Scalar** A, Scalar** B, Scalar** C,
-                                                           Scalar* base_A, Scalar* base_B, Scalar* base_C_scratch,
-                                                           const int* nnz_nss, int d, int dd,
-                                                           int strideA, int strideB,
-                                                           int strideC_tile, int slice_stride) {
-    int idx = threadIdx.x;
-    int packed = nnz_nss[idx];
-    int n  = packed / dd;
-    int ss = packed % dd;
-    int s1p = ss / d, s2p = ss % d;
-    A[idx] = base_A + packed * strideA;
-    B[idx] = base_B + n * strideB;
-    C[idx] = base_C_scratch + n * slice_stride + (s1p + s2p * d) * strideC_tile;
-}
+// Sparse single-site/two-site Step 1 + Step 3-full kernels live in
+// gpu-rocm/common/batch_ptrs_kernels.h (shared with all -gpu/-opt
+// variants). Round-16 D6 cleanup removed the local duplicates here.
 
 // update_left_env Step 3: per sp iteration, D pointers
 // A[wp] = U + (wp*d + sp) * stride_A,  B[wp] = A_mps + sp * stride_B,  C[wp] = L_new + wp * stride_C

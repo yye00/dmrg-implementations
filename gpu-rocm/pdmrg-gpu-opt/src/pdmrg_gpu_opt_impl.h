@@ -53,23 +53,9 @@ __global__ void lanczos_fused_norm_copy_kernel(
 // scratch memset) so dense Step 2 reads a correct layout and the Step-3 GEMV
 // reduction doesn't pick up stale data.
 
-// Sparse two-site Step 1 (WW nnz rows): A[idx] = L_env + w*strideA,
-// B[idx] = theta offset for (s1, s2), C[idx] = T1 + packed*strideC.
-// packed = w*dd + s1*d + s2.
-template<typename Scalar>
-__global__ void setup_batch_ptrs_wd_twosite_sparse(Scalar** A, Scalar** B, Scalar** C,
-                                                    Scalar* base_A, Scalar* base_B, Scalar* base_C,
-                                                    const int* nnz_wss, int d, int dd,
-                                                    int strideA, int strideB, int strideC) {
-    int idx = threadIdx.x;
-    int packed = nnz_wss[idx];
-    int w  = packed / dd;
-    int ss = packed % dd;
-    int s1 = ss / d, s2 = ss % d;
-    A[idx] = base_A + w * strideA;
-    B[idx] = base_B + (s1 + s2 * d) * strideB;
-    C[idx] = base_C + packed * strideC;
-}
+// Sparse two-site Step 1 kernel `setup_batch_ptrs_wd_twosite_sparse`
+// lives in gpu-rocm/common/batch_ptrs_kernels.h (shared). Round-16 D6
+// cleanup removed the local duplicate that risked ODR violation.
 
 // ============================================================================
 // Constructor
@@ -2324,25 +2310,19 @@ void PDMRGGPUOpt<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta
                          && wl_nnz_cols_count_[site] > 0
                          && wl_nnz_cols_count_[site] < D * d;
 
-    // Step 1: V_ws[a',b] = L_w^T[a',a] * theta_s[a,b]  (D*d batched GEMMs)
+    // Step 1: V_ws[a',b] = L_w^T[a',a] * theta_s[a,b]  (D*d batched GEMMs).
+    // Round-16 CRITICAL fix: GPU kernel launches replace host pointer-array
+    // build + 3× hipMemcpyAsync H2D. Single-site is the DEFAULT warmup AND
+    // polish path per PDMRG-rules-2026-04-15, so this fires every Lanczos
+    // iter on every benchmark — eliminating the host roundtrip is essential.
     if (sparse_s1) {
         HIP_CHECK(hipMemsetAsync(V, 0, (size_t)D * d * cL * cR * sizeof(Scalar), streams_[si]));
-        const std::vector<int>& h_nnz = h_WL_nnz_rows_[site];
-        int nnz = (int)h_nnz.size();
-        Scalar* h_A[256], *h_B[256], *h_C[256];
-        for (int idx = 0; idx < nnz; idx++) {
-            int ws_idx = h_nnz[idx];
-            int w = ws_idx / d, s = ws_idx % d;
-            h_A[idx] = L_env + w * cL;
-            h_B[idx] = const_cast<Scalar*>(theta_src) + s * cL;
-            h_C[idx] = V + ws_idx * cL * cR;
-        }
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, h_A, nnz * sizeof(Scalar*),
-                                  hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, h_B, nnz * sizeof(Scalar*),
-                                  hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, h_C, nnz * sizeof(Scalar*),
-                                  hipMemcpyHostToDevice, streams_[si]));
+        int nnz = (int)h_WL_nnz_rows_[site].size();
+        hipLaunchKernelGGL(setup_batch_ptrs_wd_sparse<Scalar>,
+                           dim3(1), dim3(nnz), 0, streams_[si],
+                           ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
+                           L_env, const_cast<Scalar*>(theta_src), V,
+                           d_WL_nnz_rows_[site], d, cL, cL, cL * cR);
         ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
             Traits::op_t, rocblas_operation_none,
             cL, cR, cL,
@@ -2354,20 +2334,11 @@ void PDMRGGPUOpt<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta
             nnz));
     } else {
         int batch_count = D * d;
-        Scalar* h_A[256], *h_B[256], *h_C[256];
-        for (int w = 0; w < D; w++)
-            for (int s = 0; s < d; s++) {
-                int ws_idx = w * d + s;
-                h_A[ws_idx] = L_env + w * cL;
-                h_B[ws_idx] = const_cast<Scalar*>(theta_src) + s * cL;
-                h_C[ws_idx] = V + ws_idx * cL * cR;
-            }
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, h_A, batch_count * sizeof(Scalar*),
-                                  hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, h_B, batch_count * sizeof(Scalar*),
-                                  hipMemcpyHostToDevice, streams_[si]));
-        HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, h_C, batch_count * sizeof(Scalar*),
-                                  hipMemcpyHostToDevice, streams_[si]));
+        hipLaunchKernelGGL(setup_batch_ptrs_wd<Scalar>,
+                           dim3(1), dim3(batch_count), 0, streams_[si],
+                           ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
+                           L_env, const_cast<Scalar*>(theta_src), V,
+                           d, cL, cL, cL * cR);
         ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
             Traits::op_t, rocblas_operation_none,
             cL, cR, cL,
