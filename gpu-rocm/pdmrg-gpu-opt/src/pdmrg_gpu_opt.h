@@ -167,12 +167,19 @@ private:
         Scalar* d_dav_V;        // (theta_size_max, max_subspace) subspace basis
         Scalar* d_dav_AV;       // (theta_size_max, max_subspace) H × basis
         Scalar* d_dav_work;     // (theta_size_max, davidson_b) scratch
-        Scalar* d_dav_work2;    // (theta_size_max, davidson_b) scratch 2
-        // Host buffers for small eigenproblem
-        std::vector<Scalar> h_dav_H_proj;      // (max_sub, max_sub)
+        Scalar* d_dav_work2;    // (theta_size_max, davidson_b) scratch 2 — also
+                                //   receives eigenvectors after rocsolver_syevd
+        // On-device Rayleigh-Ritz scratch (round-15 H-opt-pdmrg-davidson-syev
+        // port). Replaces per-iter D2H + host symmetrize + LAPACK syev + H2D
+        // pattern that violated the "no host roundtrips per sweep" rule.
+        // Mirrors dmrg-gpu-opt round-7 C2 fix.
+        RealType* d_dav_eigvals;  // (max_sub) lowest-to-highest eigenvalues
+        RealType* d_dav_E;        // (max_sub) syevd off-diagonal scratch
+        rocblas_int* d_dav_info;  // syevd return code (device side)
+        // Tiny host mirror for the b_use lowest eigenvalues — needed for
+        // residual scaling inside the Davidson inner loop. Per-iter D2H of
+        // ≤ b values (b ≈ 4) is unavoidable for the per-i `neg_ei` scaling.
         std::vector<RealType> h_dav_eigvals;   // (max_sub)
-        std::vector<Scalar> h_dav_eigvecs;     // (max_sub, max_sub)
-        std::vector<RealType> h_dav_syev_work; // workspace for dsyev rwork
 
         // === Lanczos fallback workspace ===
         Scalar* d_lanczos_v;

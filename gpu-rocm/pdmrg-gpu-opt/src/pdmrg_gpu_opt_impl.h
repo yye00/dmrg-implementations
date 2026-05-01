@@ -277,10 +277,12 @@ void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
             HIP_CHECK(hipMalloc(&ws.d_dav_work,  dav_work_sz * sizeof(Scalar)));
             HIP_CHECK(hipMalloc(&ws.d_dav_work2, dav_work_sz * sizeof(Scalar)));
         }
-        ws.h_dav_H_proj.resize(davidson_max_sub_ * davidson_max_sub_);
+        // Round-15 H-opt-pdmrg-davidson-syev port: on-device Rayleigh-Ritz
+        // scratch — replaces the per-iter host LAPACK syev roundtrip.
+        HIP_CHECK(hipMalloc(&ws.d_dav_eigvals, davidson_max_sub_ * sizeof(RealType)));
+        HIP_CHECK(hipMalloc(&ws.d_dav_E,       davidson_max_sub_ * sizeof(RealType)));
+        HIP_CHECK(hipMalloc(&ws.d_dav_info,    sizeof(rocblas_int)));
         ws.h_dav_eigvals.resize(davidson_max_sub_);
-        ws.h_dav_eigvecs.resize(davidson_max_sub_ * davidson_max_sub_);
-        ws.h_dav_syev_work.resize(Traits::syev_rwork_size(davidson_max_sub_));
 
         // === Lanczos fallback workspace ===
         HIP_CHECK(hipMalloc(&ws.d_lanczos_v, (size_t)max_lanczos_iter_ * theta_size_max_ * sizeof(Scalar)));
@@ -421,6 +423,9 @@ void PDMRGGPUOpt<Scalar>::free_gpu_resources() {
         if (ws.d_dav_AV) hipFree(ws.d_dav_AV);
         if (ws.d_dav_work) hipFree(ws.d_dav_work);
         if (ws.d_dav_work2) hipFree(ws.d_dav_work2);
+        if (ws.d_dav_eigvals) hipFree(ws.d_dav_eigvals);
+        if (ws.d_dav_E) hipFree(ws.d_dav_E);
+        if (ws.d_dav_info) hipFree(ws.d_dav_info);
         // Lanczos
         if (ws.d_lanczos_v) hipFree(ws.d_lanczos_v);
         if (ws.d_ritz_coeffs) hipFree(ws.d_ritz_coeffs);
@@ -1563,74 +1568,41 @@ double PDMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
     for (int iteration = 0; iteration < max_iter; iteration++) {
         HIP_CHECK(hipStreamSynchronize(streams_[si]));
 
-        // Rayleigh-Ritz: H_proj = V^H @ AV  → (k, k)
+        // Rayleigh-Ritz: H_proj = V^H @ AV  → (k, k). gemm into d_dav_work2
+        // so rocsolver_syevd can overwrite it in-place with eigenvectors.
         ROCBLAS_CHECK(Traits::gemm(handles_[si],
             Traits::op_h, rocblas_operation_none,
-            k, k, dim, &one, V, dim, AV, dim, &zero_val, ws.d_dav_work, k));
+            k, k, dim, &one, V, dim, AV, dim, &zero_val, ws.d_dav_work2, k));
 
-        // Copy H_proj to host
-        HIP_CHECK(hipMemcpy(ws.h_dav_H_proj.data(), ws.d_dav_work,
-                            k * k * sizeof(Scalar), hipMemcpyDeviceToHost));
+        // Round-15 H-opt-pdmrg-davidson-syev port: on-device Hermitian
+        // eigendecomposition replaces the per-iter D2H + host symmetrize +
+        // host LAPACK syev + H2D pattern. Mirrors round-7 C2 fix for
+        // dmrg-gpu-opt and dmrg2-gpu-opt. uplo=upper is sufficient — the
+        // projected matrix is exactly Hermitian up to roundoff.
+        ROCBLAS_CHECK(Traits::rocsolver_syevd(handles_[si],
+                rocblas_evect_original, rocblas_fill_upper,
+                k, ws.d_dav_work2, k, ws.d_dav_eigvals, ws.d_dav_E, ws.d_dav_info));
 
-        // Symmetrize on host: H_proj = 0.5 * (H_proj + H_proj^H)
-        for (int i = 0; i < k; i++) {
-            for (int j = i; j < k; j++) {
-                Scalar hij = ws.h_dav_H_proj[i + j * k];
-                Scalar hji = ws.h_dav_H_proj[j + i * k];
-                Scalar sym;
-                if constexpr (Traits::is_complex) {
-                    sym = make_hipDoubleComplex(
-                        0.5 * (hipCreal(hij) + hipCreal(hji)),
-                        0.5 * (hipCimag(hij) - hipCimag(hji)));
-                    ws.h_dav_H_proj[i + j * k] = sym;
-                    ws.h_dav_H_proj[j + i * k] = make_hipDoubleComplex(hipCreal(sym), -hipCimag(sym));
-                } else {
-                    sym = 0.5 * (hij + hji);
-                    ws.h_dav_H_proj[i + j * k] = sym;
-                    ws.h_dav_H_proj[j + i * k] = sym;
-                }
-            }
-        }
-
-        // Eigendecompose H_proj on CPU
-        std::copy(ws.h_dav_H_proj.begin(), ws.h_dav_H_proj.begin() + k * k,
-                  ws.h_dav_eigvecs.begin());
-        int info;
-        const char jobz = 'V', uplo = 'U';
-        int lwork = -1;
-        Scalar work_opt;
-        // Query workspace
-        Traits::lapack_syev(&jobz, &uplo, &k,
-                ws.h_dav_eigvecs.data(), &k, ws.h_dav_eigvals.data(),
-                &work_opt, &lwork,
-                ws.h_dav_syev_work.empty() ? nullptr : ws.h_dav_syev_work.data(), &info);
-        if constexpr (Traits::is_complex) {
-            lwork = (int)Traits::real_part(work_opt) + 1;
-        } else {
-            lwork = (int)work_opt + 1;
-        }
-        std::vector<Scalar> syev_work(lwork);
-        std::vector<RealType> syev_rwork(Traits::syev_rwork_size(k));
-        Traits::lapack_syev(&jobz, &uplo, &k,
-                ws.h_dav_eigvecs.data(), &k, ws.h_dav_eigvals.data(),
-                syev_work.data(), &lwork,
-                syev_rwork.empty() ? nullptr : syev_rwork.data(), &info);
-
-        if (info != 0) {
+        // D2H lowest eigenvalue + info for control-flow only.
+        double energy;
+        rocblas_int h_dav_info;
+        HIP_CHECK(hipMemcpyAsync(&energy, ws.d_dav_eigvals, sizeof(double),
+                                  hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipMemcpyAsync(&h_dav_info, ws.d_dav_info, sizeof(rocblas_int),
+                                  hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
+        if (h_dav_info != 0) {
             // Eigendecomp failed — fall back to Lanczos
             return lanczos_eigensolver(site, d_theta, theta_size, si);
         }
-
-        double energy = ws.h_dav_eigvals[0];  // lowest eigenvalue
 
         // Track best
         if (energy < best_energy) {
             best_energy = energy;
         }
 
-        // Upload eigenvectors to GPU for Ritz vector computation
-        HIP_CHECK(hipMemcpy(ws.d_dav_work2, ws.h_dav_eigvecs.data(),
-                            k * k * sizeof(Scalar), hipMemcpyHostToDevice));
+        // d_dav_work2 now holds the (k×k) eigenvectors on device; the host
+        // h_dav_eigvecs upload is no longer needed.
 
         // X = V @ eigvecs → use d_dav_work as scratch for X (dim, k)
         // But d_dav_work is being used for H_proj. Use d_heff_result as scratch for x0.
@@ -1662,8 +1634,17 @@ double PDMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
 
         // Expand subspace with residual corrections
         int n_new = 0;
+        // D2H lowest b_use eigenvalues for residual scaling — small per-iter
+        // copy (b ≤ 4) needed to compute neg_ei for the per-i scal call.
+        // Mirrors dmrg-gpu-opt's pattern; cannot be eliminated short of
+        // moving the per-i scaling into a fused kernel.
+        int b_use = std::min(b, k);
+        HIP_CHECK(hipMemcpyAsync(ws.h_dav_eigvals.data(), ws.d_dav_eigvals,
+                                  b_use * sizeof(RealType),
+                                  hipMemcpyDeviceToHost, streams_[si]));
+        HIP_CHECK(hipStreamSynchronize(streams_[si]));
         // Compute residuals for lowest b Ritz pairs
-        for (int i = 0; i < std::min(b, k); i++) {
+        for (int i = 0; i < b_use; i++) {
             Scalar* r_i = ws.d_dav_work + (size_t)n_new * dim;
 
             // r_i = AV @ eigvecs[:, i] - eigvals[i] * V @ eigvecs[:, i]
@@ -1752,12 +1733,12 @@ double PDMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
 
         // Check if subspace would be too large → restart
         if (k + n_good > max_sub) {
-            // Restart: keep best b Ritz vectors
+            // Restart: keep best b Ritz vectors. Eigenvectors already live
+            // on device in ws.d_dav_work2 from rocsolver_syevd above; no
+            // H2D needed (round-15 H-opt-pdmrg-davidson-syev port).
             int keep = std::min(b, k);
 
             // X_keep = V @ eigvecs[:, :keep] → (dim, keep)
-            HIP_CHECK(hipMemcpy(ws.d_dav_work2, ws.h_dav_eigvecs.data(),
-                                k * k * sizeof(Scalar), hipMemcpyHostToDevice));
             ROCBLAS_CHECK(Traits::gemm(handles_[si],
                 rocblas_operation_none, rocblas_operation_none,
                 dim, keep, k, &one, V, dim, ws.d_dav_work2, k,
