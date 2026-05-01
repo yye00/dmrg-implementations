@@ -1381,6 +1381,8 @@ void DMRGGPUOpt<Scalar>::svd_fallback(int site, Scalar* d_theta, char direction)
         // update_left_env(site) can start concurrently with the absorb below
         // (round-6 J2 port of dmrg-gpu's dual-stream pipeline).
         HIP_CHECK(hipEventRecord(event_canon_ready_, stream_));
+        t_svd_.end(stream_);
+        t_absorb_.begin(stream_);
 
         // S*Vh → d_svd_work_ (scale rows of Vh by S on device).
         // Vh's leading dim is vh_lda (= full_k for full SVD, = b_k for RSVD).
@@ -1408,6 +1410,7 @@ void DMRGGPUOpt<Scalar>::svd_fallback(int site, Scalar* d_theta, char direction)
                                      hipMemcpyDeviceToDevice, stream_));
         }
         bond_dims_[site + 1] = new_chi_R;
+        t_absorb_.end(stream_);
 
     } else {  // direction == 'L'
         int new_chi_L = new_k;
@@ -1431,6 +1434,8 @@ void DMRGGPUOpt<Scalar>::svd_fallback(int site, Scalar* d_theta, char direction)
         // update_right_env(site) can start concurrently with the absorb below
         // (round-6 J2 port of dmrg-gpu's dual-stream pipeline).
         HIP_CHECK(hipEventRecord(event_canon_ready_, stream_));
+        t_svd_.end(stream_);
+        t_absorb_.begin(stream_);
 
         // U*S → d_svd_work_ (scale columns of U by S on device).
         {
@@ -1457,8 +1462,8 @@ void DMRGGPUOpt<Scalar>::svd_fallback(int site, Scalar* d_theta, char direction)
                                      hipMemcpyDeviceToDevice, stream_));
         }
         bond_dims_[site] = new_chi_L;
+        t_absorb_.end(stream_);
     }
-    t_svd_.end(stream_);
 }
 
 // ============================================================================
@@ -1480,11 +1485,11 @@ double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta)
     if (dim <= 2 * b) {
         return lanczos_eigensolver(site, d_theta);
     }
-
-    // Round-15 H1-opt-PhaseTimer-prop: instrument the Davidson path with
-    // the shared "outer eigensolve" timer. Begin AFTER the Lanczos
-    // fallback short-circuit to avoid double-instrumentation.
-    t_lanczos_.begin(stream_);
+    // Round-17 H1-opt-PhaseTimer-prop: dedicated t_davidson_ panel (R15
+    // shared t_lanczos_ pre-R17, contradicting the header comment). Begin
+    // AFTER the tiny-dim Lanczos short-circuit; Lanczos has its own
+    // t_lanczos_ pair.
+    t_davidson_.begin(stream_);
 
     // Initialize V: first column = theta/||theta||
     RealType norm;
@@ -1575,9 +1580,8 @@ double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta)
         HIP_CHECK(hipStreamSynchronize(stream_));
         if (h_dav_info != 0) {
             // Eigendecomp failed — fall back to Lanczos. Close Davidson's
-            // outer-eigensolve timer pair before the early return; Lanczos
-            // opens its own pair.
-            t_lanczos_.end(stream_);
+            // timer pair before the early return; Lanczos opens its own pair.
+            t_davidson_.end(stream_);
             return lanczos_eigensolver(site, d_theta);
         }
 
@@ -1617,7 +1621,7 @@ double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta)
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_theta, 1, &norm));
             inv_norm = 1.0 / norm;
             ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_norm, d_theta, 1));
-            t_lanczos_.end(stream_);
+            t_davidson_.end(stream_);
             return energy;
         }
         energy_prev = energy;
@@ -1650,7 +1654,7 @@ double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta)
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_theta, 1, &norm));
             inv_norm = 1.0 / norm;
             ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_norm, d_theta, 1));
-            t_lanczos_.end(stream_);
+            t_davidson_.end(stream_);
             return energy;
         }
 
@@ -1702,7 +1706,7 @@ double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta)
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_theta, 1, &norm));
             inv_norm = 1.0 / norm;
             ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_norm, d_theta, 1));
-            t_lanczos_.end(stream_);
+            t_davidson_.end(stream_);
             return energy;
         }
 
@@ -1761,7 +1765,7 @@ double DMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta)
     ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_theta, 1, &norm));
     inv_norm = 1.0 / norm;
     ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_norm, d_theta, 1));
-    t_lanczos_.end(stream_);
+    t_davidson_.end(stream_);
     return best_energy;
 }
 
@@ -1975,6 +1979,7 @@ double DMRGGPUOpt<Scalar>::run(int n_sweeps) {
 template<typename Scalar>
 void DMRGGPUOpt<Scalar>::init_timers() {
     t_lanczos_.init("lanczos", opts_.profile);
+    t_davidson_.init("davidson", opts_.profile);
     t_apply_heff_.init("apply_heff", opts_.profile);
     t_svd_.init("svd", opts_.profile);
     t_absorb_.init("absorb", opts_.profile);
@@ -1994,6 +1999,7 @@ void DMRGGPUOpt<Scalar>::report_timers() {
     };
     std::fprintf(stderr, "== Phase timings ==\n");
     row(t_lanczos_);
+    row(t_davidson_);
     row(t_apply_heff_);
     row(t_svd_);
     row(t_absorb_);

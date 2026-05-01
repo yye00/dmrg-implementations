@@ -255,9 +255,10 @@ private:
     // Ablation flags + phase timers
     GpuOpts opts_;
     PhaseTimer t_lanczos_;      // full lanczos_eigensolver call
+    PhaseTimer t_davidson_;     // full block_davidson_eigensolver call (excl. Lanczos fallback)
     PhaseTimer t_apply_heff_;   // each apply_heff invocation
-    PhaseTimer t_svd_;          // SVD bond splitting
-    PhaseTimer t_absorb_;       // scale + absorb GEMM
+    PhaseTimer t_svd_;          // SVD bond splitting + absorb (intermixed
+                                // across full GPU / RSVD / CPU fallback paths)
     PhaseTimer t_env_update_;   // update_left_env / update_right_env
     void init_timers();
     void report_timers();

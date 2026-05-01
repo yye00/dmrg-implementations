@@ -15,6 +15,7 @@
 #include <stdexcept>
 
 #include "../../common/hip_check.h"
+#include "../../common/batch_ptrs_kernels.h"
 
 // ============================================================================
 // GPU kernels for batched GEMM pointer setup (eliminates CPU loops + H2D copies)
@@ -345,6 +346,16 @@ void PDMRGMultiGPU<Scalar>::allocate_device_resources() {
         HIP_CHECK(hipMalloc(&dev.d_heff_batch_C, batch_max * sizeof(Scalar*)));
         dev.heff_cached_site = -1;
 
+        // Step 3 reduce-vector: D ones for the gemv collapse over D batches
+        // (R17H4 port: replaces per-(s1p,s2p,n) host loop with one gemm_batched
+        // + one gemv).
+        HIP_CHECK(hipMalloc(&dev.d_ones_D, D_mpo_ * sizeof(Scalar)));
+        {
+            std::vector<Scalar> h_ones(D_mpo_, Traits::one());
+            HIP_CHECK(hipMemcpy(dev.d_ones_D, h_ones.data(),
+                                D_mpo_ * sizeof(Scalar), hipMemcpyHostToDevice));
+        }
+
         // Lanczos device-pointer-mode scalars
         HIP_CHECK(hipMalloc(&dev.d_dot_result, sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&dev.d_nrm2_result, sizeof(RealType)));
@@ -502,6 +513,7 @@ void PDMRGMultiGPU<Scalar>::free_gpu_resources() {
         if (dev.d_batch_C) hipFree(dev.d_batch_C);
         if (dev.d_heff_batch_A) hipFree(dev.d_heff_batch_A);
         if (dev.d_heff_batch_C) hipFree(dev.d_heff_batch_C);
+        if (dev.d_ones_D)       hipFree(dev.d_ones_D);
         if (dev.d_dot_result) hipFree(dev.d_dot_result);
         if (dev.d_nrm2_result) hipFree(dev.d_nrm2_result);
         if (dev.d_neg_alpha) hipFree(dev.d_neg_alpha);
@@ -798,22 +810,38 @@ void PDMRGMultiGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_
         &zero_val,
         T2, cL * cR));
 
-    // Step 3: Loop of GEMMs -- T2 x R_env
-    for (int s1p = 0; s1p < d; s1p++) {
-        for (int s2p = 0; s2p < d; s2p++) {
-            for (int n = 0; n < D; n++) {
-                Scalar beta = (n == 0) ? Traits::zero() : Traits::one();
-                int ws_out = n * dd + s1p * d + s2p;
-                ROCBLAS_CHECK(Traits::gemm(dev.handle,
-                    rocblas_operation_none, rocblas_operation_none,
-                    cL, cR, cR,
-                    &one,
-                    T2 + ws_out * cL * cR, cL,
-                    R_env + n * cR, cR * D,
-                    &beta,
-                    d_result + s1p * cL + s2p * cL * d, cL * dd));
-            }
-        }
+    // Step 3: collapsed batched GEMM + reduce. Round-17 R17H4 port from
+    // dmrg2-gpu (impl 720-766): replaces the per-(s1p,s2p,n) host loop —
+    // d²·D scalar gemms = host pointer-table churn — with one device-side
+    // pointer-setup kernel + one gemm_batched + one gemv reduce over D.
+    // Reuses T1 (size D·dd·cL·cR, dead since Step 2) as the per-n scratch.
+    {
+        int slice_stride = cL * dd * cR;
+        int batch_count = D * dd;
+        hipLaunchKernelGGL(setup_batch_ptrs_step3_twosite_full<Scalar>,
+                           dim3(1), dim3(batch_count), 0, dev.stream,
+                           dev.d_batch_A, dev.d_batch_B, dev.d_batch_C,
+                           T2, R_env, T1,
+                           d, dd, cL * cR, cR, cL, slice_stride);
+        ROCBLAS_CHECK(Traits::gemm_batched(dev.handle,
+            rocblas_operation_none, rocblas_operation_none,
+            cL, cR, cR,
+            &one,
+            (const Scalar**)dev.d_batch_A, cL,
+            (const Scalar**)dev.d_batch_B, cR * D,
+            &zero_val,
+            dev.d_batch_C, cL * dd,
+            batch_count));
+
+        // Reduce: d_result[slice_stride] = T1[slice_stride x D] * ones_D
+        ROCBLAS_CHECK(Traits::gemv(dev.handle,
+            rocblas_operation_none,
+            slice_stride, D,
+            &one,
+            T1, slice_stride,
+            dev.d_ones_D, 1,
+            &zero_val,
+            d_result, 1));
     }
     if (di == 0) t_apply_heff_.end(dev.stream);
 }
@@ -829,6 +857,7 @@ void PDMRGMultiGPU<Scalar>::update_left_env(int site, int di) {
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& dev = devices_[di];
+    if (di == 0) t_env_update_.begin(dev.stream);
 
     ensure_L_env_alloc(site + 1, chi_out, di);
 
@@ -889,6 +918,7 @@ void PDMRGMultiGPU<Scalar>::update_left_env(int site, int di) {
     if constexpr (Traits::is_complex) {
         conjugate_inplace(L_new, chi_out * D * chi_out, dev.stream);
     }
+    if (di == 0) t_env_update_.end(dev.stream);
 }
 
 // ============================================================================
@@ -902,6 +932,7 @@ void PDMRGMultiGPU<Scalar>::update_right_env(int site, int di) {
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& dev = devices_[di];
+    if (di == 0) t_env_update_.begin(dev.stream);
 
     ensure_R_env_alloc(site, chi_out, di);
 
@@ -958,6 +989,7 @@ void PDMRGMultiGPU<Scalar>::update_right_env(int site, int di) {
                 D));
         }
     }
+    if (di == 0) t_env_update_.end(dev.stream);
 }
 
 // ============================================================================
@@ -1649,6 +1681,7 @@ void PDMRGMultiGPU<Scalar>::apply_heff_single_site(int site, const Scalar* d_the
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& dev = devices_[di];
+    if (di == 0) t_apply_heff_.begin(dev.stream);
 
     Scalar* L_env = get_L_env(site, di);
     Scalar* R_env = get_R_env(site + 1, di);
@@ -1702,6 +1735,7 @@ void PDMRGMultiGPU<Scalar>::apply_heff_single_site(int site, const Scalar* d_the
                 d));
         }
     }
+    if (di == 0) t_apply_heff_.end(dev.stream);
 }
 
 // ============================================================================

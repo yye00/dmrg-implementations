@@ -2761,7 +2761,6 @@ void PDMRGGPU<Scalar>::init_timers() {
     t_lanczos_.init("lanczos", opts_.profile);
     t_apply_heff_.init("apply_heff", opts_.profile);
     t_svd_.init("svd", opts_.profile);
-    t_absorb_.init("absorb", opts_.profile);
     t_env_update_.init("env_update", opts_.profile);
 }
 
@@ -2782,7 +2781,6 @@ void PDMRGGPU<Scalar>::report_timers() {
     row(t_lanczos_);
     row(t_apply_heff_);
     row(t_svd_);
-    row(t_absorb_);
     row(t_env_update_);
 }
 

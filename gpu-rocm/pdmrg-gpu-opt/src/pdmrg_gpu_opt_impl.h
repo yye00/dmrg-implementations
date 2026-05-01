@@ -1497,6 +1497,9 @@ double PDMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
     if (dim <= 2 * b) {
         return lanczos_eigensolver(site, d_theta, theta_size, si);
     }
+    // Begin Davidson timing AFTER the tiny-dim fallback so we don't double-count
+    // Lanczos time (which has its own t_lanczos_ panel).
+    if (si == 0) t_davidson_.begin(streams_[si]);
 
     // Initialize V: first column = theta/||theta||
     RealType norm;
@@ -1586,6 +1589,7 @@ double PDMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
         HIP_CHECK(hipStreamSynchronize(streams_[si]));
         if (h_dav_info != 0) {
             // Eigendecomp failed — fall back to Lanczos
+            if (si == 0) t_davidson_.end(streams_[si]);
             return lanczos_eigensolver(site, d_theta, theta_size, si);
         }
 
@@ -1621,6 +1625,7 @@ double PDMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             ROCBLAS_CHECK(Traits::nrm2(handles_[si], dim, d_theta, 1, &norm));
             inv_norm = 1.0 / norm;
             ROCBLAS_CHECK(Traits::scal_real(handles_[si], dim, &inv_norm, d_theta, 1));
+            if (si == 0) t_davidson_.end(streams_[si]);
             return energy;
         }
         energy_prev = energy;
@@ -1670,6 +1675,7 @@ double PDMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             ROCBLAS_CHECK(Traits::nrm2(handles_[si], dim, d_theta, 1, &norm));
             inv_norm = 1.0 / norm;
             ROCBLAS_CHECK(Traits::scal_real(handles_[si], dim, &inv_norm, d_theta, 1));
+            if (si == 0) t_davidson_.end(streams_[si]);
             return energy;
         }
 
@@ -1725,6 +1731,7 @@ double PDMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             ROCBLAS_CHECK(Traits::nrm2(handles_[si], dim, d_theta, 1, &norm));
             inv_norm = 1.0 / norm;
             ROCBLAS_CHECK(Traits::scal_real(handles_[si], dim, &inv_norm, d_theta, 1));
+            if (si == 0) t_davidson_.end(streams_[si]);
             return energy;
         }
 
@@ -1785,6 +1792,7 @@ double PDMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
     ROCBLAS_CHECK(Traits::nrm2(handles_[si], dim, d_theta, 1, &norm));
     inv_norm = 1.0 / norm;
     ROCBLAS_CHECK(Traits::scal_real(handles_[si], dim, &inv_norm, d_theta, 1));
+    if (si == 0) t_davidson_.end(streams_[si]);
     return best_energy;
 }
 
@@ -2289,6 +2297,7 @@ void PDMRGGPUOpt<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& ws = workspaces_[si];
+    if (si == 0) t_apply_heff_.begin(streams_[si]);
 
     // LANCZOS_GRAPH is DISABLED for single-site here: Step 1/Step 3 else-branches
     // (and the sparse path) use stack-allocated Scalar* h_A[256], h_B[256], h_C[256]
@@ -2420,6 +2429,7 @@ void PDMRGGPUOpt<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta
         }
     }
 
+    if (si == 0) t_apply_heff_.end(streams_[si]);
 }
 
 // ============================================================================
@@ -3565,9 +3575,9 @@ double PDMRGGPUOpt<Scalar>::run(int n_outer_sweeps, int n_local_sweeps, int n_wa
 template<typename Scalar>
 void PDMRGGPUOpt<Scalar>::init_timers() {
     t_lanczos_.init("lanczos", opts_.profile);
+    t_davidson_.init("davidson", opts_.profile);
     t_apply_heff_.init("apply_heff", opts_.profile);
     t_svd_.init("svd", opts_.profile);
-    t_absorb_.init("absorb", opts_.profile);
     t_env_update_.init("env_update", opts_.profile);
 }
 
@@ -3584,9 +3594,9 @@ void PDMRGGPUOpt<Scalar>::report_timers() {
     };
     std::fprintf(stderr, "== Phase timings ==\n");
     row(t_lanczos_);
+    row(t_davidson_);
     row(t_apply_heff_);
     row(t_svd_);
-    row(t_absorb_);
     row(t_env_update_);
 }
 

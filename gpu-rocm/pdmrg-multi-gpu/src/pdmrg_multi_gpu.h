@@ -131,6 +131,9 @@ private:
         Scalar** d_batch_C;
         Scalar** d_heff_batch_A;
         Scalar** d_heff_batch_C;
+        Scalar*  d_ones_D;       // length-D vector of Traits::one(), used by
+                                 // Step 3 reduce after gemm_batched collapse
+                                 // (round-17 R17H4 port from dmrg2-gpu).
         int heff_cached_site;
         Scalar* d_dot_result;
         RealType* d_nrm2_result;
@@ -211,23 +214,19 @@ private:
     // panel cost-free in the parallel hot path.
     PhaseTimer t_lanczos_;
     PhaseTimer t_apply_heff_;
-    PhaseTimer t_svd_;
-    PhaseTimer t_absorb_;
+    PhaseTimer t_svd_;          // includes absorb (intermixed in two-site SVD
+                                // post-processing across full GPU / RSVD /
+                                // CPU fallback paths)
     PhaseTimer t_env_update_;
     void init_timers() {
         t_lanczos_.init("lanczos", opts_.profile);
         t_apply_heff_.init("apply_heff", opts_.profile);
         t_svd_.init("svd", opts_.profile);
-        t_absorb_.init("absorb", opts_.profile);
         t_env_update_.init("env_update", opts_.profile);
     }
     void report_timers() {
         if (!opts_.profile) return;
         std::fprintf(stderr, "== pdmrg-multi-gpu phase timers (device 0 only) ==\n");
-        // Skip uninstrumented phases — printing 0.00 ms / 0 calls would be
-        // noise. Currently lanczos / apply_heff / svd are wired; absorb
-        // and env_update remain available for forward instrumentation
-        // without changing the panel layout.
         auto print_if_used = [](const char* lbl, PhaseTimer& t) {
             if (t.calls() == 0) return;
             std::fprintf(stderr, "  %-12s : %8.2f ms (%d calls)\n",
@@ -236,7 +235,6 @@ private:
         print_if_used("lanczos",    t_lanczos_);
         print_if_used("apply_heff", t_apply_heff_);
         print_if_used("svd",        t_svd_);
-        print_if_used("absorb",     t_absorb_);
         print_if_used("env_update", t_env_update_);
     }
 public:

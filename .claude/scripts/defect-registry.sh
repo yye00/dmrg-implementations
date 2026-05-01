@@ -36,7 +36,11 @@ scan() {
     local pattern="$2"
     shift 2
     local hits
-    hits=$(grep -rEn "$pattern" "$@" "${VARIANTS[@]/%//src}" 2>/dev/null | grep -v 'worktrees' || true)
+    # Skip C++ line-comments: hits whose first non-whitespace after `:line:` is `//`.
+    hits=$(grep -rEn "$pattern" "$@" "${VARIANTS[@]/%//src}" 2>/dev/null \
+        | grep -v 'worktrees' \
+        | grep -vE ':[[:space:]]*//' \
+        || true)
     if [[ -n "$hits" ]]; then
         local count
         count=$(printf '%s\n' "$hits" | wc -l)
@@ -85,16 +89,39 @@ scan "D6: variant-local setup_batch_ptrs kernel" \
      '^__global__ void setup_batch_ptrs_' \
      --include='*_impl.h' --include='*.h'
 
-# ----- D7: host LAPACK syev on hot path (must be on-device rocsolver) -----
-# Init-time workspace queries and use_cpu_svd_ branch are acceptable.
-scan "D7: host lapack_syev (excluding init/use_cpu_svd_)" \
-     'lapack_syev\(' \
-     --include='*_impl.h'
-
-# ----- D8: host LAPACK gesvd on hot path (must be rocsolver_gesvd) -----
-scan "D8: host lapack_gesvd (excluding init/use_cpu_svd_)" \
-     'lapack_gesvd\(' \
-     --include='*_impl.h'
+# ----- D7/D8: host LAPACK on hot path (must be rocsolver) -----
+# Init-time workspace queries and `use_cpu_svd_` opt-in branches are charter-
+# allowed. Detect the latter heuristically: skip if either (a) the same call
+# uses nullptr A (workspace size query), or (b) the surrounding block throws
+# a runtime_error mentioning use_cpu_svd_ on info != 0.
+echo
+echo "===================================================================="
+echo "DEFECT CLASS: D7+D8 — host lapack_syev / lapack_gesvd on hot path"
+echo "===================================================================="
+for variant in "${VARIANTS[@]}"; do
+    [[ ! -d "$variant/src" ]] && continue
+    hits=$(awk '
+        # Track 16 lines of preceding context.
+        { prev[NR%16] = $0 }
+        /lapack_(syev|gesvd)\(/ {
+            line=NR; ctx=$0;
+            ctx_extra=""; for(i=1;i<=8;i++){ if((getline next_line)>0) ctx_extra = ctx_extra "\n" next_line; }
+            ctx_pre=""; for(i=1;i<=15;i++){ ctx_pre = ctx_pre "\n" prev[(line-i)%16] }
+            full = ctx_pre ctx ctx_extra;
+            # Workspace size query: lwork* = -1 in preceding lines.
+            if (full ~ /lwork[a-zA-Z_]*[[:space:]]*=[[:space:]]*-1/) next;
+            # Bare nullptr A pattern (any single-letter dim).
+            if (full ~ /nullptr, &[a-zA-Z]+, nullptr/) next;
+            # Opt-in CPU fallback throw or guard mentions use_cpu_svd_.
+            if (full ~ /use_cpu_svd_/) next;
+            print FILENAME":"line": "$0;
+        }
+    ' "$variant"/src/*_impl.h 2>/dev/null || true)
+    if [[ -n "$hits" ]]; then
+        echo "$hits"
+        TOTAL_HITS=$((TOTAL_HITS + $(printf '%s\n' "$hits" | wc -l)))
+    fi
+done
 
 # ----- D9: missing PhaseTimer instrumentation (declared but never .begin/.end) -----
 # This needs a 2-stage check: timers declared in headers minus timers used in impl.
@@ -104,7 +131,7 @@ echo "DEFECT CLASS: D9 — declared PhaseTimers without begin/end sites"
 echo "===================================================================="
 for variant in "${VARIANTS[@]}"; do
     declared=$(grep -hE '^[[:space:]]+PhaseTimer[[:space:]]+t_[a-z_]+_;' "$variant"/src/*.h 2>/dev/null \
-        | grep -oE 't_[a-z_]+_' | sort -u || true)
+        | sed -E 's/^[[:space:]]+PhaseTimer[[:space:]]+(t_[a-z_]+_);.*/\1/' | sort -u || true)
     [[ -z "$declared" ]] && continue
     while read -r timer; do
         [[ -z "$timer" ]] && continue
@@ -166,6 +193,9 @@ echo "===================================================================="
 echo "DEFECT CLASS: D13 — Step 3 per-element host loop in apply_heff"
 echo "===================================================================="
 for variant in "${VARIANTS[@]}"; do
+    # -base charter explicitly allows naive single-GEMM loops (the whole
+    # point of the baseline tier). Skip -base from D13.
+    [[ "$variant" == *-base ]] && continue
     matches=$(grep -E 'apply_heff' "$variant"/src/*_impl.h 2>/dev/null \
         | head -1 || true)
     [[ -z "$matches" ]] && continue
@@ -233,6 +263,30 @@ for variant in "${VARIANTS[@]}"; do
         echo "$sizing"
         TOTAL_HITS=$((TOTAL_HITS + $(printf '%s\n' "$sizing" | wc -l)))
     fi
+done
+
+# ----- D15: PhaseTimer panel init'd but never .begin/.end called -----
+# Round-17 R17H1: dmrg-gpu-opt declared/init'd t_absorb_ but never instrumented.
+# Future port-from-template hazard. For each PhaseTimer t_X_ in a variant,
+# verify there is at least one t_X_.begin( site somewhere in the impl.
+echo
+echo "===================================================================="
+echo "DEFECT CLASS: D15 — PhaseTimer init'd but never .begin/.end called"
+echo "===================================================================="
+for variant in "${VARIANTS[@]}"; do
+    [[ ! -d "$variant/src" ]] && continue
+    # Extract every t_X_.init("Y", ...) name from impl files
+    declared=$(grep -hE 't_[a-z_]+\.init\(' "$variant"/src/*_impl.h 2>/dev/null \
+        | sed -E 's/.*\b(t_[a-z_]+)\.init\(.*/\1/' | sort -u)
+    [[ -z "$declared" ]] && continue
+    while IFS= read -r tname; do
+        [[ -z "$tname" ]] && continue
+        # Look for .begin( call. If absent, panel is dead.
+        if ! grep -qE "${tname}\.begin\(" "$variant"/src/*_impl.h 2>/dev/null; then
+            echo "$variant/src: $tname declared/init'd but never .begin() — dead panel"
+            TOTAL_HITS=$((TOTAL_HITS + 1))
+        fi
+    done <<< "$declared"
 done
 
 # ----- Summary -----

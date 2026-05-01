@@ -1355,6 +1355,8 @@ void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char dir
         // MPS[site] = U is queued. Signal env stream so update_left_env(site)
         // can run concurrently with the trailing S*Vh -> MPS[site+1] scale.
         HIP_CHECK(hipEventRecord(event_canon_ready_, stream_));
+        t_svd_.end(stream_);
+        t_absorb_.begin(stream_);
 
         // S*Vh → MPS[site+1] (scale rows of Vh by S on device). vh_lda = full_k
         // for full SVD, = b_k for RSVD.
@@ -1385,6 +1387,8 @@ void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char dir
                                new_k, n_svd);
         }
         HIP_CHECK(hipEventRecord(event_canon_ready_, stream_));
+        t_svd_.end(stream_);
+        t_absorb_.begin(stream_);
 
         // U*S → MPS[site] (scale columns of U by S on device).
         allocate_mps_tensor(site, cL, new_k);
@@ -1398,7 +1402,7 @@ void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char dir
     }
 
     bond_dims_[site + 1] = new_k;
-    t_svd_.end(stream_);
+    t_absorb_.end(stream_);
 }
 
 // ============================================================================
@@ -1421,9 +1425,10 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
         return lanczos_eigensolver(site, d_theta, theta_size);
     }
 
-    // Round-15 H1-opt-PhaseTimer-prop: instrument Davidson path; begin
-    // AFTER the Lanczos fallback short-circuit.
-    t_lanczos_.begin(stream_);
+    // Round-17 H1-opt-PhaseTimer-prop: dedicated t_davidson_ panel (R15
+    // shared t_lanczos_, contradicting the header comment). Begin AFTER
+    // the Lanczos fallback short-circuit; Lanczos has its own pair.
+    t_davidson_.begin(stream_);
 
     // Initialize V: first column = theta/||theta||
     RealType norm;
@@ -1506,7 +1511,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
                                   hipMemcpyDeviceToHost, stream_));
         HIP_CHECK(hipStreamSynchronize(stream_));
         if (h_dav_info != 0) {
-            t_lanczos_.end(stream_);
+            t_davidson_.end(stream_);
             return lanczos_eigensolver(site, d_theta, theta_size);
         }
         if (energy < best_energy) best_energy = energy;
@@ -1538,7 +1543,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_theta, 1, &norm));
             inv_norm = 1.0 / norm;
             ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_norm, d_theta, 1));
-            t_lanczos_.end(stream_);
+            t_davidson_.end(stream_);
             return energy;
         }
         energy_prev = energy;
@@ -1571,7 +1576,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_theta, 1, &norm));
             inv_norm = 1.0 / norm;
             ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_norm, d_theta, 1));
-            t_lanczos_.end(stream_);
+            t_davidson_.end(stream_);
             return energy;
         }
 
@@ -1622,7 +1627,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_theta, 1, &norm));
             inv_norm = 1.0 / norm;
             ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_norm, d_theta, 1));
-            t_lanczos_.end(stream_);
+            t_davidson_.end(stream_);
             return energy;
         }
 
@@ -1680,7 +1685,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
     ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_theta, 1, &norm));
     inv_norm = 1.0 / norm;
     ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_norm, d_theta, 1));
-    t_lanczos_.end(stream_);
+    t_davidson_.end(stream_);
     return best_energy;
 }
 
@@ -1873,6 +1878,7 @@ double DMRG2GPUOpt<Scalar>::run(int n_sweeps) {
 template<typename Scalar>
 void DMRG2GPUOpt<Scalar>::init_timers() {
     t_lanczos_.init("lanczos", opts_.profile);
+    t_davidson_.init("davidson", opts_.profile);
     t_apply_heff_.init("apply_heff", opts_.profile);
     t_svd_.init("svd", opts_.profile);
     t_absorb_.init("absorb", opts_.profile);
@@ -1892,6 +1898,7 @@ void DMRG2GPUOpt<Scalar>::report_timers() {
     };
     std::fprintf(stderr, "== Phase timings ==\n");
     row(t_lanczos_);
+    row(t_davidson_);
     row(t_apply_heff_);
     row(t_svd_);
     row(t_absorb_);

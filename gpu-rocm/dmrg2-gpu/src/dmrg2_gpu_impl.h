@@ -1293,6 +1293,8 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
         // update_left_env(site) can start concurrently with the trailing
         // S*Vh -> MPS[site+1] absorb on stream_.
         HIP_CHECK(hipEventRecord(event_canon_ready_, stream_));
+        t_svd_.end(stream_);
+        t_absorb_.begin(stream_);
 
         // S*Vh — Vh has leading dim vh_lda (full_k or b_k)
         allocate_mps_tensor(site + 1, new_k, cR);
@@ -1318,6 +1320,8 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
                                d_svd_Vh_, vh_lda, d_mps_tensors_[site + 1], new_k, new_k, n_svd);
         }
         HIP_CHECK(hipEventRecord(event_canon_ready_, stream_));
+        t_svd_.end(stream_);
+        t_absorb_.begin(stream_);
 
         allocate_mps_tensor(site, cL, new_k);
         {
@@ -1328,7 +1332,7 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
     }
 
     bond_dims_[site + 1] = new_k;
-    t_svd_.end(stream_);
+    t_absorb_.end(stream_);
 }
 
 // ============================================================================

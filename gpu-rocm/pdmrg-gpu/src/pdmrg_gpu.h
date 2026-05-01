@@ -211,8 +211,8 @@ private:
     GpuOpts opts_;
     PhaseTimer t_lanczos_;      // full lanczos_eigensolver call
     PhaseTimer t_apply_heff_;   // each apply_heff invocation
-    PhaseTimer t_svd_;          // gesvd + truncation
-    PhaseTimer t_absorb_;       // scale + absorb GEMM
+    PhaseTimer t_svd_;          // gesvd + truncation + absorb (intermixed
+                                // across full GPU / RSVD / CPU fallback paths)
     PhaseTimer t_env_update_;   // update_left_env / update_right_env
     void init_timers();
     void report_timers();

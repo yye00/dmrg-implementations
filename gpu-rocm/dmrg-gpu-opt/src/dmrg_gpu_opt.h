@@ -269,6 +269,7 @@ private:
     // re-enable it symmetrically (round-11 M-opt-davidson-toggle).
     bool lanczos_graph_was_user_enabled_ = false;
     PhaseTimer t_lanczos_;      // full lanczos_eigensolver call
+    PhaseTimer t_davidson_;     // full block_davidson_eigensolver call (excl. Lanczos fallback)
     PhaseTimer t_apply_heff_;   // each apply_heff invocation
     PhaseTimer t_svd_;          // SVD bond splitting
     PhaseTimer t_absorb_;       // scale + absorb GEMM
