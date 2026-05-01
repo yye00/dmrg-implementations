@@ -2419,17 +2419,14 @@ void PDMRGGPUOpt<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta
                 &beta, d_result, cL * d, (rocblas_stride)cL, d));
         }
     } else {
-        Scalar* h_A3[256], *h_B3[256], *h_C3[256];
+        // Round-15 follow-up H2-opt-host-batch-pointer fix: GPU kernel
+        // launch replaces 3× hipMemcpyAsync H2D per wp.
         for (int wp = 0; wp < D; wp++) {
             Scalar beta = (wp == 0) ? Traits::zero() : Traits::one();
-            for (int sp = 0; sp < d; sp++) {
-                h_A3[sp] = U + (wp * d + sp) * cL * cR;
-                h_B3[sp] = R_env + wp * cR;
-                h_C3[sp] = d_result + sp * cL;
-            }
-            HIP_CHECK(hipMemcpyAsync(ws.d_batch_A, h_A3, d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-            HIP_CHECK(hipMemcpyAsync(ws.d_batch_B, h_B3, d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
-            HIP_CHECK(hipMemcpyAsync(ws.d_batch_C, h_C3, d*sizeof(Scalar*), hipMemcpyHostToDevice, streams_[si]));
+            hipLaunchKernelGGL(setup_batch_ptrs_step3<Scalar>, dim3(1), dim3(d), 0, streams_[si],
+                               ws.d_batch_A, ws.d_batch_B, ws.d_batch_C,
+                               U, R_env, d_result,
+                               wp, d, cL * cR, cR, cL);
             ROCBLAS_CHECK(Traits::gemm_batched(handles_[si],
                 rocblas_operation_none, rocblas_operation_none,
                 cL, cR, cR,
