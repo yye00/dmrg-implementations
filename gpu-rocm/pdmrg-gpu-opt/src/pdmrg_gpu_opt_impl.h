@@ -252,14 +252,20 @@ void PDMRGGPUOpt<Scalar>::allocate_stream_workspaces() {
         // === Block-Davidson workspace ===
         HIP_CHECK(hipMalloc(&ws.d_dav_V, (size_t)theta_size_max_ * davidson_max_sub_ * sizeof(Scalar)));
         HIP_CHECK(hipMalloc(&ws.d_dav_AV, (size_t)theta_size_max_ * davidson_max_sub_ * sizeof(Scalar)));
-        // Round-9 H-new1-pdmrg-opt: d_dav_work hosts BOTH the residual block
-        // (b·dim) AND the projected H matrix H_proj (k×k, k ≤ max_sub).
-        // Sequential not concurrent here, so size = max(b·dim_max, max_sub²).
-        // Without the second term, smoke tests with theta_size_max < max_sub²/b
-        // (= 256 at default davidson params) overrun the buffer.
+        // Round-17 CR-D1-pdmrg fix (round-8 propagation gap): d_dav_work
+        // holds two regions concurrently inside the inner Davidson iter —
+        // residuals W at offset 0 (size up to b·dim) AND overlap matrix at
+        // offset n_new*dim (size up to max_sub·b). The overlap is written
+        // there because d_dav_work2 holds the Ritz eigenvectors that the
+        // restart path needs. Sized as
+        //   max(b·dim_max + max_sub·b, max_sub²)
+        // — the prior `max(b·dim_max, max_sub²)` was undersized by
+        // `max_sub·b` Scalars and overran on every Davidson iteration.
+        // Mirrors dmrg-gpu-opt impl :297-305 / dmrg2-gpu-opt round-8 fix.
         {
             size_t dav_work_sz = std::max(
-                (size_t)theta_size_max_ * davidson_b_,
+                (size_t)theta_size_max_ * davidson_b_
+                    + (size_t)davidson_max_sub_ * davidson_b_,
                 (size_t)davidson_max_sub_ * davidson_max_sub_);
             HIP_CHECK(hipMalloc(&ws.d_dav_work,  dav_work_sz * sizeof(Scalar)));
             HIP_CHECK(hipMalloc(&ws.d_dav_work2, dav_work_sz * sizeof(Scalar)));
@@ -1667,19 +1673,23 @@ double PDMRGGPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             return energy;
         }
 
-        // Orthogonalize new vectors against V
-        // W = d_dav_work[:, :n_new], V has k columns
+        // Orthogonalize new vectors against V. Round-17 CR-D1-pdmrg fix
+        // (round-8 propagation gap): overlap matrix lives at an offset PAST
+        // the residuals so it does not overwrite ws.d_dav_work2 (which still
+        // holds the eigenvectors needed by the restart path below). The
+        // ctor-time sizing (above) reserves max_sub*b extra Scalars for this.
         Scalar* W = ws.d_dav_work;
+        Scalar* overlap = ws.d_dav_work + (size_t)n_new * dim;
 
         // overlap = V^H @ W → (k, n_new)
         ROCBLAS_CHECK(Traits::gemm(handles_[si],
             Traits::op_h, rocblas_operation_none,
-            k, n_new, dim, &one, V, dim, W, dim, &zero_val, ws.d_dav_work2, k));
+            k, n_new, dim, &one, V, dim, W, dim, &zero_val, overlap, k));
 
         // W -= V @ overlap
         ROCBLAS_CHECK(Traits::gemm(handles_[si],
             rocblas_operation_none, rocblas_operation_none,
-            dim, n_new, k, &neg_one, V, dim, ws.d_dav_work2, k, &one, W, dim));
+            dim, n_new, k, &neg_one, V, dim, overlap, k, &one, W, dim));
 
         // Orthogonalize new vectors among themselves (CGS within the block)
         int n_good = 0;

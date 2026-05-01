@@ -187,6 +187,54 @@ for variant in "${VARIANTS[@]}"; do
     fi
 done
 
+# ----- D14: Davidson buffer-aliasing (round-8 CR-D1 class) -----
+# d_dav_work hosts both residuals AND overlap matrix concurrently.
+# Required sizing: max(theta_max*b + max_sub*b, max_sub²). Common defect:
+# overlap is gemm'd into d_dav_work2 (the eigvec buffer), clobbering it.
+echo
+echo "===================================================================="
+echo "DEFECT CLASS: D14 — Davidson overlap-clobbers-eigvecs (CR-D1 class)"
+echo "===================================================================="
+for variant in "${VARIANTS[@]}"; do
+    [[ "$variant" != *-opt ]] && continue
+    impl="$variant/src/$(basename "$variant" | sed 's/-/_/g')_impl.h"
+    [[ ! -f "$impl" ]] && continue
+    # Look for a block_davidson_eigensolver that gemm's into d_dav_work2 (or
+    # ws.d_dav_work2) for the overlap matrix instead of d_dav_work + offset.
+    overlap_into_eigvecs=$(awk '
+        /block_davidson_eigensolver/{ in_func=1; depth=0 }
+        in_func && /\{/{ depth++ }
+        in_func && /\}/{ depth--; if (depth<=0) in_func=0 }
+        in_func && /overlap = V\^H @ W|overlap = V\^H[[:space:]]@[[:space:]]W/{ overlap_pending=1; overlap_line=NR }
+        in_func && overlap_pending && /Traits::gemm.*op_h/{ overlap_gemm=1 }
+        in_func && overlap_gemm && /(ws\.)?d_dav_work2,[[:space:]]*k\)\)/{
+            print FILENAME":"overlap_line": overlap matrix gemm into d_dav_work2 — clobbers eigvecs (CR-D1)";
+            overlap_pending=0; overlap_gemm=0
+        }
+    ' "$impl" 2>/dev/null || true)
+    if [[ -n "$overlap_into_eigvecs" ]]; then
+        echo "$overlap_into_eigvecs"
+        TOTAL_HITS=$((TOTAL_HITS + $(printf '%s\n' "$overlap_into_eigvecs" | wc -l)))
+    fi
+    # Also check buffer sizing — must include max_sub*b term.
+    sizing=$(awk '
+        /dav_work_sz = std::max/{ in_max=1; line=NR; buf="" }
+        in_max{ buf = buf " " $0 }
+        in_max && /\);/{
+            if (buf ~ /davidson_max_sub_[[:space:]]*\*[[:space:]]*davidson_b_/) {
+                # OK — has max_sub*b term
+            } else {
+                print FILENAME":"line": d_dav_work sizing missing max_sub*b term"
+            }
+            in_max=0
+        }
+    ' "$impl" 2>/dev/null || true)
+    if [[ -n "$sizing" ]]; then
+        echo "$sizing"
+        TOTAL_HITS=$((TOTAL_HITS + $(printf '%s\n' "$sizing" | wc -l)))
+    fi
+done
+
 # ----- Summary -----
 echo
 echo "===================================================================="
