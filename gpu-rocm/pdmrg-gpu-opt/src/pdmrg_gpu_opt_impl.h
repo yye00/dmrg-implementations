@@ -16,6 +16,7 @@
 #include <stdexcept>
 
 #include "../../common/hip_check.h"
+#include "../../common/batch_ptrs_kernels.h"
 
 // Fused Lanczos update:  w := w + (-α)*v_i + [(-β_{im1})*v_{im1}]
 // d_neg_alpha and d_neg_beta_im1 are Scalar* on device (device-pointer mode).
@@ -2773,31 +2774,27 @@ void PDMRGGPUOpt<Scalar>::batched_apply_heff_two_site(
         int per_seg_batch = D * dd;
         int total_batch = n_batch * per_seg_batch;
 
-        // Build pointer arrays on host, copy to device
-        std::vector<Scalar*> h_A(total_batch), h_B(total_batch), h_C(total_batch);
+        // Round-15 follow-up H2-opt-host-batch-pointer fix: GPU kernel
+        // launches replace the host pointer-array build + 3× hipMemcpyAsync
+        // H2D pattern. n_batch separate launches into different chunks of
+        // d_xs_batch_* — n_batch is the number of segments running this
+        // batched apply_heff call (typically 2-4), each launch is a tiny
+        // D*dd-thread kernel.
         for (int b = 0; b < n_batch; b++) {
             int site = sites[b];
             int si = seg_indices[b];
             Scalar* L_env = d_L_envs_[site];
             Scalar* T1 = workspaces_[si].d_T1;
             const Scalar* theta = d_thetas_in[b];
-
-            for (int n = 0; n < D; n++) {
-                for (int idx = 0; idx < dd; idx++) {
-                    int k = b * per_seg_batch + n * dd + idx;
-                    h_A[k] = L_env + (size_t)n * cL;          // L_env slice, stride cL*D
-                    h_B[k] = const_cast<Scalar*>(theta) + (size_t)idx * cL;  // theta slice
-                    h_C[k] = T1 + (size_t)(n * dd + idx) * cL * cR;         // T1 output
-                }
-            }
+            int chunk = b * per_seg_batch;
+            hipLaunchKernelGGL(setup_batch_ptrs_wd_twosite_linear<Scalar>,
+                               dim3(1), dim3(per_seg_batch), 0, streams_[0],
+                               d_xs_batch_A_ + chunk,
+                               d_xs_batch_B_ + chunk,
+                               d_xs_batch_C_ + chunk,
+                               L_env, const_cast<Scalar*>(theta), T1,
+                               dd, cL, cL, cL * cR);
         }
-
-        HIP_CHECK(hipMemcpyAsync(d_xs_batch_A_, h_A.data(), total_batch * sizeof(Scalar*),
-                                  hipMemcpyHostToDevice, streams_[0]));
-        HIP_CHECK(hipMemcpyAsync(d_xs_batch_B_, h_B.data(), total_batch * sizeof(Scalar*),
-                                  hipMemcpyHostToDevice, streams_[0]));
-        HIP_CHECK(hipMemcpyAsync(d_xs_batch_C_, h_C.data(), total_batch * sizeof(Scalar*),
-                                  hipMemcpyHostToDevice, streams_[0]));
 
         ROCBLAS_CHECK(Traits::gemm_batched(handles_[0],
             Traits::op_t, rocblas_operation_none,

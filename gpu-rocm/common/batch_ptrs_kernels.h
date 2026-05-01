@@ -129,4 +129,97 @@ __global__ void setup_batch_ptrs_step3_full_sparse(Scalar** A, Scalar** B, Scala
     C[idx] = base_C_scratch + wp * slice_stride + sp * strideC_tile;
 }
 
+// pdmrg-gpu-opt cross-segment batched variant: same w*dd+ss layout but
+// theta is indexed linearly by ss (no transpose) — mirrors the inner-
+// segment apply_heff_two_site of pdmrg-gpu where theta is laid out
+// (cL, dd, cR) with dd contiguous. Used by the cross-segment batched
+// path that aggregates D*dd batches per segment.
+template<typename Scalar>
+__global__ void setup_batch_ptrs_wd_twosite_linear(Scalar** A, Scalar** B, Scalar** C,
+                                                    Scalar* base_A, Scalar* base_B, Scalar* base_C,
+                                                    int dd, int strideA, int strideB, int strideC) {
+    int idx = threadIdx.x;
+    int n = idx / dd;
+    int ss = idx % dd;
+    A[idx] = base_A + n * strideA;
+    B[idx] = base_B + ss * strideB;
+    C[idx] = base_C + idx * strideC;
+}
+
+// ============================================================================
+// Two-site variants (dmrg2-* family). Pack three indices: idx = w*dd + s1*d + s2
+// with dd = d*d. The B base is indexed by the transposed physical index
+// (s1 + s2*d) so theta_{s1,s2} can be read column-major in s2.
+// ============================================================================
+
+template<typename Scalar>
+__global__ void setup_batch_ptrs_wd_twosite(Scalar** A, Scalar** B, Scalar** C,
+                                             Scalar* base_A, Scalar* base_B, Scalar* base_C,
+                                             int d, int dd, int strideA, int strideB, int strideC) {
+    int idx = threadIdx.x;
+    int w = idx / dd;
+    int ss = idx % dd;        // s1*d + s2
+    int s1 = ss / d, s2 = ss % d;
+    A[idx] = base_A + w * strideA;
+    B[idx] = base_B + (s1 + s2 * d) * strideB;  // transposed physical index
+    C[idx] = base_C + idx * strideC;
+}
+
+template<typename Scalar>
+__global__ void setup_batch_ptrs_step3_twosite(Scalar** A, Scalar** B, Scalar** C,
+                                                Scalar* base_A, Scalar* base_B, Scalar* base_C,
+                                                int n, int d, int dd, int strideA, int strideB, int strideC) {
+    int idx = threadIdx.x;  // s1p*d + s2p
+    int s1p = idx / d, s2p = idx % d;
+    A[idx] = base_A + (n * dd + idx) * strideA;
+    B[idx] = base_B + n * strideB;
+    C[idx] = base_C + (s1p + s2p * d) * strideC;  // transposed physical index
+}
+
+// Two-site step 3 (full batched): one launch sets up D*dd batch pointers.
+template<typename Scalar>
+__global__ void setup_batch_ptrs_step3_twosite_full(Scalar** A, Scalar** B, Scalar** C,
+                                                     Scalar* base_A, Scalar* base_B, Scalar* base_C_scratch,
+                                                     int d, int dd, int strideA, int strideB,
+                                                     int strideC_tile, int slice_stride) {
+    int idx = threadIdx.x;  // n*dd + s1p*d + s2p
+    int n = idx / dd;
+    int ss = idx % dd;
+    int s1p = ss / d, s2p = ss % d;
+    A[idx] = base_A + (n * dd + ss) * strideA;
+    B[idx] = base_B + n * strideB;
+    C[idx] = base_C_scratch + n * slice_stride + (s1p + s2p * d) * strideC_tile;
+}
+
+template<typename Scalar>
+__global__ void setup_batch_ptrs_wd_twosite_sparse(Scalar** A, Scalar** B, Scalar** C,
+                                                    Scalar* base_A, Scalar* base_B, Scalar* base_C,
+                                                    const int* nnz_wss, int d, int dd,
+                                                    int strideA, int strideB, int strideC) {
+    int idx = threadIdx.x;
+    int packed = nnz_wss[idx];
+    int w = packed / dd;
+    int ss = packed % dd;
+    int s1 = ss / d, s2 = ss % d;
+    A[idx] = base_A + w * strideA;
+    B[idx] = base_B + (s1 + s2 * d) * strideB;
+    C[idx] = base_C + packed * strideC;
+}
+
+template<typename Scalar>
+__global__ void setup_batch_ptrs_step3_twosite_full_sparse(Scalar** A, Scalar** B, Scalar** C,
+                                                           Scalar* base_A, Scalar* base_B, Scalar* base_C_scratch,
+                                                           const int* nnz_nss, int d, int dd,
+                                                           int strideA, int strideB,
+                                                           int strideC_tile, int slice_stride) {
+    int idx = threadIdx.x;
+    int packed = nnz_nss[idx];
+    int n = packed / dd;
+    int ss = packed % dd;
+    int s1p = ss / d, s2p = ss % d;
+    A[idx] = base_A + packed * strideA;
+    B[idx] = base_B + n * strideB;
+    C[idx] = base_C_scratch + n * slice_stride + (s1p + s2p * d) * strideC_tile;
+}
+
 #endif // PMRG_BATCH_PTRS_KERNELS_H
