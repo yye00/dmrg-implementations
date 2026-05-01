@@ -40,7 +40,7 @@ public:
     void get_mps(std::vector<std::vector<Scalar>>& h_mps) const;
     int chi_L(int site) const { return bond_dims_[site]; }
     int chi_R(int site) const { return bond_dims_[site + 1]; }
-    void set_quiet(bool) {}  // no-op, all output removed except final summary
+    void set_quiet(bool) {}  // no-op
 
     // Ablation controls (defaults loaded from DMRG_GPU_OPT_* env vars in ctor)
     GpuOpts& opts() { return opts_; }
