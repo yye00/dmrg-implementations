@@ -186,8 +186,10 @@ private:
     Scalar*  d_rsvd_U_small_ = nullptr;
     int      rsvd_r_max_     = 0;
 
-    // CPU SVD workspace (legacy — only used by the init-time workspace query;
-    // runtime SVD is fully on-device).
+    // CPU SVD workspace — used by the use_cpu_svd_ opt-in fallback path
+    // (impl ~1263-1283) and by the init-time LAPACK workspace query. The
+    // default GPU code path bypasses these; they only allocate/touch when
+    // use_cpu_svd_ is set or chi_max changes during init.
     std::vector<Scalar> h_svd_A_, h_svd_U_, h_svd_Vh_, h_svd_work_;
     std::vector<RealType> h_svd_S_;
     std::vector<RealType> h_svd_rwork_;

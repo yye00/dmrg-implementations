@@ -151,8 +151,6 @@ private:
     double* d_svdj_residual_;
     rocblas_int* d_svdj_n_sweeps_;
 
-    // CPU workspace (for receiving GPU SVD results and truncation/scaling)
-
     // RSVD workspace (allocated only when opts_.rsvd is on)
     static constexpr int RSVD_OVERSAMPLE_ = 10;
     Scalar* d_rsvd_omega_   = nullptr;
