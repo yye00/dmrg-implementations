@@ -1932,6 +1932,7 @@ void PDMRGGPU<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta_in
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& ws = workspaces_[si];
+    if (si == 0) t_apply_heff_.begin(streams_[si]);
 
     // LANCZOS_GRAPH: stage caller's theta into the per-segment fixed-address
     // bounce buffer BEFORE any capture window, then either replay the cached
@@ -1950,6 +1951,7 @@ void PDMRGGPU<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta_in
         auto it = ws.apply_heff_graph_cache.find(key);
         if (it != ws.apply_heff_graph_cache.end()) {
             HIP_CHECK(hipGraphLaunch(it->second, streams_[si]));
+            if (si == 0) t_apply_heff_.end(streams_[si]);
             return;
         }
         graph_capture_miss = true;
@@ -2085,6 +2087,7 @@ void PDMRGGPU<Scalar>::apply_heff_single_site(int site, const Scalar* d_theta_in
         ws.apply_heff_graph_cache[graph_key(/*two_site=*/false, site, cL, cR)] = exec;
         HIP_CHECK(hipGraphLaunch(exec, streams_[si]));
     }
+    if (si == 0) t_apply_heff_.end(streams_[si]);
 }
 
 // ============================================================================

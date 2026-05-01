@@ -627,6 +627,7 @@ void DMRG2GPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
     int D = D_mpo_, d = d_;
     int dd = d * d;
     Scalar one = Traits::one(), zero_val = Traits::zero();
+    t_apply_heff_.begin(stream_);
 
     // LANCZOS_GRAPH: stage caller's theta into a fixed-address bounce buffer
     // BEFORE any capture window, then either replay the cached graph or
@@ -645,6 +646,7 @@ void DMRG2GPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
         auto it = apply_heff_graph_cache_.find(key);
         if (it != apply_heff_graph_cache_.end()) {
             HIP_CHECK(hipGraphLaunch(it->second, stream_));
+            t_apply_heff_.end(stream_);
             return;
         }
         graph_capture_miss = true;
@@ -798,6 +800,7 @@ void DMRG2GPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
         apply_heff_graph_cache_[graph_key(site, cL, cR)] = exec;
         HIP_CHECK(hipGraphLaunch(exec, stream_));
     }
+    t_apply_heff_.end(stream_);
 }
 
 // ============================================================================
@@ -813,6 +816,7 @@ void DMRG2GPUOpt<Scalar>::update_left_env(int site) {
     int chi_out = bond_dims_[site + 1];
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
+    t_env_update_.begin(stream_env_);
 
     ensure_L_env_alloc(site + 1, chi_out);
 
@@ -876,6 +880,7 @@ void DMRG2GPUOpt<Scalar>::update_left_env(int site) {
     if constexpr (Traits::is_complex) {
         conjugate_inplace(L_new, chi_out * D * chi_out, stream_env_);
     }
+    t_env_update_.end(stream_env_);
 }
 
 // ============================================================================
@@ -889,6 +894,7 @@ void DMRG2GPUOpt<Scalar>::update_right_env(int site) {
     int chi_out = bond_dims_[site];
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
+    t_env_update_.begin(stream_env_);
 
     ensure_R_env_alloc(site, chi_out);
 
@@ -948,6 +954,7 @@ void DMRG2GPUOpt<Scalar>::update_right_env(int site) {
                 R_new + w * chi_out, chi_out * D));
         }
     }
+    t_env_update_.end(stream_env_);
 }
 
 // ============================================================================
@@ -989,6 +996,7 @@ void DMRG2GPUOpt<Scalar>::build_initial_environments() {
 
 template<typename Scalar>
 double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int theta_size) {
+    t_lanczos_.begin(stream_);
     int n = theta_size;
     int max_iter = std::min(max_lanczos_iter_, n);
     double tol_lanczos = 1e-12;
@@ -1223,6 +1231,7 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
     inv_norm = 1.0 / norm;
     ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, &inv_norm, d_theta, 1));
 
+    t_lanczos_.end(stream_);
     return energy;
 }
 
@@ -1236,6 +1245,7 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
 
 template<typename Scalar>
 void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char direction) {
+    t_svd_.begin(stream_);
     int cL = chi_L(site);
     int cR = chi_R(site + 1);
 
@@ -1432,6 +1442,7 @@ void DMRG2GPUOpt<Scalar>::svd_split_fallback(int site, Scalar* d_theta, char dir
     }
 
     bond_dims_[site + 1] = new_k;
+    t_svd_.end(stream_);
 }
 
 // ============================================================================
@@ -1449,10 +1460,14 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
     Scalar one = Traits::one(), zero_val = Traits::zero();
     Scalar neg_one = Traits::neg(Traits::one());
 
-    // For tiny systems, use Lanczos fallback
+    // For tiny systems, use Lanczos fallback (its own t_lanczos_ pair).
     if (dim <= 2 * b) {
         return lanczos_eigensolver(site, d_theta, theta_size);
     }
+
+    // Round-15 H1-opt-PhaseTimer-prop: instrument Davidson path; begin
+    // AFTER the Lanczos fallback short-circuit.
+    t_lanczos_.begin(stream_);
 
     // Initialize V: first column = theta/||theta||
     RealType norm;
@@ -1535,6 +1550,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
                                   hipMemcpyDeviceToHost, stream_));
         HIP_CHECK(hipStreamSynchronize(stream_));
         if (h_dav_info != 0) {
+            t_lanczos_.end(stream_);
             return lanczos_eigensolver(site, d_theta, theta_size);
         }
         if (energy < best_energy) best_energy = energy;
@@ -1566,6 +1582,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_theta, 1, &norm));
             inv_norm = 1.0 / norm;
             ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_norm, d_theta, 1));
+            t_lanczos_.end(stream_);
             return energy;
         }
         energy_prev = energy;
@@ -1598,6 +1615,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_theta, 1, &norm));
             inv_norm = 1.0 / norm;
             ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_norm, d_theta, 1));
+            t_lanczos_.end(stream_);
             return energy;
         }
 
@@ -1648,6 +1666,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
             ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_theta, 1, &norm));
             inv_norm = 1.0 / norm;
             ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_norm, d_theta, 1));
+            t_lanczos_.end(stream_);
             return energy;
         }
 
@@ -1705,6 +1724,7 @@ double DMRG2GPUOpt<Scalar>::block_davidson_eigensolver(int site, Scalar* d_theta
     ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, dim, d_theta, 1, &norm));
     inv_norm = 1.0 / norm;
     ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, dim, &inv_norm, d_theta, 1));
+    t_lanczos_.end(stream_);
     return best_energy;
 }
 
