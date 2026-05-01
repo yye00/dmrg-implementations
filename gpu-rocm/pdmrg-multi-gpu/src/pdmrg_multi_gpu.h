@@ -51,6 +51,10 @@ public:
     // capped at 2 each, and zero is a supported configuration. The CLI driver
     // is required to pass --warmup and --polish explicitly so that compiled-in
     // defaults cannot drift unnoticed across rebench campaigns.
+    //
+    // API gap vs pdmrg-gpu/-opt: this run() does NOT accept `n_recal` (periodic
+    // full-chain recalibration). Out-of-scope per the multi-device charter —
+    // gather/scatter cost dominates any short-cycle recal benefit.
     double run(int n_outer_sweeps, int n_local_sweeps = 2, int n_warmup = 1, int n_polish = 0);
 
     // Results

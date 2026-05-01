@@ -804,6 +804,11 @@ void PDMRGGPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
     int dd = d * d;
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& ws = workspaces_[si];
+    // Round-14 H-opt-pdmrg-phase-timer-prop: panel was inert until this
+    // round (ctor/report wired in round-7 but no .begin/.end sites).
+    // si == 0 gating mirrors pdmrg-gpu — PhaseTimer's std::vector::push_back
+    // is not thread-safe across parallel segments.
+    if (si == 0) t_apply_heff_.begin(streams_[si]);
 
     // LANCZOS_GRAPH: stage caller's theta into the per-segment fixed-address
     // bounce buffer BEFORE any capture window, then either replay the cached
@@ -822,6 +827,7 @@ void PDMRGGPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
         auto it = ws.apply_heff_graph_cache.find(key);
         if (it != ws.apply_heff_graph_cache.end()) {
             HIP_CHECK(hipGraphLaunch(it->second, streams_[si]));
+            if (si == 0) t_apply_heff_.end(streams_[si]);
             return;
         }
         graph_capture_miss = true;
@@ -966,6 +972,7 @@ void PDMRGGPUOpt<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in
         ws.apply_heff_graph_cache[graph_key(/*two_site=*/true, site, cL, cR)] = exec;
         HIP_CHECK(hipGraphLaunch(exec, streams_[si]));
     }
+    if (si == 0) t_apply_heff_.end(streams_[si]);
 }
 
 // ============================================================================
@@ -979,6 +986,7 @@ void PDMRGGPUOpt<Scalar>::update_left_env(int site, int si) {
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& ws = workspaces_[si];
+    if (si == 0) t_env_update_.begin(streams_[si]);
 
     ensure_L_env_alloc(site + 1, chi_out);
 
@@ -1053,6 +1061,7 @@ void PDMRGGPUOpt<Scalar>::update_left_env(int site, int si) {
     if constexpr (Traits::is_complex) {
         conjugate_inplace(L_new, chi_out * D * chi_out, streams_[si]);
     }
+    if (si == 0) t_env_update_.end(streams_[si]);
 }
 
 // ============================================================================
@@ -1066,6 +1075,7 @@ void PDMRGGPUOpt<Scalar>::update_right_env(int site, int si) {
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
     auto& ws = workspaces_[si];
+    if (si == 0) t_env_update_.begin(streams_[si]);
 
     ensure_R_env_alloc(site, chi_out);
 
@@ -1136,6 +1146,7 @@ void PDMRGGPUOpt<Scalar>::update_right_env(int site, int si) {
             HIP_CHECK(hipStreamWaitEvent(streams_[si], worker_done_events_[si][w], 0));
         }
     }
+    if (si == 0) t_env_update_.end(streams_[si]);
 }
 
 // ============================================================================
@@ -1317,6 +1328,7 @@ void PDMRGGPUOpt<Scalar>::svd_split(int site, Scalar* d_theta, char direction, i
     int cL = chi_L(site);
     int cR = chi_R(site + 1);
     auto& ws = workspaces_[si];
+    if (si == 0) t_svd_.begin(streams_[si]);
 
     int m = cL * d_;
     int n_svd = d_ * cR;
@@ -1464,6 +1476,7 @@ void PDMRGGPUOpt<Scalar>::svd_split(int site, Scalar* d_theta, char direction, i
                              new_k * sizeof(RealType),
                              hipMemcpyDeviceToHost, streams_[si]));
     HIP_CHECK(hipStreamSynchronize(streams_[si]));
+    if (si == 0) t_svd_.end(streams_[si]);
 }
 
 // ============================================================================
@@ -1808,6 +1821,7 @@ double PDMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
     double tol_lanczos = 1e-12;
     double tol_eig_conv = 1e-12;
     auto& ws = workspaces_[si];
+    if (si == 0) t_lanczos_.begin(streams_[si]);
 
     Scalar* d_lanczos_v = ws.d_lanczos_v;
 
@@ -1816,9 +1830,10 @@ double PDMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
     // directly on the device-side tridiagonal.
 
     double norm;
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
-    ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
+    {
+        PointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_device);
+        ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
+    }
 
     HIP_CHECK(hipMemcpyAsync(&norm, ws.d_nrm2_result, sizeof(double), hipMemcpyDeviceToHost, streams_[si]));
     HIP_CHECK(hipStreamSynchronize(streams_[si]));
@@ -1831,11 +1846,12 @@ double PDMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
         ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, &norm));
     }
 
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
-    hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
-                       ws.d_nrm2_result, ws.d_inv_nrm);
-    ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
+    {
+        PointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_device);
+        hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
+                           ws.d_nrm2_result, ws.d_inv_nrm);
+        ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
+    }
     HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta, n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
 
     double prev_energy = 1e30;
@@ -1849,73 +1865,73 @@ double PDMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
         else
             apply_heff_two_site(site, d_vi, ws.d_heff_result, si);
 
-        ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
+        {
+            PointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_device);
 
-        ROCBLAS_CHECK(Traits::dot(handles_[si], n, d_vi, 1, ws.d_heff_result, 1, ws.d_dot_result));
+            ROCBLAS_CHECK(Traits::dot(handles_[si], n, d_vi, 1, ws.d_heff_result, 1, ws.d_dot_result));
 
-        hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
-                           ws.d_dot_result, ws.d_neg_alpha, ws.d_alpha_dev, iter);
+            hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
+                               ws.d_dot_result, ws.d_neg_alpha, ws.d_alpha_dev, iter);
 
-        if (opts_.fuse_lanczos) {
-            // Fused: w += (-α)·v_i + (-β_{i-1})·v_{i-1} in one kernel pass
-            const Scalar* v_im1 = (iter > 0) ? (d_lanczos_v + (size_t)(iter - 1) * n) : nullptr;
-            const Scalar* nb_im1 = (iter > 0) ? (ws.d_neg_beta_scalars + (iter - 1)) : ws.d_neg_alpha;
-            int block = 256;
-            int grid = (n + block - 1) / block;
-            hipLaunchKernelGGL((lanczos_fused_sub_kernel<Scalar>),
-                               dim3(grid), dim3(block), 0, streams_[si],
-                               ws.d_heff_result, d_vi, v_im1,
-                               ws.d_neg_alpha, nb_im1,
-                               n, iter > 0 ? 1 : 0);
-        } else {
-            ROCBLAS_CHECK(Traits::axpy(handles_[si], n, ws.d_neg_alpha, d_vi, 1, ws.d_heff_result, 1));
-
-            if (iter > 0) {
-                ROCBLAS_CHECK(Traits::axpy(handles_[si], n,
-                    ws.d_neg_beta_scalars + (iter - 1),
-                    d_lanczos_v + (size_t)(iter - 1) * n, 1,
-                    ws.d_heff_result, 1));
-            }
-        }
-
-        if (iter > 0) {
-            ROCBLAS_CHECK(Traits::gemv(handles_[si], Traits::op_h,
-                n, iter + 1, ws.d_const_one,
-                d_lanczos_v, n,
-                ws.d_heff_result, 1,
-                ws.d_const_zero, ws.d_ritz_coeffs, 1));
-            ROCBLAS_CHECK(Traits::gemv(handles_[si], rocblas_operation_none,
-                n, iter + 1, ws.d_const_neg_one,
-                d_lanczos_v, n,
-                ws.d_ritz_coeffs, 1,
-                ws.d_const_one, ws.d_heff_result, 1));
-        } else {
-            ROCBLAS_CHECK(Traits::dot(handles_[si], n, d_lanczos_v, 1, ws.d_heff_result, 1, ws.d_dot_result));
-            hipLaunchKernelGGL(negate_scalar_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
-                               ws.d_dot_result, ws.d_neg_overlap);
-            ROCBLAS_CHECK(Traits::axpy(handles_[si], n, ws.d_neg_overlap, d_lanczos_v, 1, ws.d_heff_result, 1));
-        }
-
-        ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, ws.d_heff_result, 1, ws.d_nrm2_result));
-
-        hipLaunchKernelGGL(lanczos_process_beta_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
-                           ws.d_nrm2_result, ws.d_inv_nrm, ws.d_beta_dev, ws.d_neg_beta_scalars, iter);
-
-        if (iter + 1 < max_iter) {
-            Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
             if (opts_.fuse_lanczos) {
+                // Fused: w += (-α)·v_i + (-β_{i-1})·v_{i-1} in one kernel pass
+                const Scalar* v_im1 = (iter > 0) ? (d_lanczos_v + (size_t)(iter - 1) * n) : nullptr;
+                const Scalar* nb_im1 = (iter > 0) ? (ws.d_neg_beta_scalars + (iter - 1)) : ws.d_neg_alpha;
                 int block = 256;
                 int grid = (n + block - 1) / block;
-                hipLaunchKernelGGL((lanczos_fused_norm_copy_kernel<Scalar, RealType>),
+                hipLaunchKernelGGL((lanczos_fused_sub_kernel<Scalar>),
                                    dim3(grid), dim3(block), 0, streams_[si],
-                                   d_vip1, ws.d_heff_result, ws.d_inv_nrm, n);
+                                   ws.d_heff_result, d_vi, v_im1,
+                                   ws.d_neg_alpha, nb_im1,
+                                   n, iter > 0 ? 1 : 0);
             } else {
-                HIP_CHECK(hipMemcpyAsync(d_vip1, ws.d_heff_result, n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
-                ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_vip1, 1));
+                ROCBLAS_CHECK(Traits::axpy(handles_[si], n, ws.d_neg_alpha, d_vi, 1, ws.d_heff_result, 1));
+
+                if (iter > 0) {
+                    ROCBLAS_CHECK(Traits::axpy(handles_[si], n,
+                        ws.d_neg_beta_scalars + (iter - 1),
+                        d_lanczos_v + (size_t)(iter - 1) * n, 1,
+                        ws.d_heff_result, 1));
+                }
+            }
+
+            if (iter > 0) {
+                ROCBLAS_CHECK(Traits::gemv(handles_[si], Traits::op_h,
+                    n, iter + 1, ws.d_const_one,
+                    d_lanczos_v, n,
+                    ws.d_heff_result, 1,
+                    ws.d_const_zero, ws.d_ritz_coeffs, 1));
+                ROCBLAS_CHECK(Traits::gemv(handles_[si], rocblas_operation_none,
+                    n, iter + 1, ws.d_const_neg_one,
+                    d_lanczos_v, n,
+                    ws.d_ritz_coeffs, 1,
+                    ws.d_const_one, ws.d_heff_result, 1));
+            } else {
+                ROCBLAS_CHECK(Traits::dot(handles_[si], n, d_lanczos_v, 1, ws.d_heff_result, 1, ws.d_dot_result));
+                hipLaunchKernelGGL(negate_scalar_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
+                                   ws.d_dot_result, ws.d_neg_overlap);
+                ROCBLAS_CHECK(Traits::axpy(handles_[si], n, ws.d_neg_overlap, d_lanczos_v, 1, ws.d_heff_result, 1));
+            }
+
+            ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, ws.d_heff_result, 1, ws.d_nrm2_result));
+
+            hipLaunchKernelGGL(lanczos_process_beta_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
+                               ws.d_nrm2_result, ws.d_inv_nrm, ws.d_beta_dev, ws.d_neg_beta_scalars, iter);
+
+            if (iter + 1 < max_iter) {
+                Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
+                if (opts_.fuse_lanczos) {
+                    int block = 256;
+                    int grid = (n + block - 1) / block;
+                    hipLaunchKernelGGL((lanczos_fused_norm_copy_kernel<Scalar, RealType>),
+                                       dim3(grid), dim3(block), 0, streams_[si],
+                                       d_vip1, ws.d_heff_result, ws.d_inv_nrm, n);
+                } else {
+                    HIP_CHECK(hipMemcpyAsync(d_vip1, ws.d_heff_result, n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
+                    ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_vip1, 1));
+                }
             }
         }
-
-        ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
 
         // Convergence check every 3 iterations after iter >= 4. Both the
         // invariant-subspace test and the tridiagonal eigenvalue solve run
@@ -1985,21 +2001,23 @@ double PDMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
                            ws.d_steqr_C, (hipDoubleComplex*)ws.d_ritz_coeffs, niter);
     }
 
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_device));
-    ROCBLAS_CHECK(Traits::gemv(
-        handles_[si], rocblas_operation_none,
-        n, niter, ws.d_const_one,
-        d_lanczos_v, n,
-        ws.d_ritz_coeffs, 1,
-        ws.d_const_zero, d_theta, 1
-    ));
+    {
+        PointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_device);
+        ROCBLAS_CHECK(Traits::gemv(
+            handles_[si], rocblas_operation_none,
+            n, niter, ws.d_const_one,
+            d_lanczos_v, n,
+            ws.d_ritz_coeffs, 1,
+            ws.d_const_zero, d_theta, 1
+        ));
 
-    ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
-    hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
-                       ws.d_nrm2_result, ws.d_inv_nrm);
-    ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
-    ROCBLAS_CHECK(rocblas_set_pointer_mode(handles_[si], rocblas_pointer_mode_host));
+        ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
+        hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
+                           ws.d_nrm2_result, ws.d_inv_nrm);
+        ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
+    }
 
+    if (si == 0) t_lanczos_.end(streams_[si]);
     return energy;
 }
 
@@ -3601,6 +3619,7 @@ template<typename Scalar>
 void PDMRGGPUOpt<Scalar>::report_timers() {
     if (!opts_.profile) return;
     auto row = [](PhaseTimer& t) {
+        if (t.calls() == 0) return;
         double ms = t.total_ms();
         int c = t.calls();
         double per = c > 0 ? ms / c : 0.0;

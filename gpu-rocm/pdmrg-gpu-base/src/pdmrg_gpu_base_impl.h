@@ -739,19 +739,21 @@ double PDMRGGPUBase<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta,
 
     Scalar* d_lanczos_v = ws.d_lanczos_v;
 
-    // Round-13 M1-base-prop: RAII guard restores host mode on scope exit.
-    int niter = 0;
+    // v[0] = theta / ||theta||  (BLAS-1 in device-pointer mode)
     {
         PointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_device);
-
-    // v[0] = theta / ||theta||
-    ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
-    hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
-                       ws.d_nrm2_result, ws.d_inv_nrm);
-    ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
+        ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, d_theta, 1, ws.d_nrm2_result));
+        hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, streams_[si],
+                           ws.d_nrm2_result, ws.d_inv_nrm);
+        ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_theta, 1));
+    }
     HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta,
                              n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
 
+    // Round-14 H1-base fix: apply_heff_* is called in HOST pointer mode
+    // (uses host-stack &one/&zero scalars in inner gemm). Per-iter device-
+    // mode region wraps only BLAS-1 alpha/beta/reorth ops. Mirrors
+    // pdmrg-gpu sibling pattern.
     int iter;
     for (iter = 0; iter < max_iter; iter++) {
         Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
@@ -761,51 +763,54 @@ double PDMRGGPUBase<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta,
         else
             apply_heff_two_site(site, d_vi, ws.d_heff_result, si);
 
-        // alpha_i = Re <v_i | w>
-        ROCBLAS_CHECK(Traits::dot(handles_[si], n, d_vi, 1, ws.d_heff_result, 1, ws.d_dot_result));
-        hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
-                           ws.d_dot_result, ws.d_neg_alpha, ws.d_alpha_dev, iter);
+        {
+            PointerModeGuard pm_guard(handles_[si], rocblas_pointer_mode_device);
 
-        // w -= alpha_i * v_i
-        ROCBLAS_CHECK(Traits::axpy(handles_[si], n, ws.d_neg_alpha, d_vi, 1, ws.d_heff_result, 1));
+            // alpha_i = Re <v_i | w>
+            ROCBLAS_CHECK(Traits::dot(handles_[si], n, d_vi, 1, ws.d_heff_result, 1, ws.d_dot_result));
+            hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
+                               ws.d_dot_result, ws.d_neg_alpha, ws.d_alpha_dev, iter);
 
-        // w -= beta_{i-1} * v_{i-1}
-        if (iter > 0) {
-            ROCBLAS_CHECK(Traits::axpy(handles_[si], n,
-                ws.d_neg_beta_scalars + (iter - 1),
-                d_lanczos_v + (size_t)(iter - 1) * n, 1,
-                ws.d_heff_result, 1));
-        }
+            // w -= alpha_i * v_i
+            ROCBLAS_CHECK(Traits::axpy(handles_[si], n, ws.d_neg_alpha, d_vi, 1, ws.d_heff_result, 1));
 
-        // Full one-pass classical Gram-Schmidt reorthogonalization, on device.
-        for (int j = 0; j <= iter; j++) {
-            ROCBLAS_CHECK(Traits::dot(handles_[si], n,
-                d_lanczos_v + (size_t)j * n, 1,
-                ws.d_heff_result, 1, ws.d_dot_result));
-            hipLaunchKernelGGL(negate_scalar_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
-                               ws.d_dot_result, ws.d_neg_overlap);
-            ROCBLAS_CHECK(Traits::axpy(handles_[si], n, ws.d_neg_overlap,
-                d_lanczos_v + (size_t)j * n, 1,
-                ws.d_heff_result, 1));
-        }
+            // w -= beta_{i-1} * v_{i-1}
+            if (iter > 0) {
+                ROCBLAS_CHECK(Traits::axpy(handles_[si], n,
+                    ws.d_neg_beta_scalars + (iter - 1),
+                    d_lanczos_v + (size_t)(iter - 1) * n, 1,
+                    ws.d_heff_result, 1));
+            }
 
-        // beta_i = ||w||
-        ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, ws.d_heff_result, 1, ws.d_nrm2_result));
-        hipLaunchKernelGGL(lanczos_process_beta_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
-                           ws.d_nrm2_result, ws.d_inv_nrm, ws.d_beta_dev, ws.d_neg_beta_scalars, iter);
+            // Full one-pass classical Gram-Schmidt reorthogonalization, on device.
+            for (int j = 0; j <= iter; j++) {
+                ROCBLAS_CHECK(Traits::dot(handles_[si], n,
+                    d_lanczos_v + (size_t)j * n, 1,
+                    ws.d_heff_result, 1, ws.d_dot_result));
+                hipLaunchKernelGGL(negate_scalar_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
+                                   ws.d_dot_result, ws.d_neg_overlap);
+                ROCBLAS_CHECK(Traits::axpy(handles_[si], n, ws.d_neg_overlap,
+                    d_lanczos_v + (size_t)j * n, 1,
+                    ws.d_heff_result, 1));
+            }
 
-        // v_{i+1} = w / beta_i
-        if (iter + 1 < max_iter) {
-            Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
-            HIP_CHECK(hipMemcpyAsync(d_vip1, ws.d_heff_result,
-                                     n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
-            ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_vip1, 1));
+            // beta_i = ||w||
+            ROCBLAS_CHECK(Traits::nrm2(handles_[si], n, ws.d_heff_result, 1, ws.d_nrm2_result));
+            hipLaunchKernelGGL(lanczos_process_beta_kernel<Scalar>, dim3(1), dim3(1), 0, streams_[si],
+                               ws.d_nrm2_result, ws.d_inv_nrm, ws.d_beta_dev, ws.d_neg_beta_scalars, iter);
+
+            // v_{i+1} = w / beta_i
+            if (iter + 1 < max_iter) {
+                Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
+                HIP_CHECK(hipMemcpyAsync(d_vip1, ws.d_heff_result,
+                                         n * sizeof(Scalar), hipMemcpyDeviceToDevice, streams_[si]));
+                ROCBLAS_CHECK(Traits::scal_real(handles_[si], n, ws.d_inv_nrm, d_vip1, 1));
+            }
         }
     }
 
-    niter = iter;
+    int niter = iter;
     if (niter <= 0) niter = 1;
-    }  // PointerModeGuard restores host mode here.
 
     // Tridiagonal eigensolve on device.
     HIP_CHECK(hipMemcpyAsync(ws.d_steqr_D, ws.d_alpha_dev,

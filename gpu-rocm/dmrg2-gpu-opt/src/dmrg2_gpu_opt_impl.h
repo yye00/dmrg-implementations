@@ -1907,6 +1907,7 @@ template<typename Scalar>
 void DMRG2GPUOpt<Scalar>::report_timers() {
     if (!opts_.profile) return;
     auto row = [](PhaseTimer& t) {
+        if (t.calls() == 0) return;
         double ms = t.total_ms();
         int c = t.calls();
         double per = c > 0 ? ms / c : 0.0;

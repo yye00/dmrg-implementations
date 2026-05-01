@@ -273,7 +273,10 @@ private:
     void apply_heff(int site, const Scalar* d_theta, Scalar* d_result);
     double lanczos_eigensolver(int site, Scalar* d_theta);
 
-    // SVD bond splitting (CPU LAPACK)
+    // SVD bond splitting. Default path is on-device rocsolver_gesvd_auto;
+    // host LAPACK is used only on the use_cpu_svd_ opt-in branch.
+    // (Function name `svd_fallback` is historical from when the GPU SVD
+    // was the secondary path.)
     void svd_fallback(int site, Scalar* d_theta, char direction);
 
     // Block-Davidson eigensolver

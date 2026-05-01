@@ -977,6 +977,10 @@ void PDMRGGPU<Scalar>::apply_heff_two_site(int site, const Scalar* d_theta_in,
         auto it = ws.apply_heff_graph_cache.find(key);
         if (it != ws.apply_heff_graph_cache.end()) {
             HIP_CHECK(hipGraphLaunch(it->second, streams_[si]));
+            // Round-14 H-pdmrg-apply_heff-leak: close the timer pair before
+            // the early return so the cache-hit path doesn't leak a
+            // hipEvent_t per call.
+            if (si == 0) t_apply_heff_.end(streams_[si]);
             return;
         }
         graph_capture_miss = true;
@@ -2821,7 +2825,10 @@ void PDMRGGPU<Scalar>::init_timers() {
 template<typename Scalar>
 void PDMRGGPU<Scalar>::report_timers() {
     if (!opts_.profile) return;
+    // Round-14 M-pdmrg-skip-on-zero: skip phases with no recorded calls so
+    // uninstrumented timers don't print noisy "0.00 ms / 0 calls" rows.
     auto row = [](PhaseTimer& t) {
+        if (t.calls() == 0) return;
         double ms = t.total_ms();
         int c = t.calls();
         double per = c > 0 ? ms / c : 0.0;

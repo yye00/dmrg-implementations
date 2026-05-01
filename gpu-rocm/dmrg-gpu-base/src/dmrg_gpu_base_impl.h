@@ -514,78 +514,82 @@ double DMRGGPUBase<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
 
     Scalar* d_lanczos_v = d_lanczos_v_;
 
-    // Switch rocBLAS to device-pointer mode for the inner loop. RAII guard
-    // restores host mode on scope exit (round-13 M1-base-prop).
-    int niter = 0;
+    // v[0] = theta / ||theta||  (BLAS-1 ops in device-pointer mode)
     {
         PointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
-
-    // v[0] = theta / ||theta||  (entirely on device)
-    ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
-    hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, stream_,
-                       d_nrm2_result_, d_inv_nrm_);
-    ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
+        ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
+        hipLaunchKernelGGL(inv_real_kernel, dim3(1), dim3(1), 0, stream_,
+                           d_nrm2_result_, d_inv_nrm_);
+        ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
+    }
     HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta,
                              n * sizeof(Scalar), hipMemcpyDeviceToDevice, stream_));
 
+    // Round-14 H1-base fix: apply_heff is called in HOST pointer mode
+    // because its inner gemm uses host-stack &one/&zero scalars. Per-iter
+    // device-mode region wraps only the BLAS-1 alpha/beta/reorth ops, not
+    // apply_heff. Mirrors dmrg-gpu impl :1029-1112 sibling pattern.
     int iter;
     for (iter = 0; iter < max_iter; iter++) {
         Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
 
-        // w = H |v_i>
+        // w = H |v_i> (apply_heff manages its own pointer mode — host)
         apply_heff(site, d_vi, d_heff_result_);
 
-        // alpha_i = Re <v_i | w>  (device-pointer dot)
-        ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_vi, 1, d_heff_result_, 1, d_dot_result_));
-        // Process: store Re(dot_result) to d_alpha_dev_[iter] and emit -alpha into d_neg_alpha_
-        hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
-                           d_dot_result_, d_neg_alpha_, d_alpha_dev_, iter);
+        {
+            PointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
 
-        // w -= alpha_i * v_i
-        ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, d_neg_alpha_, d_vi, 1, d_heff_result_, 1));
+            // alpha_i = Re <v_i | w>  (device-pointer dot)
+            ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_vi, 1, d_heff_result_, 1, d_dot_result_));
+            // Process: store Re(dot_result) to d_alpha_dev_[iter] and emit -alpha into d_neg_alpha_
+            hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
+                               d_dot_result_, d_neg_alpha_, d_alpha_dev_, iter);
 
-        // w -= beta_{i-1} * v_{i-1}     (use d_neg_beta_scalars_[iter-1] from prev iter)
-        if (iter > 0) {
-            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n,
-                d_neg_beta_scalars_ + (iter - 1),
-                d_lanczos_v + (size_t)(iter - 1) * n, 1,
-                d_heff_result_, 1));
-        }
+            // w -= alpha_i * v_i
+            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, d_neg_alpha_, d_vi, 1, d_heff_result_, 1));
 
-        // Full one-pass classical Gram-Schmidt reorthogonalization, on device.
-        // Per-pair dot+axpy: dot writes -<v_j|w> into d_neg_overlap_, axpy
-        // applies it. (The optimized DMRGGPU fuses this into a single GEMV.)
-        for (int j = 0; j <= iter; j++) {
-            ROCBLAS_CHECK(Traits::dot(rocblas_h_, n,
-                d_lanczos_v + (size_t)j * n, 1,
-                d_heff_result_, 1, d_dot_result_));
-            // Negate the dot result into d_neg_overlap_.
-            hipLaunchKernelGGL(negate_scalar_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
-                               d_dot_result_, d_neg_overlap_);
-            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, d_neg_overlap_,
-                d_lanczos_v + (size_t)j * n, 1,
-                d_heff_result_, 1));
-        }
+            // w -= beta_{i-1} * v_{i-1}     (use d_neg_beta_scalars_[iter-1] from prev iter)
+            if (iter > 0) {
+                ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n,
+                    d_neg_beta_scalars_ + (iter - 1),
+                    d_lanczos_v + (size_t)(iter - 1) * n, 1,
+                    d_heff_result_, 1));
+            }
 
-        // beta_i = ||w||  (device-pointer nrm2)
-        ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_heff_result_, 1, d_nrm2_result_));
-        // Store beta[iter] to d_beta_dev_, compute 1/beta into d_inv_nrm_,
-        // and emit -beta into d_neg_beta_scalars_[iter] for the next iter's axpy.
-        hipLaunchKernelGGL(lanczos_process_beta_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
-                           d_nrm2_result_, d_inv_nrm_, d_beta_dev_, d_neg_beta_scalars_, iter);
+            // Full one-pass classical Gram-Schmidt reorthogonalization, on device.
+            // Per-pair dot+axpy: dot writes -<v_j|w> into d_neg_overlap_, axpy
+            // applies it. (The optimized DMRGGPU fuses this into a single GEMV.)
+            for (int j = 0; j <= iter; j++) {
+                ROCBLAS_CHECK(Traits::dot(rocblas_h_, n,
+                    d_lanczos_v + (size_t)j * n, 1,
+                    d_heff_result_, 1, d_dot_result_));
+                // Negate the dot result into d_neg_overlap_.
+                hipLaunchKernelGGL(negate_scalar_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
+                                   d_dot_result_, d_neg_overlap_);
+                ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, d_neg_overlap_,
+                    d_lanczos_v + (size_t)j * n, 1,
+                    d_heff_result_, 1));
+            }
 
-        // v_{i+1} = w / beta_i
-        if (iter + 1 < max_iter) {
-            Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
-            HIP_CHECK(hipMemcpyAsync(d_vip1, d_heff_result_,
-                                     n * sizeof(Scalar), hipMemcpyDeviceToDevice, stream_));
-            ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_vip1, 1));
+            // beta_i = ||w||  (device-pointer nrm2)
+            ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_heff_result_, 1, d_nrm2_result_));
+            // Store beta[iter] to d_beta_dev_, compute 1/beta into d_inv_nrm_,
+            // and emit -beta into d_neg_beta_scalars_[iter] for the next iter's axpy.
+            hipLaunchKernelGGL(lanczos_process_beta_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
+                               d_nrm2_result_, d_inv_nrm_, d_beta_dev_, d_neg_beta_scalars_, iter);
+
+            // v_{i+1} = w / beta_i
+            if (iter + 1 < max_iter) {
+                Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
+                HIP_CHECK(hipMemcpyAsync(d_vip1, d_heff_result_,
+                                         n * sizeof(Scalar), hipMemcpyDeviceToDevice, stream_));
+                ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_vip1, 1));
+            }
         }
     }
 
-    niter = iter;
+    int niter = iter;
     if (niter <= 0) niter = 1;
-    }  // PointerModeGuard restores host mode here.
 
     // Solve the tridiagonal eigenproblem on device (rocsolver_dsteqr).
     HIP_CHECK(hipMemcpyAsync(d_steqr_D_, d_alpha_dev_,

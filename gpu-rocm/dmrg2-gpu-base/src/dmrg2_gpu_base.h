@@ -80,7 +80,8 @@ private:
     std::vector<Scalar*> d_W_left_;
     std::vector<Scalar*> d_W_right_;
 
-    // Two-site fused MPO (WW), precomputed on device at set_mpo() time.
+    // Two-site fused MPO (WW), precomputed on host at set_mpo() time and
+    // hipMemcpy'd to device. (Class-level docstring documents this.)
     // d_WW_[bond] has shape (D*d², D*d²) for each adjacent (site, site+1) pair.
     // Computing this once at startup eliminates the per-Lanczos-iteration
     // host roundtrip pattern that would otherwise dominate the inner loop.
