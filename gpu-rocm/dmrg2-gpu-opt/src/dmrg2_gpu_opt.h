@@ -150,6 +150,19 @@ private:
     int theta_size_max_;
     int max_lanczos_iter_;
 
+    // Round-16 D12 device-pointer-mode Lanczos buffers.
+    Scalar*   d_dot_result_  = nullptr;
+    RealType* d_nrm2_result_ = nullptr;
+    Scalar*   d_neg_alpha_   = nullptr;
+    Scalar*   d_neg_overlap_ = nullptr;
+    RealType* d_inv_nrm_     = nullptr;
+    double*   d_alpha_dev_   = nullptr;
+    double*   d_beta_dev_    = nullptr;
+    Scalar*   d_neg_beta_scalars_ = nullptr;
+    Scalar*   d_const_one_   = nullptr;
+    Scalar*   d_const_zero_  = nullptr;
+    Scalar*   d_const_neg_one_ = nullptr;
+
     // Batched GEMM pointer arrays (on device) — main + env stream variants
     Scalar** d_batch_A_;
     Scalar** d_batch_B_;

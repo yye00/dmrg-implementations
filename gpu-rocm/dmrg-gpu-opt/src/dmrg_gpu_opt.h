@@ -170,6 +170,21 @@ private:
     int theta_size_max_;
     int max_lanczos_iter_;
 
+    // Device-pointer-mode Lanczos scalars (round-16 D12 port — the round-7
+    // H10 task was marked complete but the actual code still used host-
+    // stack &alpha_result/&beta_i. Mirrors dmrg-gpu round-7 H10 pattern).
+    Scalar*   d_dot_result_  = nullptr;   // 1 elt: dot result
+    RealType* d_nrm2_result_ = nullptr;   // 1 elt: nrm2 result
+    Scalar*   d_neg_alpha_   = nullptr;   // 1 elt: -α for axpy
+    Scalar*   d_neg_overlap_ = nullptr;   // 1 elt: -<v0|w> for iter==0
+    RealType* d_inv_nrm_     = nullptr;   // 1 elt: 1/β for scale
+    double*   d_alpha_dev_   = nullptr;   // max_iter elts: tridiagonal α
+    double*   d_beta_dev_    = nullptr;   // max_iter elts: tridiagonal β
+    Scalar*   d_neg_beta_scalars_ = nullptr;  // max_iter Scalar elts
+    Scalar*   d_const_one_   = nullptr;   // device constant 1
+    Scalar*   d_const_zero_  = nullptr;   // device constant 0
+    Scalar*   d_const_neg_one_ = nullptr; // device constant -1
+
     // Batched GEMM pointer arrays (on device) — main stream
     Scalar** d_batch_A_;
     Scalar** d_batch_B_;

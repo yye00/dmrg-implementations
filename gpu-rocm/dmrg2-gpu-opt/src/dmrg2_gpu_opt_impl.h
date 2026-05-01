@@ -172,6 +172,25 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     HIP_CHECK(hipMalloc(&d_lanczos_v_, (size_t)max_lanczos_iter_ * theta_size_max_ * sizeof(Scalar)));
     HIP_CHECK(hipMalloc(&d_ritz_coeffs_, max_lanczos_iter_ * sizeof(Scalar)));
 
+    // Round-16 D12: device-pointer-mode Lanczos scalars + α/β arrays.
+    HIP_CHECK(hipMalloc(&d_dot_result_,  sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_nrm2_result_, sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_neg_alpha_,   sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_neg_overlap_, sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_inv_nrm_,     sizeof(RealType)));
+    HIP_CHECK(hipMalloc(&d_alpha_dev_,   max_lanczos_iter_ * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_beta_dev_,    max_lanczos_iter_ * sizeof(double)));
+    HIP_CHECK(hipMalloc(&d_neg_beta_scalars_, max_lanczos_iter_ * sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_const_one_,    sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_const_zero_,   sizeof(Scalar)));
+    HIP_CHECK(hipMalloc(&d_const_neg_one_,sizeof(Scalar)));
+    {
+        Scalar one_h = Traits::one(), zero_h = Traits::zero(), neg_h = Traits::neg(Traits::one());
+        HIP_CHECK(hipMemcpy(d_const_one_,    &one_h,  sizeof(Scalar), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(d_const_zero_,   &zero_h, sizeof(Scalar), hipMemcpyHostToDevice));
+        HIP_CHECK(hipMemcpy(d_const_neg_one_,&neg_h,  sizeof(Scalar), hipMemcpyHostToDevice));
+    }
+
     // Batched GEMM pointer arrays: D*d^2 batches for two-site — main + env
     // stream variants so env_update and apply_heff/absorb don't clobber each
     // other's pointer tables.
@@ -308,6 +327,17 @@ void DMRG2GPUOpt<Scalar>::free_gpu_resources() {
     if (d_theta_) hipFree(d_theta_);
     if (d_heff_result_) hipFree(d_heff_result_);
     if (d_lanczos_v_) hipFree(d_lanczos_v_);
+    if (d_dot_result_)  hipFree(d_dot_result_);
+    if (d_nrm2_result_) hipFree(d_nrm2_result_);
+    if (d_neg_alpha_)   hipFree(d_neg_alpha_);
+    if (d_neg_overlap_) hipFree(d_neg_overlap_);
+    if (d_inv_nrm_)     hipFree(d_inv_nrm_);
+    if (d_alpha_dev_)   hipFree(d_alpha_dev_);
+    if (d_beta_dev_)    hipFree(d_beta_dev_);
+    if (d_neg_beta_scalars_) hipFree(d_neg_beta_scalars_);
+    if (d_const_one_)   hipFree(d_const_one_);
+    if (d_const_zero_)  hipFree(d_const_zero_);
+    if (d_const_neg_one_) hipFree(d_const_neg_one_);
     if (d_ritz_coeffs_) hipFree(d_ritz_coeffs_);
     if (d_T1_) hipFree(d_T1_);
     if (d_T2_) hipFree(d_T2_);
@@ -981,141 +1011,129 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
 
     Scalar* d_lanczos_v = d_lanczos_v_;
 
-    std::vector<double> h_alpha(max_iter);
-    std::vector<double> h_beta(max_iter);
-
-    // FUSE_LANCZOS: small device scratches to stage host scalars
-    // for the fused kernels (which expect device-pointer operands).
-    Scalar*   d_neg_alpha_scr = nullptr;
-    Scalar*   d_neg_beta_scr  = nullptr;
-    RealType* d_inv_beta_scr  = nullptr;
-    if (opts_.fuse_lanczos) {
-        HIP_CHECK(hipMalloc(&d_neg_alpha_scr, sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&d_neg_beta_scr,  sizeof(Scalar)));
-        HIP_CHECK(hipMalloc(&d_inv_beta_scr,  sizeof(RealType)));
-    }
+    // Round-16 D12 port: device-pointer-mode Lanczos (mirrors dmrg-gpu's
+    // round-7 H10 + dmrg-gpu-opt's round-16 D12 port). α/β stored in
+    // d_alpha_dev_/d_beta_dev_; rocsolver_dsteqr reads them directly.
 
     // v[0] = theta / ||theta||
+    {
+        PointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
+        ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
+    }
     double norm;
-    ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, &norm));
-
+    HIP_CHECK(hipMemcpyAsync(&norm, d_nrm2_result_, sizeof(double),
+                              hipMemcpyDeviceToHost, stream_));
+    HIP_CHECK(hipStreamSynchronize(stream_));
     if (norm < 1e-14) {
         std::vector<Scalar> h_init(n);
         srand(42 + site);
         for (int i = 0; i < n; i++) h_init[i] = Traits::random_val();
         HIP_CHECK(hipMemcpy(d_theta, h_init.data(), n * sizeof(Scalar), hipMemcpyHostToDevice));
-        ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, &norm));
+        PointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
+        ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
     }
-
-    double inv_norm = 1.0 / norm;
-    ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, &inv_norm, d_theta, 1));
-    HIP_CHECK(hipMemcpy(d_lanczos_v, d_theta, n * sizeof(Scalar), hipMemcpyDeviceToDevice));
+    {
+        PointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
+        hipLaunchKernelGGL(invert_nrm_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
+                           d_nrm2_result_, d_inv_nrm_);
+        ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
+    }
+    HIP_CHECK(hipMemcpyAsync(d_lanczos_v, d_theta, n * sizeof(Scalar),
+                              hipMemcpyDeviceToDevice, stream_));
 
     double prev_energy = 1e30;
     int iter;
     for (iter = 0; iter < max_iter; iter++) {
         Scalar* d_vi = d_lanczos_v + (size_t)iter * n;
 
-        // w = H|v_i>
+        // w = H|v_i> (apply_heff_two_site in HOST pointer mode)
         apply_heff_two_site(site, d_vi, d_heff_result_);
 
-        // alpha_i = <v_i|w>
-        Scalar alpha_result;
-        ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_vi, 1, d_heff_result_, 1, &alpha_result));
-        double alpha_i = Traits::real_part(alpha_result);
-        h_alpha[iter] = alpha_i;
+        {
+            PointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
 
-        // w = w - alpha_i * v_i  [and - beta_{i-1} * v_{i-1}]
-        Scalar neg_alpha = Traits::make_scalar(-alpha_i);
-        if (opts_.fuse_lanczos) {
-            // Fused: w += (-α)·v_i + (-β_{i-1})·v_{i-1} in one kernel pass.
-            // Stage host scalars to tiny device scratches.
-            HIP_CHECK(hipMemcpyAsync(d_neg_alpha_scr, &neg_alpha, sizeof(Scalar),
-                                     hipMemcpyHostToDevice, stream_));
-            const Scalar* v_im1 = nullptr;
-            const Scalar* nb_im1 = d_neg_alpha_scr;  // unused when has_prev==0
-            if (iter > 0) {
-                Scalar neg_beta = Traits::make_scalar(-h_beta[iter - 1]);
-                HIP_CHECK(hipMemcpyAsync(d_neg_beta_scr, &neg_beta, sizeof(Scalar),
-                                         hipMemcpyHostToDevice, stream_));
-                v_im1 = d_lanczos_v + (size_t)(iter - 1) * n;
-                nb_im1 = d_neg_beta_scr;
+            ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_vi, 1, d_heff_result_, 1, d_dot_result_));
+            hipLaunchKernelGGL(lanczos_process_alpha_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
+                               d_dot_result_, d_neg_alpha_, d_alpha_dev_, iter);
+
+            if (opts_.fuse_lanczos) {
+                const Scalar* v_im1 = (iter > 0) ? (d_lanczos_v + (size_t)(iter - 1) * n) : nullptr;
+                const Scalar* nb_im1 = (iter > 0) ? (d_neg_beta_scalars_ + (iter - 1)) : d_neg_alpha_;
+                int block = 256;
+                int grid = (n + block - 1) / block;
+                hipLaunchKernelGGL((lanczos_fused_sub_kernel<Scalar>),
+                                   dim3(grid), dim3(block), 0, stream_,
+                                   d_heff_result_, d_vi, v_im1,
+                                   d_neg_alpha_, nb_im1,
+                                   n, iter > 0 ? 1 : 0);
+            } else {
+                ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, d_neg_alpha_, d_vi, 1, d_heff_result_, 1));
+                if (iter > 0) {
+                    ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n,
+                        d_neg_beta_scalars_ + (iter - 1),
+                        d_lanczos_v + (size_t)(iter - 1) * n, 1,
+                        d_heff_result_, 1));
+                }
             }
-            int block = 256;
-            int grid = (n + block - 1) / block;
-            hipLaunchKernelGGL((lanczos_fused_sub_kernel<Scalar>),
-                               dim3(grid), dim3(block), 0, stream_,
-                               d_heff_result_, d_vi, v_im1,
-                               d_neg_alpha_scr, nb_im1,
-                               n, iter > 0 ? 1 : 0);
-        } else {
-            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, &neg_alpha, d_vi, 1, d_heff_result_, 1));
 
-            // w = w - beta_{i-1} * v_{i-1}
+            // Reorthogonalization
             if (iter > 0) {
-                Scalar neg_beta = Traits::make_scalar(-h_beta[iter - 1]);
-                Scalar* d_vim1 = d_lanczos_v + (size_t)(iter - 1) * n;
-                ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, &neg_beta, d_vim1, 1, d_heff_result_, 1));
+                ROCBLAS_CHECK(Traits::gemv(rocblas_h_, Traits::op_h,
+                    n, iter + 1, d_const_one_,
+                    d_lanczos_v, n,
+                    d_heff_result_, 1,
+                    d_const_zero_, d_ritz_coeffs_, 1));
+                ROCBLAS_CHECK(Traits::gemv(rocblas_h_, rocblas_operation_none,
+                    n, iter + 1, d_const_neg_one_,
+                    d_lanczos_v, n,
+                    d_ritz_coeffs_, 1,
+                    d_const_one_, d_heff_result_, 1));
+            } else {
+                ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_lanczos_v, 1, d_heff_result_, 1, d_dot_result_));
+                hipLaunchKernelGGL(negate_scalar_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
+                                   d_dot_result_, d_neg_overlap_);
+                ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, d_neg_overlap_, d_lanczos_v, 1, d_heff_result_, 1));
+            }
+
+            ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_heff_result_, 1, d_nrm2_result_));
+            hipLaunchKernelGGL(lanczos_process_beta_kernel<Scalar>, dim3(1), dim3(1), 0, stream_,
+                               d_nrm2_result_, d_inv_nrm_, d_beta_dev_, d_neg_beta_scalars_, iter);
+
+            if (iter + 1 < max_iter) {
+                Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
+                if (opts_.fuse_lanczos) {
+                    int block = 256;
+                    int grid = (n + block - 1) / block;
+                    hipLaunchKernelGGL((lanczos_fused_norm_copy_kernel<Scalar, RealType>),
+                                       dim3(grid), dim3(block), 0, stream_,
+                                       d_vip1, d_heff_result_, d_inv_nrm_, n);
+                } else {
+                    HIP_CHECK(hipMemcpyAsync(d_vip1, d_heff_result_, n * sizeof(Scalar),
+                                              hipMemcpyDeviceToDevice, stream_));
+                    ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_vip1, 1));
+                }
             }
         }
 
-        // Full reorthogonalization via gemv
-        if (iter > 0) {
-            Scalar one_val = Traits::one(), zero_sc = Traits::zero(), neg_one = Traits::neg(Traits::one());
-            ROCBLAS_CHECK(Traits::gemv(rocblas_h_, Traits::op_h,
-                n, iter + 1, &one_val,
-                d_lanczos_v, n,
-                d_heff_result_, 1,
-                &zero_sc, d_ritz_coeffs_, 1));
-            ROCBLAS_CHECK(Traits::gemv(rocblas_h_, rocblas_operation_none,
-                n, iter + 1, &neg_one,
-                d_lanczos_v, n,
-                d_ritz_coeffs_, 1,
-                &one_val, d_heff_result_, 1));
-        } else {
-            Scalar overlap;
-            ROCBLAS_CHECK(Traits::dot(rocblas_h_, n, d_lanczos_v, 1, d_heff_result_, 1, &overlap));
-            Scalar neg_overlap = Traits::neg(overlap);
-            ROCBLAS_CHECK(Traits::axpy(rocblas_h_, n, &neg_overlap, d_lanczos_v, 1, d_heff_result_, 1));
-        }
-
-        // beta_i = ||w||
-        double beta_i;
-        ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_heff_result_, 1, &beta_i));
-        h_beta[iter] = beta_i;
-
-        if (beta_i < tol_lanczos) {
-            iter++;
-            break;
-        }
-
-        // Eigenvalue convergence check (every 3 iterations after iter >= 4)
-        // Tridiagonal eigensolve on device via rocsolver_dsteqr — H2D the
-        // small host α/β, solve, D2H one int + one double. Replaces host
-        // LAPACK dstev_ that introduced a per-3-iter PCIe stall + host BLAS
-        // dependency. Matches dmrg-gpu-opt c5 backport pattern.
+        // Convergence check
         if (iter >= 4 && iter % 3 == 0) {
+            HIP_CHECK(hipStreamSynchronize(stream_));
             int ncheck = iter + 1;
-            std::vector<double> h_E_chk(ncheck);
-            for (int i = 0; i < ncheck - 1; i++) h_E_chk[i] = h_beta[i];
-            h_E_chk[ncheck - 1] = 0.0;
-
-            HIP_CHECK(hipMemcpyAsync(d_steqr_D_, h_alpha.data(),
-                                      ncheck * sizeof(double),
-                                      hipMemcpyHostToDevice, stream_));
-            HIP_CHECK(hipMemcpyAsync(d_steqr_E_, h_E_chk.data(),
-                                      ncheck * sizeof(double),
-                                      hipMemcpyHostToDevice, stream_));
+            hipLaunchKernelGGL(lanczos_check_beta, dim3(1), dim3(1), 0, stream_,
+                               d_beta_dev_, ncheck, tol_lanczos, d_steqr_info_);
+            rocblas_int h_beta_idx;
+            HIP_CHECK(hipMemcpy(&h_beta_idx, d_steqr_info_, sizeof(rocblas_int), hipMemcpyDeviceToHost));
+            if (h_beta_idx > 0) { iter = h_beta_idx; break; }
+            HIP_CHECK(hipMemcpyAsync(d_steqr_D_, d_alpha_dev_, ncheck * sizeof(double),
+                                      hipMemcpyDeviceToDevice, stream_));
+            HIP_CHECK(hipMemcpyAsync(d_steqr_E_, d_beta_dev_, ncheck * sizeof(double),
+                                      hipMemcpyDeviceToDevice, stream_));
             rocsolver_dsteqr(rocblas_h_, rocblas_evect_none, ncheck,
-                             d_steqr_D_, d_steqr_E_, nullptr, ncheck,
-                             d_steqr_info_);
+                             d_steqr_D_, d_steqr_E_, nullptr, ncheck, d_steqr_info_);
             rocblas_int h_info_chk;
             double cur_energy;
-            HIP_CHECK(hipMemcpyAsync(&h_info_chk, d_steqr_info_, sizeof(rocblas_int),
-                                      hipMemcpyDeviceToHost, stream_));
-            HIP_CHECK(hipMemcpyAsync(&cur_energy, d_steqr_D_, sizeof(double),
-                                      hipMemcpyDeviceToHost, stream_));
-            HIP_CHECK(hipStreamSynchronize(stream_));
+            HIP_CHECK(hipMemcpy(&h_info_chk, d_steqr_info_, sizeof(rocblas_int), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpy(&cur_energy, d_steqr_D_, sizeof(double), hipMemcpyDeviceToHost));
             if (h_info_chk == 0) {
                 if (std::abs(cur_energy - prev_energy) < tol_eig_conv) {
                     iter++;
@@ -1124,62 +1142,24 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
                 prev_energy = cur_energy;
             }
         }
-
-        // v_{i+1} = w / beta_i
-        if (iter + 1 < max_iter) {
-            Scalar* d_vip1 = d_lanczos_v + (size_t)(iter + 1) * n;
-            double scale = 1.0 / beta_i;
-            if (opts_.fuse_lanczos) {
-                // Fused normalize+copy: v_{i+1}[k] = w[k] * (1/β_i)
-                RealType inv_beta_rt = (RealType)scale;
-                HIP_CHECK(hipMemcpyAsync(d_inv_beta_scr, &inv_beta_rt, sizeof(RealType),
-                                         hipMemcpyHostToDevice, stream_));
-                int block = 256;
-                int grid = (n + block - 1) / block;
-                hipLaunchKernelGGL((lanczos_fused_norm_copy_kernel<Scalar, RealType>),
-                                   dim3(grid), dim3(block), 0, stream_,
-                                   d_vip1, d_heff_result_, d_inv_beta_scr, n);
-            } else {
-                HIP_CHECK(hipMemcpy(d_vip1, d_heff_result_, n * sizeof(Scalar), hipMemcpyDeviceToDevice));
-                ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, &scale, d_vip1, 1));
-            }
-        }
-    }
-
-    // Free FUSE_LANCZOS scratches
-    if (opts_.fuse_lanczos) {
-        if (d_neg_alpha_scr) hipFree(d_neg_alpha_scr);
-        if (d_neg_beta_scr)  hipFree(d_neg_beta_scr);
-        if (d_inv_beta_scr)  hipFree(d_inv_beta_scr);
     }
 
     int niter = iter;
     prof_davidson_iters += niter;
     prof_heff_calls += niter;
 
-    // Final tridiagonal solve on device via rocsolver_dsteqr; eigenvectors
-    // stay on device at d_steqr_C_, first column moves to d_ritz_coeffs_
-    // with promote_double_to_complex when Scalar is complex.
-    std::vector<double> h_E(niter);
-    for (int i = 0; i < niter - 1; i++) h_E[i] = h_beta[i];
-    if (niter > 0) h_E[niter - 1] = 0.0;
+    HIP_CHECK(hipStreamSynchronize(stream_));
 
-    HIP_CHECK(hipMemcpyAsync(d_steqr_D_, h_alpha.data(),
-                              niter * sizeof(double),
-                              hipMemcpyHostToDevice, stream_));
-    HIP_CHECK(hipMemcpyAsync(d_steqr_E_, h_E.data(),
-                              niter * sizeof(double),
-                              hipMemcpyHostToDevice, stream_));
+    HIP_CHECK(hipMemcpyAsync(d_steqr_D_, d_alpha_dev_, niter * sizeof(double),
+                              hipMemcpyDeviceToDevice, stream_));
+    HIP_CHECK(hipMemcpyAsync(d_steqr_E_, d_beta_dev_, niter * sizeof(double),
+                              hipMemcpyDeviceToDevice, stream_));
     rocsolver_dsteqr(rocblas_h_, rocblas_evect_tridiagonal, niter,
-                     d_steqr_D_, d_steqr_E_, d_steqr_C_, niter,
-                     d_steqr_info_);
+                     d_steqr_D_, d_steqr_E_, d_steqr_C_, niter, d_steqr_info_);
     rocblas_int h_lapack_info;
     double energy;
-    HIP_CHECK(hipMemcpyAsync(&h_lapack_info, d_steqr_info_, sizeof(rocblas_int),
-                              hipMemcpyDeviceToHost, stream_));
-    HIP_CHECK(hipMemcpyAsync(&energy, d_steqr_D_, sizeof(double),
-                              hipMemcpyDeviceToHost, stream_));
-    HIP_CHECK(hipStreamSynchronize(stream_));
+    HIP_CHECK(hipMemcpy(&h_lapack_info, d_steqr_info_, sizeof(rocblas_int), hipMemcpyDeviceToHost));
+    HIP_CHECK(hipMemcpy(&energy, d_steqr_D_, sizeof(double), hipMemcpyDeviceToHost));
     if (h_lapack_info != 0) {
         throw std::runtime_error("rocsolver_dsteqr failed with info = " + std::to_string(h_lapack_info));
     }
@@ -1194,19 +1174,18 @@ double DMRG2GPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int t
                            d_steqr_C_, (hipDoubleComplex*)d_ritz_coeffs_, niter);
     }
 
-    Scalar one_sc = Traits::one(), zero_sc = Traits::zero();
-    ROCBLAS_CHECK(Traits::gemv(
-        rocblas_h_, rocblas_operation_none,
-        n, niter, &one_sc,
-        d_lanczos_v, n,
-        d_ritz_coeffs_, 1,
-        &zero_sc, d_theta, 1
-    ));
-
-    // Normalize
-    ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, &norm));
-    inv_norm = 1.0 / norm;
-    ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, &inv_norm, d_theta, 1));
+    {
+        PointerModeGuard pm_guard(rocblas_h_, rocblas_pointer_mode_device);
+        ROCBLAS_CHECK(Traits::gemv(rocblas_h_, rocblas_operation_none,
+            n, niter, d_const_one_,
+            d_lanczos_v, n,
+            d_ritz_coeffs_, 1,
+            d_const_zero_, d_theta, 1));
+        ROCBLAS_CHECK(Traits::nrm2(rocblas_h_, n, d_theta, 1, d_nrm2_result_));
+        hipLaunchKernelGGL(invert_nrm_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
+                           d_nrm2_result_, d_inv_nrm_);
+        ROCBLAS_CHECK(Traits::scal_real(rocblas_h_, n, d_inv_nrm_, d_theta, 1));
+    }
 
     t_lanczos_.end(stream_);
     return energy;
