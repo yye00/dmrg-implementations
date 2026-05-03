@@ -40,12 +40,13 @@ PDMRG_POLISH="${PDMRG_POLISH:-2}"   # MUST be <= 2, single-site enforced in code
 PDMRG_LOCAL="${PDMRG_LOCAL:-1}"     # local sweeps per outer iteration
 
 # ---- Repetition count for statistics ----
-# 1 = single timing per config (smoke / first-look)
-# 5 = paper-grade (median + IQR), recommended for --full
-REPEATS="${REPEATS:-5}"
+# 1  = smoke / first-look (no statistics)
+# 10 = journal-grade default (median + IQR with stable narrow tails)
+# Override at run time:  REPEATS=20 bash ... --full
+REPEATS="${REPEATS:-10}"
 
-# ---- The 9 in-charter variants under conformity audit -----
-VARIANTS=(
+# ---- Single-GPU variant set (default mode) -----
+SINGLE_GPU_VARIANTS=(
     dmrg-gpu-base
     dmrg-gpu
     dmrg-gpu-opt
@@ -55,26 +56,65 @@ VARIANTS=(
     pdmrg-gpu-base
     pdmrg-gpu
     pdmrg-gpu-opt
-    # pdmrg-multi-gpu  -- requires 4 visible MI300X devices; comment in if available
+)
+
+# ---- Multi-GPU variant set (separate mode, requires 4 visible MI300X) -----
+MULTI_GPU_VARIANTS=(
+    pdmrg-multi-gpu
 )
 
 # ---- Mode parsing -----
-MODE="${1:-}"
+# Two top-level mode axes:
+#   (1) what to build/run:  --single-gpu (default) | --multi-gpu
+#   (2) grid size:          --smoke | --full | --skip-smoke
+# Order doesn't matter; both are accepted in any position.
+TARGET="single-gpu"   # default
+RUN_SMOKE=0
+RUN_FULL=0
 SKIP_SMOKE="${SKIP_SMOKE:-0}"
-case "$MODE" in
-    --smoke) RUN_SMOKE=1; RUN_FULL=0 ;;
-    --full)  RUN_SMOKE=1; RUN_FULL=1 ;;  # full implies a smoke first
-    --skip-smoke) RUN_SMOKE=0; RUN_FULL=1; SKIP_SMOKE=1 ;;
-    "")      echo "Usage: $0 [--smoke|--full|--skip-smoke]"; exit 1 ;;
-    *)       echo "Unknown mode: $MODE"; exit 1 ;;
-esac
+for arg in "$@"; do
+    case "$arg" in
+        --single-gpu) TARGET="single-gpu" ;;
+        --multi-gpu)  TARGET="multi-gpu" ;;
+        --smoke)      RUN_SMOKE=1; RUN_FULL=0 ;;
+        --full)       RUN_SMOKE=1; RUN_FULL=1 ;;  # full implies a smoke first
+        --skip-smoke) RUN_SMOKE=0; RUN_FULL=1; SKIP_SMOKE=1 ;;
+        *)            echo "Unknown arg: $arg"; echo "Usage: $0 [--single-gpu|--multi-gpu] [--smoke|--full|--skip-smoke]"; exit 1 ;;
+    esac
+done
+if (( RUN_SMOKE == 0 && RUN_FULL == 0 )); then
+    echo "Usage: $0 [--single-gpu|--multi-gpu] [--smoke|--full|--skip-smoke]"
+    echo "  --smoke       ULTRA_TRIM grid (~30 min)"
+    echo "  --full        CHALLENGE_SIZES grid x REPEATS (~6-12 h single-gpu, longer multi)"
+    echo "  --skip-smoke  start --full without smoke (use only after a prior smoke pass)"
+    echo "  --single-gpu  build + run the 9 single-device variants (default)"
+    echo "  --multi-gpu   build + run pdmrg-multi-gpu only (requires 4 MI300X)"
+    exit 1
+fi
+
+# ---- Resolve variant set + harness --impl filter for the chosen target -----
+if [[ "$TARGET" == "multi-gpu" ]]; then
+    VARIANTS=("${MULTI_GPU_VARIANTS[@]}")
+    # Multi-gpu compares against its own scaling, not CPU. No quimb in this run.
+    IMPL_FILTER="--impl pdmrg-multi-gpu"
+    # Multi-gpu sanity: 4 visible devices
+    GPU_COUNT=$(rocm-smi --showid 2>/dev/null | grep -cE "^GPU\[[0-9]+\]" || echo 0)
+    if [[ "$GPU_COUNT" -lt 4 ]]; then
+        echo "FAIL: --multi-gpu requires 4 visible MI300X; saw $GPU_COUNT"
+        exit 1
+    fi
+else
+    VARIANTS=("${SINGLE_GPU_VARIANTS[@]}")
+    # Single-gpu run: include CPU baselines for the cross-arch comparison
+    IMPL_FILTER="--impl $(IFS=,; echo "${VARIANTS[*]}"),quimb-dmrg1,quimb-dmrg2"
+fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# ---- Date stamp / output dir -----
+# ---- Date stamp / output dir (target-tagged so single + multi runs don't collide) -----
 DATE_TAG="$(date -u +%Y%m%d-%H%M)"
-OUT_DIR="benchmarks/paper_results/mi300x/g1-${DATE_TAG}"
+OUT_DIR="benchmarks/paper_results/mi300x/g1-${TARGET}-${DATE_TAG}"
 mkdir -p "$OUT_DIR"
 LOG="$OUT_DIR/launcher.log"
 exec > >(tee -a "$LOG") 2>&1
@@ -86,9 +126,12 @@ echo "Repo:    $REPO_ROOT"
 echo "Out:     $OUT_DIR"
 echo "HEAD:    $(git rev-parse HEAD)"
 echo "Branch:  $(git rev-parse --abbrev-ref HEAD)"
+echo "Target:  $TARGET"
 echo "Mode:    smoke=$RUN_SMOKE full=$RUN_FULL skip_smoke=$SKIP_SMOKE"
+echo "Reps:    $REPEATS"
 echo "PDMRG:   warmup=$PDMRG_WARMUP polish=$PDMRG_POLISH local=$PDMRG_LOCAL"
 echo "Variants: ${VARIANTS[*]}"
+echo "Filter:  $IMPL_FILTER"
 echo "============================================================"
 
 # ---- 1. Environment verification -----
@@ -169,7 +212,9 @@ run_grid() {
     local extra_args="$*"
     echo
     echo "--- Grid: $label ---"
+    # IMPL_FILTER is unquoted so it expands to two args: --impl + comma-list
     python3 benchmarks/run_mi300x_challenge.py \
+        $IMPL_FILTER \
         --pdmrg-warmup "$PDMRG_WARMUP" \
         --pdmrg-polish "$PDMRG_POLISH" \
         --pdmrg-local  "$PDMRG_LOCAL" \
@@ -181,11 +226,17 @@ run_grid() {
 
 if (( RUN_SMOKE == 1 )); then
     echo
-    echo "==== SMOKE (ULTRA_TRIM grid, --trim, ~30 min) ===="
+    echo "==== SMOKE (ULTRA_TRIM grid, --trim, reps=1, ~30 min) ===="
+    # Smoke is for end-to-end validation, not statistics. Override REPEATS=1
+    # for the smoke pass; --full uses the user-set REPEATS for paper stats.
+    REPEATS_SAVED="$REPEATS"
+    REPEATS=1
     run_grid "smoke-${DATE_TAG}" "--trim" || {
+        REPEATS="$REPEATS_SAVED"
         echo "FAIL: smoke run errored — DO NOT proceed to --full"
         exit 5
     }
+    REPEATS="$REPEATS_SAVED"
     # Quick sanity: at least 50% of configs should have a recorded result
     # (correctness threshold left to the harness's own validation hooks)
     smoke_json=$(find "$OUT_DIR" -name "*smoke-${DATE_TAG}*.json" | head -1)
