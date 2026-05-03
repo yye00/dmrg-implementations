@@ -122,6 +122,13 @@ Three tiers exist for each algorithm family:
 - Distributes segments across 4 physical MI300X devices (not just 4 streams on one device).
 - Uses peer-to-peer memory and per-device rocBLAS handles.
 - Partial benchmark results (27/44 configs) in `benchmarks/paper_results/mi300x/challenge/pdmrg-multi-gpu_mi300x_challenge_20260407_partial.json` — VM died before completion.
+- **Round-17/19 fixes** (commits `12d02c5` + `cafd628`): `apply_heff_two_site`
+  *and* `apply_heff_single_site` Step 3 ported from per-`(s1p,s2p,n)` host loops
+  (D launches per Lanczos step) to the R3-F1 batched-collapse: one
+  `setup_batch_ptrs_*` kernel + one `gemm_batched(D·d²)` (two-site) or
+  `gemm_batched(D·d)` (single-site) + one `gemv` reduce against the per-device
+  `d_ones_D` vector. Single-site fix landed in R19 after R17 missed it; both are
+  the default warmup/polish path and fire every benchmark step.
 
 ### 2.3 CUDA ports (`gpu-cuda/`)
 
@@ -176,14 +183,21 @@ All of the above, and additionally:
 
 ### Hard-coded defaults (no CLI tuning knobs)
 
+PDMRG-rules-2026-04-15 lock: warmup and polish are SINGLE-SITE, $n \le 2$, and
+zero is a valid value. Defaults reflect this.
+
 | Parameter      | Value | Scope |
 |----------------|-------|-------|
-| `n_warmup`     | 3     | pdmrg-gpu-base (single-site warmup sweeps) |
-| `n_local`      | 2     | pdmrg-gpu-base (local sweeps per outer iter) |
+| `n_warmup`     | 1     | pdmrg-gpu-base (single-site, configurable via `run()`) |
+| `n_polish`     | 0     | pdmrg-gpu-base (single-site, caller MUST pass explicitly to enable) |
+| `n_local`      | 1     | pdmrg-gpu-base (local sweeps per outer iter) |
 | `n_segments`   | 2     | pdmrg-gpu-base (tests) |
-| `polish`       | 10    | pdmrg-gpu-base (two-site full-chain polish sweeps) |
 | SVD backend    | rocSOLVER gesvd + host trunc | all bases |
-| eigensolver    | Lanczos, CPU `dstev_` | all bases |
+| eigensolver    | Lanczos, host-pointer-mode + CPU `dstev_` | all bases |
+
+The `*-gpu` and `*-opt` tiers all support `--warmup N --polish N --local-sweeps N`
+on the CLI; benchmark scripts MUST pass them explicitly per CLAUDE.md (compiled-in
+defaults drift across rounds).
 
 CLI on all base binaries is just positional `L chi_max n_sweeps` plus problem
 selection `--josephson | --tfim`. `--nmax` is accepted-and-ignored for
@@ -730,6 +744,91 @@ cmake .. -DCMAKE_CUDA_ARCHITECTURES=90
 make -j
 ```
 - `--allow-unsupported-compiler` is set in CMakeLists for GCC 15.
+
+---
+
+## 7.5. Code Verification (Defect-Class Registry + Conformity Audit)
+
+Methodology shift introduced in round 16, stabilized through round 20.
+
+The two-stage gate that runs before any MI300X benchmark window:
+
+### Stage 1 — Defect-class registry (mechanical, every commit)
+
+`bash .claude/scripts/defect-registry.sh` greps and AWK-scans every in-charter
+variant for 14 known anti-patterns (D1–D15, with D6 collapsed into the
+shared-kernel framework). Examples:
+
+- **D1**: rocBLAS `set_pointer_mode` without `PointerModeGuard` RAII.
+- **D2/D3**: host `Scalar* h_X[N]` pointer-array stack on hot path.
+- **D5**: per-call host pointer-table build instead of device-side
+  `setup_batch_ptrs_*` kernels.
+- **D7/D8**: host `lapack_syev` / `lapack_gesvd` on hot path (excluding
+  workspace-size queries and explicit `use_cpu_svd_` opt-in branches).
+- **D9/D15**: PhaseTimer panel declared/initialized but never `.begin/.end`
+  called (dead instrumentation).
+- **D11**: `set_use_davidson` setter without ctor-time gate
+  (`opts_.lanczos_graph && use_davidson_`).
+- **D12**: Lanczos with host-stack `&alpha`/`&beta` per iteration instead of
+  `d_alpha_dev_` / `d_beta_dev_` + per-iter device kernels.
+- **D13**: `apply_heff` Step 3 wrapped in `for (int wp = 0; wp < D; wp++)` with
+  any rocBLAS `gemm`/`gemm_batched` inside (the per-wp loop pattern, widened in
+  R19 to also catch wrapped batched calls).
+- **D14**: Davidson overlap matrix gemm'd into `d_dav_work2` (clobbers
+  eigenvectors needed by the restart path), or `d_dav_work` undersized for the
+  `theta_max·b + max_sub·b` working set.
+
+A `--strict` flag exits non-zero on any hit. Run with no args for a human-
+readable report. The 9 in-charter `gpu-rocm/{dmrg,dmrg2,pdmrg}-gpu-{base,,opt}`
++ `pdmrg-multi-gpu` variants are scanned; `rlbfgs-gpu` and `radam-gpu` are
+out-of-charter and excluded.
+
+### Stage 2 — Conformity audit (structural, before major events)
+
+`/conformity-review-full` (skill in `.claude/commands/`) dispatches 6 sub-
+reviewers in parallel:
+
+- 3 vertical: `vertical-review-{dmrg,dmrg2,pdmrg}` — per-family completeness
+  across `-base`/`-gpu`/`-opt` tiers.
+- 3 horizontal: `horizontal-review-{base,gpu,opt}` — per-tier conformity
+  across the 3 algorithm families.
+
+Each sub-reviewer follows techniques A–G in `.claude/review-methodology.md`:
+A (charter scope), B (J1/J2 algorithm locks), C (struct integrity), D (build
+hygiene), E (ablation flags), F (workspace aliasing — buffer-sizing arithmetic
+for shared scratch), and G (sibling fix-propagation — verify every defect class
+fixed in the most recent commit cycle has been propagated to every sibling
+variant).
+
+Findings deduplicate across the 6 reviews; each is classified
+CRITICAL / HIGH / MEDIUM / NIT, then synthesized into a single
+`reviews/conformity-<date>-round<N>.md`. Verdict is READY / NOT READY based on
+CRITICAL count and whether HIGHs are on default code paths or opt-in toggles.
+
+### Audit history (reverse chronological)
+
+| Round | HEAD | Verdict | Key event |
+|-------|------|---------|-----------|
+| R20 | `5af1f68` | READY | Triangulated R19H19 fix; 0 new findings |
+| R19 | `f650466` | READY | **Caught H19** (multi-gpu single-site Step 3 missed by R17 H4); fixed in `cafd628`; widened D13 |
+| R18 | `bb809fb` | READY | First synthesized orchestrator after registry adoption |
+| R17 | `54f2fcf` | (CR-D1) | CR-D1 / D14 fix in pdmrg-gpu-opt (round-8 propagation gap, 9 rounds undetected) |
+| R16 | `8abb6e7` | NOT READY | Defect-class registry introduced after 16 reactive rounds |
+
+The dmrg2 family has been clean for 10 consecutive rounds — a sign of
+structural stability, not stopped looking.
+
+### When to run
+
+| Trigger | Action |
+|---------|--------|
+| Before commit | `bash .claude/scripts/defect-registry.sh` |
+| Before MI300X window | `/conformity-review-full` to a 0-finding fixed point |
+| After any new defect class is learned | Add a new `D<N>` to the registry in the same commit as the fix |
+
+The R19 lesson codified: when you find a NEW failure mode, widen the registry
+pattern in the SAME commit as the fix. The next round's pre-step then catches
+the class proactively without waiting for a sub-reviewer to re-discover it.
 
 ---
 

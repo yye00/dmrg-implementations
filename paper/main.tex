@@ -227,7 +227,9 @@ The application of $H_\text{eff}$ to a vector, the innermost operation of the La
 The pointer arrays for batched GEMMs are computed by lightweight GPU kernels (typically $< 64$ threads), avoiding host-to-device DMA that would otherwise introduce pipeline stalls \cite{ROCm2024}.
 
 The Lanczos eigensolver runs entirely on the GPU using device-pointer mode for all rocBLAS reductions (\texttt{dot}, \texttt{nrm2}), eliminating implicit stream synchronizations.
-Only the final tridiagonal eigensolve (a $k \times k$ problem with $k \approx 15$--$50$) is performed on the CPU via LAPACK \texttt{dstev}.
+The $\alpha$ and $\beta$ scalars produced by each iteration are also kept device-resident; per-iteration kernels (\texttt{lanczos\_process\_alpha\_kernel}, \texttt{lanczos\_process\_beta\_kernel}, \texttt{negate\_scalar\_kernel}, \texttt{invert\_nrm\_kernel}) consume them in place rather than copying back to the host stack — this rules out the ``small'' per-iteration host roundtrip whose accumulated cost is otherwise visible at the scale of one full sweep.
+The tridiagonal eigensolve, originally an LAPACK \texttt{dstev} call on the host, is performed entirely on device via \texttt{rocsolver\_dsteqr}; the host now sees only the final ground-state energy.
+The single-site Step~3 contraction in every \texttt{-gpu} variant — and, after the round-19 propagation fix, in \texttt{pdmrg-multi-gpu} as well — uses the R3-F1 ``full-batched collapse'': one device-side pointer-setup kernel followed by one \texttt{gemm\_batched} of size $D \cdot d$, then a single \texttt{gemv} reduction over $D$ against an on-device ones-vector, replacing what would otherwise be $D$ launches per Lanczos step.
 SVD path differs by variant family.
 The primary \texttt{-gpu} variants (\texttt{dmrg-gpu}, \texttt{dmrg2-gpu}, \texttt{pdmrg-gpu}) perform SVD on the GPU via \texttt{rocsolver\_gesvd\_auto}, with an optional randomized-SVD path (\texttt{opts\_.rsvd}); the interior SVD for \texttt{pdmrg-gpu} also uses GPU rocsolver, while the segment-boundary merge uses a CPU \texttt{accurate\_svd} for numerical stability.
 The \texttt{-opt} variants are heterogeneous in their SVD path: \texttt{dmrg-gpu-opt} and \texttt{dmrg2-gpu-opt} are the bundle of Block-Davidson eigensolver + host-side LAPACK SVD (\texttt{dgesvd} / \texttt{zgesvd}, QR-iteration based) discussed in Section~\ref{sec:opt_failure}; \texttt{pdmrg-gpu-opt} defaults to GPU rocsolver SVD like its baseline counterpart and exposes a \texttt{--cpu-svd} flag for opt-in host-side SVD (not benchmarked at the headline statistical level in this paper).
@@ -410,6 +412,20 @@ Correctness is validated against exact diagonalization energies for small system
 A total of 604 benchmark configurations were run for the main comparison (all implementations $\times$ all models $\times$ all sizes), plus 108 configurations for the GPU optimization scaling study.
 
 For CPU benchmarks, we report the single-threaded wall time (\texttt{OMP\_NUM\_THREADS=1}) for each configuration.
+
+\paragraph{Code verification gate.}
+Before each MI300X benchmark campaign, the GPU code base is held to a two-stage verification:
+\textbf{(i)} a 14-class \emph{defect-class registry} (\texttt{.claude/scripts/defect-registry.sh}) — a grep-and-AWK pass over all in-charter variants for known anti-patterns (host pointer-array stacks, host LAPACK on hot path, missing PhaseTimer instrumentation, Davidson workspace overruns, per-element host loops where a batched call exists, and so on);
+\textbf{(ii)} a 6-axis structural review (3 vertical per family $\times$ 3 horizontal per tier) that performs technique-G \emph{sibling fix-propagation}: for every defect class fixed in the most recent commit cycle, every sibling variant is re-checked.
+The registry catches the mechanical; the structural review catches the novel.
+The combined gate is run to a 0-finding fixed point before any GPU window is consumed; the audit history is preserved in \texttt{reviews/conformity-*.md}.
+This verification process is not part of the DMRG algorithm but is the engineering practice that keeps the comparison fair across rounds: a benchmark figure that drifts because a sibling variant silently regressed would be a worse outcome than a benchmark figure that confirms a known limitation.
+
+\paragraph{G1 baseline campaign.}
+The G1 campaign that produces this paper's primary GPU numbers is launched by a single shell script (\texttt{benchmarks/run\_g1\_baseline.sh}) that builds all in-charter variants from a clean tree, runs a smoke grid (\texttt{ULTRA\_TRIM}, 18 configurations, $\sim$30~min) before any long run, and then runs the full grid (\texttt{CHALLENGE\_SIZES}, 44 configurations $\times$ all in-charter variants $\times$ five repetitions for median + interquartile range).
+PDMRG variants are invoked with explicit \texttt{--warmup 2 --polish 2 --local-sweeps 1} flags per the project's PDMRG-rules-2026-04-15 lock (single-site warmup and polish; $n \le 2$; never relying on compiled-in defaults).
+Each rep records the HEAD commit SHA, the binary SHA-256, the rocm-smi pin/throttle state at start and end, the OpenBLAS provenance from \texttt{ldd}, and the per-phase wall times from the GPU-side PhaseTimer panels (\texttt{lanczos}, \texttt{davidson}, \texttt{apply\_heff}, \texttt{svd}, \texttt{absorb} where applicable, \texttt{env\_update}).
+A run is reported only if its smoke grid completed without a regression and the registry pre-step at the launch SHA reported zero hits.
 
 \subsection{Physics models}
 \label{sec:models}
