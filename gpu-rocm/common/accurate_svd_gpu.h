@@ -173,6 +173,33 @@ struct AsvdScratch {
     AsvdScratch(const AsvdScratch&) = delete;
     AsvdScratch& operator=(const AsvdScratch&) = delete;
 
+    // Movable: needed because StreamWorkspace embeds AsvdScratch by value and
+    // PDMRG variants hold std::vector<StreamWorkspace>, which requires
+    // move-construction on resize. The implicit move ctor was deleted by the
+    // explicit copy-delete + user-provided destructor combination
+    // (rule-of-five). Move semantics: take ownership of `other`'s pointers,
+    // null them out in `other` so its destructor sees nullptrs and is a no-op.
+    AsvdScratch(AsvdScratch&& other) noexcept { *this = std::move(other); }
+    AsvdScratch& operator=(AsvdScratch&& other) noexcept {
+        if (this != &other) {
+            release();
+            max_m = other.max_m; max_n = other.max_n; max_k = other.max_k;
+            for (int d = 0; d < MAX_DEPTH; d++) {
+                d_M_work[d] = other.d_M_work[d]; other.d_M_work[d] = nullptr;
+                d_U[d]      = other.d_U[d];      other.d_U[d]      = nullptr;
+                d_S[d]      = other.d_S[d];      other.d_S[d]      = nullptr;
+                d_Vh[d]     = other.d_Vh[d];     other.d_Vh[d]     = nullptr;
+                d_E[d]      = other.d_E[d];      other.d_E[d]      = nullptr;
+                d_info[d]   = other.d_info[d];   other.d_info[d]   = nullptr;
+                d_T[d]      = other.d_T[d];      other.d_T[d]      = nullptr;
+                d_X[d]      = other.d_X[d];      other.d_X[d]      = nullptr;
+                d_block[d]  = other.d_block[d];  other.d_block[d]  = nullptr;
+            }
+            other.max_m = other.max_n = other.max_k = 0;
+        }
+        return *this;
+    }
+
 private:
     static void HIP_CHECK_OR_THROW(hipError_t e) {
         if (e != hipSuccess) {
