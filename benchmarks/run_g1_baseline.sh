@@ -168,7 +168,9 @@ for v in "${VARIANTS[@]}"; do
     echo
     echo "--- Building $v ---"
     if [[ -x "gpu-rocm/$v/build_mi300x.sh" ]]; then
-        if ! bash "gpu-rocm/$v/build_mi300x.sh" > "$OUT_DIR/build-${v}.log" 2>&1; then
+        # Variant build scripts use `cmake ..` relative to their own dir, so
+        # subshell-cd into the variant first (subshell doesn't leak CWD back).
+        if ! ( cd "gpu-rocm/$v" && bash build_mi300x.sh ) > "$OUT_DIR/build-${v}.log" 2>&1; then
             echo "FAIL: $v build failed (see $OUT_DIR/build-${v}.log)"
             BUILD_FAIL+=("$v")
             continue
