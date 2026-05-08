@@ -1315,7 +1315,9 @@ double PDMRGMultiGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int
             hipLaunchKernelGGL(lanczos_check_beta, dim3(1), dim3(1), 0, dev.stream,
                                dev.d_beta_dev, ncheck, tol_lanczos, dev.d_steqr_info);
             rocblas_int h_beta_idx;
-            HIP_CHECK(hipMemcpy(&h_beta_idx, dev.d_steqr_info, sizeof(rocblas_int), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpyAsync(&h_beta_idx, dev.d_steqr_info, sizeof(rocblas_int),
+                                     hipMemcpyDeviceToHost, dev.stream));
+            HIP_CHECK(hipStreamSynchronize(dev.stream));
             if (h_beta_idx > 0) { iter = h_beta_idx; break; }
 
             HIP_CHECK(hipMemcpyAsync(dev.d_steqr_D, dev.d_alpha_dev, ncheck * sizeof(double), hipMemcpyDeviceToDevice, dev.stream));
@@ -1445,7 +1447,12 @@ void PDMRGMultiGPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction,
     if (gpu_svd_path) {
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, dev.stream,
                            dev.d_svd_S, k, 1e-14, dev.d_svd_info);
-        HIP_CHECK(hipMemcpy(&new_k, dev.d_svd_info, sizeof(int), hipMemcpyDeviceToHost));
+        // Round-10 H1-ext: dev.stream is nonblocking; default-stream hipMemcpy
+        // does NOT wait for dev.stream → race read of dev.d_svd_info. Use
+        // Async on dev.stream + explicit sync.
+        HIP_CHECK(hipMemcpyAsync(&new_k, dev.d_svd_info, sizeof(int),
+                                 hipMemcpyDeviceToHost, dev.stream));
+        HIP_CHECK(hipStreamSynchronize(dev.stream));
     } else {
         new_k = k;
         for (int i = 0; i < new_k; i++) {
@@ -1827,7 +1834,12 @@ void PDMRGMultiGPU<Scalar>::svd_split_single_site(int site, Scalar* d_theta, cha
     if (!use_cpu_svd_) {
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, dev.stream,
                            dev.d_svd_S, k, 1e-14, dev.d_svd_info);
-        HIP_CHECK(hipMemcpy(&new_k, dev.d_svd_info, sizeof(int), hipMemcpyDeviceToHost));
+        // Round-10 H1-ext: dev.stream is nonblocking; default-stream hipMemcpy
+        // does NOT wait for dev.stream → race read of dev.d_svd_info. Use
+        // Async on dev.stream + explicit sync.
+        HIP_CHECK(hipMemcpyAsync(&new_k, dev.d_svd_info, sizeof(int),
+                                 hipMemcpyDeviceToHost, dev.stream));
+        HIP_CHECK(hipStreamSynchronize(dev.stream));
     } else {
         h_S_data = dev.h_svd_S.data();
         new_k = k;

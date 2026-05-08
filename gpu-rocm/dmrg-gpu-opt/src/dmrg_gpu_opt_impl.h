@@ -1128,7 +1128,9 @@ double DMRGGPUOpt<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
             hipLaunchKernelGGL(lanczos_check_beta, dim3(1), dim3(1), 0, stream_,
                                d_beta_dev_, ncheck, tol_lanczos, d_steqr_info_);
             rocblas_int h_beta_idx;
-            HIP_CHECK(hipMemcpy(&h_beta_idx, d_steqr_info_, sizeof(rocblas_int), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpyAsync(&h_beta_idx, d_steqr_info_, sizeof(rocblas_int),
+                                     hipMemcpyDeviceToHost, stream_));
+            HIP_CHECK(hipStreamSynchronize(stream_));
             if (h_beta_idx > 0) { iter = h_beta_idx; break; }
             // Eigvals-only dsteqr on device-resident α/β.
             HIP_CHECK(hipMemcpyAsync(d_steqr_D_, d_alpha_dev_, ncheck * sizeof(double),

@@ -78,10 +78,6 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
         double exact_dim = pow((double)d_, std::min(i, L - i));
         bond_dims_[i] = (exact_dim > chi_max_) ? chi_max_ : (int)exact_dim;
     }
-    // [DEBUG-G1] dump bond_dims after init
-    std::fprintf(stderr, "[ctor-debug] L_=%d d_=%d chi_max_=%d D_mpo_=%d bond_dims=[", L_, d_, chi_max_, D_mpo_);
-    for (int i = 0; i <= L_; i++) std::fprintf(stderr, "%d%s", bond_dims_[i], i<L_?",":"");
-    std::fprintf(stderr, "]\n");
 
     // GPU handles (main + env stream for forward/backward-sweep pipelining)
     HIP_CHECK(hipStreamCreateWithFlags(&stream_, hipStreamNonBlocking));
@@ -796,8 +792,6 @@ void DMRGGPU<Scalar>::update_right_env(int site) {
     t_env_update_.begin(stream_env_);
     int chi_in = bond_dims_[site + 1];
     int chi_out = bond_dims_[site];
-    // [DEBUG-G1]
-    std::fprintf(stderr, "[update_right_env site=%d] chi_in=%d chi_out=%d\n", site, chi_in, chi_out);
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
 
@@ -910,8 +904,6 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     t_lanczos_.begin(stream_);
     int n = chi_L(site) * d_ * chi_R(site);
     int max_iter = std::min(max_lanczos_iter_, n);
-    std::fprintf(stderr, "[lanczos site=%d] cL=%d cR=%d d=%d n=%d max_iter=%d max_lanczos_iter=%d\n",
-                 site, chi_L(site), chi_R(site), d_, n, max_iter, max_lanczos_iter_);
     double tol_lanczos = 1e-12;
     double tol_eig_conv = 1e-12;
 
@@ -1038,7 +1030,9 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
             hipLaunchKernelGGL(lanczos_check_beta, dim3(1), dim3(1), 0, stream_,
                                d_beta_dev_, ncheck, tol_lanczos, d_steqr_info_);
             rocblas_int h_beta_idx;
-            HIP_CHECK(hipMemcpy(&h_beta_idx, d_steqr_info_, sizeof(rocblas_int), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpyAsync(&h_beta_idx, d_steqr_info_, sizeof(rocblas_int),
+                                     hipMemcpyDeviceToHost, stream_));
+            HIP_CHECK(hipStreamSynchronize(stream_));
             if (h_beta_idx > 0) { iter = h_beta_idx; break; }
             // Copy alpha/beta to scratch buffers on device (steqr overwrites them)
             HIP_CHECK(hipMemcpyAsync(d_steqr_D_, d_alpha_dev_, ncheck * sizeof(double), hipMemcpyDeviceToDevice, stream_));
@@ -1252,7 +1246,12 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
     } else {
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
                            d_svd_S_, k_target, 1e-14, d_svd_info_);
-        HIP_CHECK(hipMemcpy(&new_k, d_svd_info_, sizeof(int), hipMemcpyDeviceToHost));
+        // Round-10 H1-ext: streams are nonblocking; default-stream hipMemcpy
+        // does NOT wait for stream_ → race read of d_svd_info_. Use Async on
+        // stream_ + explicit sync (mirrors dmrg-gpu-opt impl :1358-1362).
+        HIP_CHECK(hipMemcpyAsync(&new_k, d_svd_info_, sizeof(int),
+                                 hipMemcpyDeviceToHost, stream_));
+        HIP_CHECK(hipStreamSynchronize(stream_));
     }
 
     int threads = 256;
@@ -1345,8 +1344,6 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
                                      prev_cL * d_ * new_k * sizeof(Scalar),
                                      hipMemcpyDeviceToDevice, stream_));
         }
-        std::fprintf(stderr, "[svd-L site=%d] m=%d n_svd=%d full_k=%d k=%d new_k=%d new_chi_L=%d\n",
-                     site, m, n_svd, full_k, k, new_k, new_chi_L);
         bond_dims_[site] = new_chi_L;
         t_absorb_.end(stream_);
     }

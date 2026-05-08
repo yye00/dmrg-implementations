@@ -341,6 +341,44 @@ for variant in "${VARIANTS[@]}"; do
     done
 done
 
+# ----- D17: sync-less hipMemcpy after kernel-on-nonblocking-stream -----
+# Round-G1 lesson: dmrg-gpu / dmrg2-gpu / pdmrg-multi-gpu launched
+# svd_truncate_kernel on stream_ (or dev.stream) with hipStreamNonBlocking,
+# then immediately did hipMemcpy on the default stream — the memcpy did NOT
+# wait for the kernel, reading stale d_svd_info_ values (e.g. new_k=4 when
+# max_k=2). Caused 100% failure of dmrg-gpu on first GPU run, undetected by
+# 20 rounds of static review. -opt variants and pdmrg-gpu had the fix
+# (Async on stream + explicit sync). Heuristic: any hipLaunchKernelGGL with
+# explicit non-default stream followed within 3 lines by a sync-less
+# hipMemcpy that reads from a kernel-output device pointer.
+echo
+echo "===================================================================="
+echo "DEFECT CLASS: D17 — sync-less hipMemcpy after kernel-on-nonblocking-stream"
+echo "===================================================================="
+for variant in "${VARIANTS[@]}"; do
+    [[ ! -d "$variant/src" ]] && continue
+    hits=$(awk '
+        /hipLaunchKernelGGL\(/ {
+            kline=NR; kernel_line=$0
+            # Capture next 3 lines for the call args + the following stmt
+            getline a1; getline a2; getline a3
+            full = kernel_line " " a1 " " a2 " " a3
+            # Only flag if launched on a non-default stream
+            if (full !~ /, (stream_|dev\.stream|streams_\[)/) next
+            # Look at the line right after for hipMemcpy (sync) without stream arg
+            if (a3 ~ /hipMemcpy\(.*hipMemcpyDeviceToHost\)/ && a3 !~ /hipMemcpyAsync/) {
+                print FILENAME":"kline": kernel on non-default stream followed by sync-less hipMemcpy"
+            } else if (a2 ~ /hipMemcpy\(.*hipMemcpyDeviceToHost\)/ && a2 !~ /hipMemcpyAsync/) {
+                print FILENAME":"kline": kernel on non-default stream followed by sync-less hipMemcpy"
+            }
+        }
+    ' "$variant"/src/*_impl.h 2>/dev/null || true)
+    if [[ -n "$hits" ]]; then
+        echo "$hits"
+        TOTAL_HITS=$((TOTAL_HITS + $(printf '%s\n' "$hits" | wc -l)))
+    fi
+done
+
 # ----- Summary -----
 echo
 echo "===================================================================="

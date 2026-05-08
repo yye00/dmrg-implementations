@@ -1082,7 +1082,9 @@ double DMRG2GPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta, int thet
             hipLaunchKernelGGL(lanczos_check_beta, dim3(1), dim3(1), 0, stream_,
                                d_beta_dev_, ncheck, tol_lanczos, d_steqr_info_);
             rocblas_int h_beta_idx;
-            HIP_CHECK(hipMemcpy(&h_beta_idx, d_steqr_info_, sizeof(rocblas_int), hipMemcpyDeviceToHost));
+            HIP_CHECK(hipMemcpyAsync(&h_beta_idx, d_steqr_info_, sizeof(rocblas_int),
+                                     hipMemcpyDeviceToHost, stream_));
+            HIP_CHECK(hipStreamSynchronize(stream_));
             if (h_beta_idx > 0) { iter = h_beta_idx; break; }
 
             HIP_CHECK(hipMemcpyAsync(d_steqr_D_, d_alpha_dev_, ncheck * sizeof(double), hipMemcpyDeviceToDevice, stream_));
@@ -1272,7 +1274,12 @@ void DMRG2GPU<Scalar>::svd_split(int site, Scalar* d_theta, char direction) {
     } else {
         hipLaunchKernelGGL(svd_truncate_kernel<RealType>, dim3(1), dim3(1), 0, stream_,
                            d_svd_S_, k_target, 1e-14, d_svd_info_);
-        HIP_CHECK(hipMemcpy(&new_k, d_svd_info_, sizeof(int), hipMemcpyDeviceToHost));
+        // Round-10 H1-ext: streams are nonblocking; default-stream hipMemcpy
+        // does NOT wait for stream_ → race read of d_svd_info_. Use Async on
+        // stream_ + explicit sync (mirrors dmrg2-gpu-opt fix pattern).
+        HIP_CHECK(hipMemcpyAsync(&new_k, d_svd_info_, sizeof(int),
+                                 hipMemcpyDeviceToHost, stream_));
+        HIP_CHECK(hipStreamSynchronize(stream_));
     }
 
     int threads = 256;
