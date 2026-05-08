@@ -298,6 +298,49 @@ for variant in "${VARIANTS[@]}"; do
     done <<< "$declared"
 done
 
+# ----- D16: type used but defining header not included -----
+# R20→G1 lesson: PointerModeGuard was referenced in dmrg-gpu-opt /
+# dmrg2-gpu-opt / pdmrg-gpu-opt _impl.h but the defining header
+# common/pointer_mode_guard.h was not #included → 5 errors in 153 warnings,
+# undetected by 20 rounds of static review because no one compiled.
+# Heuristic: for each "well-known" type from a common/ header, check that
+# every variant impl that references the type also #includes its header.
+echo
+echo "===================================================================="
+echo "DEFECT CLASS: D16 — type used but defining common/ header not included"
+echo "===================================================================="
+declare -A D16_TYPE_HEADER=(
+    ["PointerModeGuard"]="common/pointer_mode_guard.h"
+    ["setup_batch_ptrs_step3_twosite_full"]="common/batch_ptrs_kernels.h"
+    ["setup_batch_ptrs_step3"]="common/batch_ptrs_kernels.h"
+    ["setup_batch_ptrs_wd"]="common/batch_ptrs_kernels.h"
+    ["HIP_CHECK"]="common/hip_check.h"
+    ["ROCBLAS_CHECK"]="common/hip_check.h"
+)
+for variant in "${VARIANTS[@]}"; do
+    [[ ! -d "$variant/src" ]] && continue
+    for type_name in "${!D16_TYPE_HEADER[@]}"; do
+        header="${D16_TYPE_HEADER[$type_name]}"
+        # Find all *.h / *_impl.h that USE the type
+        users=$(grep -lE "\b$type_name\b" "$variant"/src/*.h 2>/dev/null || true)
+        [[ -z "$users" ]] && continue
+        for f in $users; do
+            # Skip the defining header itself
+            [[ "$f" == */"${header##*/}" ]] && continue
+            # Check if it (or a sibling header it includes) pulls the defining header
+            if ! grep -qE "$header" "$f" 2>/dev/null; then
+                # Also check the sibling .h file in the same dir
+                sib_dir="$(dirname "$f")"
+                sib_inc=$(grep -hE "$header" "$sib_dir"/*.h 2>/dev/null | head -1)
+                if [[ -z "$sib_inc" ]]; then
+                    echo "  $f: uses $type_name but no #include of $header (in this file or siblings)"
+                    TOTAL_HITS=$((TOTAL_HITS + 1))
+                fi
+            fi
+        done
+    done
+done
+
 # ----- Summary -----
 echo
 echo "===================================================================="

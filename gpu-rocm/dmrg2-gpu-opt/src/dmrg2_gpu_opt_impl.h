@@ -10,6 +10,7 @@
 
 
 #include "../../common/hip_check.h"
+#include "../../common/pointer_mode_guard.h"
 #include "../../common/batch_ptrs_kernels.h"
 
 // Fused Lanczos update:  w := w + (-α)*v_i + [(-β_{im1})*v_{im1}]
