@@ -40,10 +40,17 @@ PDMRG_POLISH="${PDMRG_POLISH:-2}"   # MUST be <= 2, single-site enforced in code
 PDMRG_LOCAL="${PDMRG_LOCAL:-1}"     # local sweeps per outer iteration
 
 # ---- Repetition count for statistics ----
-# 1  = smoke / first-look (no statistics)
-# 10 = journal-grade default (median + IQR with stable narrow tails)
+# 10 reps = journal-grade default (median + IQR with stable narrow tails).
 # Override at run time:  REPEATS=20 bash ... --full
 REPEATS="${REPEATS:-10}"
+
+# ---- Per-rep wall-clock cap (passed to harness via --per-rep-timeout) ----
+# 3600 s (1 hour) per rep — guards against hung GPU runs (driver lockup,
+# pathological convergence). Healthy GPU runs in CHALLENGE_SIZES finish
+# well under this. Smoke uses a tighter cap so it fails fast.
+# CPU benchmarks run on a separate CPU host, NOT here.
+RUN_TIMEOUT="${RUN_TIMEOUT:-3600}"
+SMOKE_TIMEOUT="${SMOKE_TIMEOUT:-300}"
 
 # ---- Single-GPU variant set (default mode) -----
 SINGLE_GPU_VARIANTS=(
@@ -105,8 +112,9 @@ if [[ "$TARGET" == "multi-gpu" ]]; then
     fi
 else
     VARIANTS=("${SINGLE_GPU_VARIANTS[@]}")
-    # Single-gpu run: include CPU baselines for the cross-arch comparison
-    IMPL_FILTER="--impl $(IFS=,; echo "${VARIANTS[*]}"),quimb-dmrg1,quimb-dmrg2"
+    # GPU machine = GPU only. CPU baselines (quimb) run on a separate CPU host
+    # via a different launcher; never on the $$$/hour MI300X.
+    IMPL_FILTER="--impl $(IFS=,; echo "${VARIANTS[*]}")"
 fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
