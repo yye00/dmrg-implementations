@@ -78,6 +78,10 @@ DMRGGPU<Scalar>::DMRGGPU(int L, int d, int chi_max, int D_mpo, double tol)
         double exact_dim = pow((double)d_, std::min(i, L - i));
         bond_dims_[i] = (exact_dim > chi_max_) ? chi_max_ : (int)exact_dim;
     }
+    // [DEBUG-G1] dump bond_dims after init
+    std::fprintf(stderr, "[ctor-debug] L_=%d d_=%d chi_max_=%d D_mpo_=%d bond_dims=[", L_, d_, chi_max_, D_mpo_);
+    for (int i = 0; i <= L_; i++) std::fprintf(stderr, "%d%s", bond_dims_[i], i<L_?",":"");
+    std::fprintf(stderr, "]\n");
 
     // GPU handles (main + env stream for forward/backward-sweep pipelining)
     HIP_CHECK(hipStreamCreateWithFlags(&stream_, hipStreamNonBlocking));
@@ -792,6 +796,8 @@ void DMRGGPU<Scalar>::update_right_env(int site) {
     t_env_update_.begin(stream_env_);
     int chi_in = bond_dims_[site + 1];
     int chi_out = bond_dims_[site];
+    // [DEBUG-G1]
+    std::fprintf(stderr, "[update_right_env site=%d] chi_in=%d chi_out=%d\n", site, chi_in, chi_out);
     int D = D_mpo_, d = d_;
     Scalar one = Traits::one(), zero_val = Traits::zero();
 
