@@ -1345,6 +1345,8 @@ void DMRGGPU<Scalar>::svd_and_update_mps(int site, Scalar* d_theta, char directi
                                      prev_cL * d_ * new_k * sizeof(Scalar),
                                      hipMemcpyDeviceToDevice, stream_));
         }
+        std::fprintf(stderr, "[svd-L site=%d] m=%d n_svd=%d full_k=%d k=%d new_k=%d new_chi_L=%d\n",
+                     site, m, n_svd, full_k, k, new_k, new_chi_L);
         bond_dims_[site] = new_chi_L;
         t_absorb_.end(stream_);
     }
