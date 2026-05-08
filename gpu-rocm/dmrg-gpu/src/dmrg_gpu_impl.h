@@ -910,6 +910,8 @@ double DMRGGPU<Scalar>::lanczos_eigensolver(int site, Scalar* d_theta) {
     t_lanczos_.begin(stream_);
     int n = chi_L(site) * d_ * chi_R(site);
     int max_iter = std::min(max_lanczos_iter_, n);
+    std::fprintf(stderr, "[lanczos site=%d] cL=%d cR=%d d=%d n=%d max_iter=%d max_lanczos_iter=%d\n",
+                 site, chi_L(site), chi_R(site), d_, n, max_iter, max_lanczos_iter_);
     double tol_lanczos = 1e-12;
     double tol_eig_conv = 1e-12;
 
