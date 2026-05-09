@@ -99,17 +99,25 @@ if [[ ! -f "$OPENBLAS_PATH/lib/libopenblas.so" ]]; then
     cd "$REPO"
 fi
 
-# 1d. Git push auth (do a probe commit/push)
+# 1d. Git push auth (do a probe commit/push) — SOFT failure: results
+#     accumulate locally even if push doesn't work; the backup loop will
+#     keep retrying every 30s and pick up auth the moment it's configured.
 git config user.email "hotaisle-mi300x@local" 2>/dev/null
 git config user.name  "Hot Aisle MI300X"      2>/dev/null
 mkdir -p reports/.heartbeat
 echo "$(date -Iseconds) bootstrap-probe hostname=$(hostname)" > reports/.heartbeat/probe.txt
 git add reports/.heartbeat/probe.txt
-if git commit -m "data: bootstrap probe $(date -u +%Y-%m-%dT%H:%M:%SZ)" --quiet \
-   && git push --quiet origin main; then
-    log "git push auth verified"
-else
-    log "FAIL: git push auth (commits won't reach GitHub)"; exit 6
+PUSH_OK=0
+if git commit -m "data: bootstrap probe $(date -u +%Y-%m-%dT%H:%M:%SZ)" --quiet 2>>"$LOG"; then
+    if git push --quiet origin main 2>>"$LOG"; then
+        log "git push auth verified"
+        PUSH_OK=1
+    fi
+fi
+if [[ "$PUSH_OK" -ne 1 ]]; then
+    log "WARN: git push auth not configured. Results will accumulate locally."
+    log "WARN: To enable backup, set credentials and the backup loop will catch up."
+    log "WARN: e.g.: git config credential.helper store && (echo URL with token) > ~/.git-credentials"
 fi
 
 # 1e. Disk space
