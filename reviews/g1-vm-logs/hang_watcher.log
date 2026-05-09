@@ -1,1 +1,6 @@
 2026-05-09T13:14:57+00:00 watchdog start threshold=120s gpu<10%
+2026-05-09T15:46:18+00:00 KILL pid=103866 elapsed=127s gpu=0%: /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt 50 128 20 
+2026-05-09T15:59:40+00:00 KILL pid=105145 elapsed=126s gpu=0%: /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt 16 128 20 --josephson --nmax 2 
+2026-05-09T16:02:00+00:00 KILL pid=105341 elapsed=137s gpu=0%: /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt 16 256 15 --josephson --nmax 2 
+2026-05-09T16:04:21+00:00 KILL pid=105598 elapsed=132s gpu=0%: /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt 32 128 20 --josephson --nmax 2 
+2026-05-09T16:06:41+00:00 KILL pid=105797 elapsed=137s gpu=0%: /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt 32 256 15 --josephson --nmax 2 

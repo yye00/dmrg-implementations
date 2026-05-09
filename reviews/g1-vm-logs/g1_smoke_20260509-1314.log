@@ -310,3 +310,63 @@ OK: pdmrg-gpu-opt -> gpu-rocm/pdmrg-gpu-opt/build/pdmrg_gpu_opt
   [ 87/162] L= 50 chi=256 sw=15      
         rep 1/1: t=29.021s  E=-63.3011891554
   [ 88/162] L=100 chi= 64 sw=20      
+        rep 1/1: t=17.270s  E=-126.9618767397
+  [ 89/162] L=100 chi=128 sw=20      
+        rep 1/1: t=42.044s  E=-126.9618767398
+  [ 90/162] L=100 chi=256 sw=15      
+        rep 1/1: t=103.309s  E=-126.9618767397
+
+=================================================================
+  dmrg2-gpu-opt — heisenberg
+=================================================================
+  [ 91/162] L= 50 chi= 64 sw=20      
+        rep 1/1: t=118.237s  E=-0.7990866926
+  [ 92/162] L= 50 chi=128 sw=20      
+        rep 1/1: FAIL == GPU options ==
+  device_k       : off
+  lanczos_graph  : 
+  [ 93/162] L= 50 chi=256 sw=15      
+        rep 1/1: t=11.210s  E=-0.0000000000
+  [ 94/162] L=100 chi= 64 sw=20      
+        rep 1/1: t=239.730s  E=-0.0005368239
+  [ 95/162] L=100 chi=128 sw=20      
+        rep 1/1: t=388.248s  E=-0.0001028890
+  [ 96/162] L=100 chi=256 sw=15      
+        rep 1/1: t=22.437s  E=-0.0000000000
+
+=================================================================
+  dmrg2-gpu-opt — josephson
+=================================================================
+  [ 97/162] L= 16 chi= 64 sw=20      
+        rep 1/1: FAIL == GPU options ==
+  device_k       : off
+  lanczos_graph  : 
+  [ 98/162] L= 16 chi=128 sw=20      
+        rep 1/1: FAIL == GPU options ==
+  device_k       : off
+  lanczos_graph  : 
+  [ 99/162] L= 16 chi=256 sw=15      
+        rep 1/1: FAIL == GPU options ==
+  device_k       : off
+  lanczos_graph  : 
+  [100/162] L= 32 chi= 64 sw=20      
+        rep 1/1: FAIL == GPU options ==
+  device_k       : off
+  lanczos_graph  : 
+  [101/162] L= 32 chi=128 sw=20      
+        rep 1/1: FAIL == GPU options ==
+  device_k       : off
+  lanczos_graph  : 
+  [102/162] L= 32 chi=256 sw=15      
+        rep 1/1: FAIL == GPU options ==
+  device_k       : off
+  lanczos_graph  : 
+
+=================================================================
+  dmrg2-gpu-opt — tfim
+=================================================================
+  [103/162] L= 50 chi= 64 sw=20      
+        rep 1/1: t=19.550s  E=-63.3011891554
+  [104/162] L= 50 chi=128 sw=20      
+        rep 1/1: t=136.992s  E=-63.3011891327
+  [105/162] L= 50 chi=256 sw=15      

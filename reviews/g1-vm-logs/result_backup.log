@@ -869,3 +869,313 @@ hint: Use -f if you really want to add them.
 hint: Turn this message off by running
 hint: "git config advice.addIgnoredFile false"
 2026-05-09T15:39:12+00:00 PUSH: data: auto-backup 2026-05-09T15:39:11Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T15:39:43+00:00 PUSH: data: auto-backup 2026-05-09T15:39:42Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T15:40:45+00:00 PUSH: data: auto-backup 2026-05-09T15:40:44Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T15:42:16+00:00 PUSH: data: auto-backup 2026-05-09T15:42:15Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T15:44:18+00:00 PUSH: data: auto-backup 2026-05-09T15:44:17Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T15:46:20+00:00 PUSH: data: auto-backup 2026-05-09T15:46:19Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T15:46:51+00:00 PUSH: data: auto-backup 2026-05-09T15:46:50Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T15:50:54+00:00 PUSH: data: auto-backup 2026-05-09T15:50:53Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T15:57:28+00:00 PUSH: data: auto-backup 2026-05-09T15:57:27Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T15:57:59+00:00 PUSH: data: auto-backup 2026-05-09T15:57:58Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T16:00:01+00:00 PUSH: data: auto-backup 2026-05-09T15:59:59Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T16:02:03+00:00 PUSH: data: auto-backup 2026-05-09T16:02:01Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T16:02:34+00:00 PUSH: data: auto-backup 2026-05-09T16:02:33Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T16:04:36+00:00 PUSH: data: auto-backup 2026-05-09T16:04:35Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+2026-05-09T16:07:08+00:00 PUSH: data: auto-backup 2026-05-09T16:07:07Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
