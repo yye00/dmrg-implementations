@@ -31,3 +31,12 @@ fatal: could not read Username for 'https://github.com': No such device or addre
 2026-05-09T13:14:59+00:00 [bootstrap] [5/9] Running smoke (max 4h, single-gpu)
 2026-05-09T13:14:59+00:00 [bootstrap] Smoke PID=82006 log=g1_smoke_20260509-1314.log
 2026-05-09T13:14:59+00:00 [bootstrap] Smoke PID=82006 log=g1_smoke_20260509-1314.log
+2026-05-09T17:15:00+00:00 [bootstrap] Smoke exceeded 4h — killing and proceeding to --full anyway
+2026-05-09T17:15:00+00:00 [bootstrap] Smoke exceeded 4h — killing and proceeding to --full anyway
+2026-05-09T17:15:00+00:00 [bootstrap] [6/9] Smoke gate
+2026-05-09T17:15:00+00:00 [bootstrap] [6/9] Smoke gate
+benchmarks/g1-bootstrap.sh: line 51: 82006 Killed                  ( bash benchmarks/run_g1_baseline.sh --$TARGET --smoke > "$SMOKE_LOG" 2>&1 )
+2026-05-09T17:15:00+00:00 [bootstrap] Smoke: 153/161 = 95% pass, 8 FAIL
+2026-05-09T17:15:00+00:00 [bootstrap] Smoke: 153/161 = 95% pass, 8 FAIL
+2026-05-09T17:15:00+00:00 [bootstrap] Smoke clean (95%). Exiting — invoke /g1-poll or /g1-launch-full to chain
+2026-05-09T17:15:00+00:00 [bootstrap] Smoke clean (95%). Exiting — invoke /g1-poll or /g1-launch-full to chain
