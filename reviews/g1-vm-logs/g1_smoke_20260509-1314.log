@@ -522,3 +522,19 @@ OK: pdmrg-gpu-opt -> gpu-rocm/pdmrg-gpu-opt/build/pdmrg_gpu_opt
   [161/162] L=100 chi=128 sw=20      
         rep 1/1: t=107.143s  E=-126.9618226053
   [162/162] L=100 chi=256 sw=15      
+        rep 1/1: t=493.177s  E=-126.9618474892
+
+=================================================================
+  Final per-impl files:
+    dmrg-gpu-base: benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg-gpu-base_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+    dmrg-gpu: benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg-gpu_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+    dmrg-gpu-opt: benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg-gpu-opt_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+    dmrg2-gpu-base: benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg2-gpu-base_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+    dmrg2-gpu: benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg2-gpu_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+    dmrg2-gpu-opt: benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg2-gpu-opt_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+    pdmrg-gpu-base: benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/pdmrg-gpu-base_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+    pdmrg-gpu: benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/pdmrg-gpu_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+    pdmrg-gpu-opt: benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/pdmrg-gpu-opt_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+=================================================================
+
+  Done: 162 configs, 154 passed, 8 failed

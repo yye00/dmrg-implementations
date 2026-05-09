@@ -1,0 +1,110 @@
+VARIANT_SKIP active: removed [dmrg2-gpu-opt], running [dmrg-gpu-base dmrg-gpu dmrg-gpu-opt dmrg2-gpu-base dmrg2-gpu pdmrg-gpu-base pdmrg-gpu pdmrg-gpu-opt]
+============================================================
+ G1 baseline launcher — 2026-05-09T17:18:00Z
+============================================================
+Repo:    /home/hotaisle/dmrg-implementations
+Out:     benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1718
+HEAD:    c97b673cc545200640391402d1b3f60677e5d594
+Branch:  main
+Target:  single-gpu
+Mode:    smoke=0 full=1 skip_smoke=1
+Reps:    10
+PDMRG:   warmup=2 polish=2 local=1
+Variants: dmrg-gpu-base dmrg-gpu dmrg-gpu-opt dmrg2-gpu-base dmrg2-gpu pdmrg-gpu-base pdmrg-gpu pdmrg-gpu-opt
+Filter:  --impl dmrg-gpu-base,dmrg-gpu,dmrg-gpu-opt,dmrg2-gpu-base,dmrg2-gpu,pdmrg-gpu-base,pdmrg-gpu,pdmrg-gpu-opt
+============================================================
+
+[1/4] Environment verification
+------------------------------
+hipcc: HIP version: 7.2.26015-fc0010cf6a
+ROCm: 7.2.0
+WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status
+GPU[0]		: Card Series: 		AMD Instinct MI300X VF
+GPU[0]		: Card Model: 		0x74b5
+GPU[0]		: Card Vendor: 		Advanced Micro Devices, Inc. [AMD/ATI]
+
+[2/4] Defect-class registry pre-flight
+--------------------------------------
+Registry: TOTAL HITS = 0
+
+[3/4] Building 8 GPU variants
+--------------------------------------
+
+--- Building dmrg-gpu-base ---
+OK: dmrg-gpu-base -> gpu-rocm/dmrg-gpu-base/build/dmrg_gpu_base
+
+--- Building dmrg-gpu ---
+OK: dmrg-gpu -> gpu-rocm/dmrg-gpu/build/dmrg_gpu
+
+--- Building dmrg-gpu-opt ---
+OK: dmrg-gpu-opt -> gpu-rocm/dmrg-gpu-opt/build/dmrg_gpu_opt
+
+--- Building dmrg2-gpu-base ---
+OK: dmrg2-gpu-base -> gpu-rocm/dmrg2-gpu-base/build/dmrg2_gpu_base
+
+--- Building dmrg2-gpu ---
+OK: dmrg2-gpu -> gpu-rocm/dmrg2-gpu/build/dmrg2_gpu
+
+--- Building pdmrg-gpu-base ---
+OK: pdmrg-gpu-base -> gpu-rocm/pdmrg-gpu-base/build/pdmrg_gpu_base
+
+--- Building pdmrg-gpu ---
+OK: pdmrg-gpu -> gpu-rocm/pdmrg-gpu/build/pdmrg_gpu
+
+--- Building pdmrg-gpu-opt ---
+OK: pdmrg-gpu-opt -> gpu-rocm/pdmrg-gpu-opt/build/pdmrg_gpu_opt
+
+[4/4] Running benchmarks
+------------------------
+
+==== FULL G1 BASELINE (CHALLENGE_SIZES, ~6-12 h) ====
+
+--- Grid: full-20260509-1718 ---
+
+#################################################################
+  MI300X Challenge Benchmarks
+  Grid:             CHALLENGE (44 configs)
+  Implementations:  dmrg-gpu-base, dmrg-gpu, dmrg-gpu-opt, dmrg2-gpu-base, dmrg2-gpu, pdmrg-gpu-base, pdmrg-gpu, pdmrg-gpu-opt
+  Models:           heisenberg, josephson, tfim
+  Configs:          352  (× 10 repeats)
+  GPU warmup:       ON
+  PDMRG overrides:  warmup=2, polish=2, local=1, recal=None
+  Timestamp:        20260509_171851_full-20260509-1718
+  Output:           benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1718
+#################################################################
+  Git commit:       dcfe6ca1def4 (main)
+CHI_SKIP active: removed chi in [512]
+
+=================================================================
+  dmrg-gpu-base — heisenberg
+=================================================================
+  [  1/296] L= 50 chi= 64 sw=20      
+        rep 1/10: t=36.210s  E=-17.1844680183
+        rep 2/10: t=44.469s  E=-19.0212274428
+        rep 3/10: t=39.665s  E=-19.2308838104
+        rep 4/10: t=39.775s  E=-18.4652162075
+        rep 5/10: t=35.050s  E=-17.6933740817
+        rep 6/10: t=28.854s  E=-18.1236814835
+        rep 7/10: t=31.946s  E=-19.2226886093
+        rep 8/10: t=96.578s  E=-20.6440972260
+        rep 9/10: t=31.651s  E=-19.2516060995
+        rep 10/10: t=29.825s  E=-18.6822139407
+  [  2/296] L= 50 chi=128 sw=20      
+        rep 1/10: t=48.400s  E=-19.7959071055
+        rep 2/10: t=40.863s  E=-17.9197246340
+        rep 3/10: t=48.027s  E=-19.8210951470
+        rep 4/10: t=49.116s  E=-20.1515262314
+        rep 5/10: t=39.882s  E=-18.6197527062
+        rep 6/10: t=51.209s  E=-19.7461127383
+        rep 7/10: t=38.572s  E=-19.3745636787
+        rep 8/10: t=49.157s  E=-19.9499300194
+        rep 9/10: t=41.512s  E=-19.1800516080
+        rep 10/10: t=49.118s  E=-19.8748810937
+  [  3/296] L= 50 chi=256 sw=15      
+        rep 1/10: t=44.074s  E=-20.0067673168
+        rep 2/10: t=45.417s  E=-20.3758784079
+        rep 3/10: t=44.681s  E=-20.1919857260
+        rep 4/10: t=40.517s  E=-19.3060764374
+        rep 5/10: t=46.849s  E=-20.2990339874
+        rep 6/10: t=39.658s  E=-19.3036377970
+        rep 7/10: t=43.599s  E=-20.0076016891
