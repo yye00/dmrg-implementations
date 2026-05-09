@@ -583,6 +583,37 @@
         "2"
       ],
       "nmax": 2
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "josephson",
+      "L": 32,
+      "chi": 64,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": false,
+      "time": null,
+      "time_median": null,
+      "time_min": null,
+      "times": [],
+      "energy": null,
+      "energies": [],
+      "repeats": 1,
+      "successful_reps": 0,
+      "error": "== GPU options ==\n  device_k       : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg2-gpu-opt/src/dmrg2_gpu_opt_impl.h:1339 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error\n",
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "32",
+        "64",
+        "20",
+        "--josephson",
+        "--nmax",
+        "2"
+      ],
+      "nmax": 2
     }
   ],
   "provenance": {
