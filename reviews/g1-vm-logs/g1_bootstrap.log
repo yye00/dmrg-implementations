@@ -1,0 +1,33 @@
+2026-05-09T13:14:51+00:00 [bootstrap] ==== G1 BOOTSTRAP START target=single-gpu HEAD=18fc8f4 ====
+2026-05-09T13:14:51+00:00 [bootstrap] [1/9] Pre-flight checks
+2026-05-09T13:14:51+00:00 [bootstrap] Installing apt packages: libopenblas-dev liblapack-dev
+2026-05-09T13:14:52+00:00 [bootstrap] WARN: git push auth not configured. Results will accumulate locally.
+2026-05-09T13:14:52+00:00 [bootstrap] WARN: To enable backup, set credentials and the backup loop will catch up.
+2026-05-09T13:14:52+00:00 [bootstrap] WARN: e.g.: git config credential.helper store && (echo URL with token) > ~/.git-credentials
+0 not upgraded.
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T13:14:52+00:00 [bootstrap] WARN: git push auth not configured. Results will accumulate locally.
+2026-05-09T13:14:52+00:00 [bootstrap] WARN: To enable backup, set credentials and the backup loop will catch up.
+2026-05-09T13:14:52+00:00 [bootstrap] WARN: e.g.: git config credential.helper store && (echo URL with token) > ~/.git-credentials
+2026-05-09T13:14:52+00:00 [bootstrap] Free disk: 11445 GB
+2026-05-09T13:14:52+00:00 [bootstrap] Free disk: 11445 GB
+2026-05-09T13:14:52+00:00 [bootstrap] Defect registry pre-flight
+2026-05-09T13:14:52+00:00 [bootstrap] Defect registry pre-flight
+2026-05-09T13:14:52+00:00 [bootstrap] Registry: TOTAL HITS = 0
+2026-05-09T13:14:52+00:00 [bootstrap] Registry: TOTAL HITS = 0
+2026-05-09T13:14:52+00:00 [bootstrap] [2/9] Killing orphan processes from prior runs
+2026-05-09T13:14:52+00:00 [bootstrap] [2/9] Killing orphan processes from prior runs
+2026-05-09T13:14:54+00:00 [bootstrap] GPU after cleanup: 0%
+2026-05-09T13:14:54+00:00 [bootstrap] GPU after cleanup: 0%
+2026-05-09T13:14:54+00:00 [bootstrap] [3/9] Starting result-backup loop (30s interval, immediate first commit)
+2026-05-09T13:14:54+00:00 [bootstrap] [3/9] Starting result-backup loop (30s interval, immediate first commit)
+2026-05-09T13:14:57+00:00 [bootstrap] Backup loop alive (PID 81958)
+2026-05-09T13:14:57+00:00 [bootstrap] Backup loop alive (PID 81958)
+2026-05-09T13:14:57+00:00 [bootstrap] [4/9] Starting hang watchdog (120s threshold, GPU<10%)
+2026-05-09T13:14:57+00:00 [bootstrap] [4/9] Starting hang watchdog (120s threshold, GPU<10%)
+2026-05-09T13:14:59+00:00 [bootstrap] Watchdog alive (PID 81991)
+2026-05-09T13:14:59+00:00 [bootstrap] Watchdog alive (PID 81991)
+2026-05-09T13:14:59+00:00 [bootstrap] [5/9] Running smoke (max 4h, single-gpu)
+2026-05-09T13:14:59+00:00 [bootstrap] [5/9] Running smoke (max 4h, single-gpu)
+2026-05-09T13:14:59+00:00 [bootstrap] Smoke PID=82006 log=g1_smoke_20260509-1314.log
+2026-05-09T13:14:59+00:00 [bootstrap] Smoke PID=82006 log=g1_smoke_20260509-1314.log

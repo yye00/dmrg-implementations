@@ -1,0 +1,793 @@
+2026-05-09T13:14:54+00:00 backup start interval=30s heartbeat=600s repo=/home/hotaisle/dmrg-implementations
+2026-05-09T13:14:54+00:00 initial cycle: nothing to stage yet
+error: The following untracked working tree files would be overwritten by checkout:
+	benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg-gpu-base_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+	benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg-gpu-opt_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+	benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg-gpu_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+	benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg2-gpu-base_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+Please move or remove them before you switch branches.
+Aborting
+error: could not detach HEAD
+error: The following untracked working tree files would be overwritten by checkout:
+	benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg-gpu-base_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+	benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg-gpu-opt_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+	benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg-gpu_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+	benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314/dmrg2-gpu-base_mi300x_challenge_20260509_131557_smoke-20260509-1314.json
+Please move or remove them before you switch branches.
+Aborting
+error: could not detach HEAD
+2026-05-09T14:44:52+00:00 backup start interval=30s heartbeat=600s repo=/home/hotaisle/dmrg-implementations
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:44:52+00:00 PUSH FAILED (commit kept locally): data: auto-backup boot 2026-05-09T14:44:52Z
+2026-05-09T14:44:52+00:00 initial cycle: nothing to stage yet
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:47:54+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T14:47:53Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:51:56+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T14:51:55Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:54:57+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T14:54:57Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:54:58+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T14:54:57Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:55:28+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T14:55:28Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:55:59+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T14:55:59Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:56:30+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T14:56:30Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:57:01+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T14:57:00Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:57:31+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T14:57:31Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:57:32+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T14:57:31Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:58:02+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T14:58:02Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:58:33+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T14:58:33Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:59:04+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T14:59:04Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:59:34+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T14:59:34Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T14:59:35+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T14:59:34Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:00:06+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:00:05Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:00:36+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:00:36Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:01:07+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T15:01:06Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:01:07+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:01:07Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:01:38+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:01:37Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:02:08+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:02:08Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:02:39+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:02:39Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:03:10+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:03:09Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:03:41+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:03:40Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:04:12+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:04:11Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:04:42+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:04:42Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:05:13+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:05:12Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:05:43+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T15:05:43Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:05:44+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:05:43Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:06:14+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:06:14Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:06:45+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:06:45Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:07:16+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:07:15Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:07:47+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:07:46Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:08:17+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:08:17Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:08:48+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:08:48Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:09:19+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:09:18Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:09:49+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:09:49Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:10:20+00:00 PUSH FAILED (commit kept locally): data: heartbeat 2026-05-09T15:10:19Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:10:50+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T15:10:50Z
+Applied autostash.
+2026-05-09T15:11:54+00:00 backup start interval=30s heartbeat=600s repo=/home/hotaisle/dmrg-implementations
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:11:54+00:00 PUSH FAILED (commit kept locally): data: auto-backup boot 2026-05-09T15:11:54Z
+2026-05-09T15:11:54+00:00 initial cycle: nothing to stage yet
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:14:56+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T15:14:55Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:15:26+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T15:15:26Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:15:57+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T15:15:56Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:16:57+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T15:16:57Z
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:17:28+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T15:17:27Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:18:58+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T15:18:58Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:22:31+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T15:22:30Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:23:31+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T15:23:31Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+Applied autostash.
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+fatal: could not read Username for 'https://github.com': No such device or address
+2026-05-09T15:28:03+00:00 PUSH FAILED (commit kept locally): data: auto-backup 2026-05-09T15:28:03Z
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
+The following paths are ignored by one of your .gitignore files:
+g1_smoke_20260509-1314.log
+hint: Use -f if you really want to add them.
+hint: Turn this message off by running
+hint: "git config advice.addIgnoredFile false"
