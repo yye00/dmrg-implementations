@@ -398,6 +398,129 @@
       "any_cotenant_changed": false,
       "timer_scope": "include_env_build",
       "env_build_sec": null
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "heisenberg",
+      "L": 100,
+      "chi": 256,
+      "sweeps": 15,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 22.437,
+      "time_median": 22.437,
+      "time_min": 22.437,
+      "times": [
+        22.437
+      ],
+      "energy": -0.0,
+      "energies": [
+        -0.0
+      ],
+      "repeats": 1,
+      "successful_reps": 1,
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "100",
+        "256",
+        "15"
+      ],
+      "rocm_states": [
+        {
+          "rep": 0,
+          "pre": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1550Mhz)",
+                "fclk clock level:": "1",
+                "mclk clock speed:": "(1100Mhz)",
+                "mclk clock level:": "1",
+                "sclk clock speed:": "(218Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1000Mhz)",
+                "socclk clock level:": "1"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "38.0",
+                "Temperature (Sensor memory) (C)": "32.0",
+                "Current Socket Graphics Package Power (W)": "157.0",
+                "GPU use (%)": "1"
+              }
+            },
+            "pids": ""
+          },
+          "post": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1800Mhz)",
+                "fclk clock level:": "2",
+                "mclk clock speed:": "(1300Mhz)",
+                "mclk clock level:": "2",
+                "sclk clock speed:": "(877Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1143Mhz)",
+                "socclk clock level:": "2"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "38.0",
+                "Temperature (Sensor memory) (C)": "32.0",
+                "Current Socket Graphics Package Power (W)": "193.0",
+                "GPU use (%)": "9"
+              }
+            },
+            "pids": ""
+          },
+          "pin_rc": {
+            "rocm-smi --setperfdeterminism 1900": 0,
+            "rocm-smi --setperflevel manual": 0,
+            "rocm-smi --setpowercap 750": 2
+          },
+          "throttled": false,
+          "cotenant_changed": false
+        }
+      ],
+      "any_throttled": false,
+      "any_cotenant_changed": false,
+      "timer_scope": "include_env_build",
+      "env_build_sec": null
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "josephson",
+      "L": 16,
+      "chi": 64,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": false,
+      "time": null,
+      "time_median": null,
+      "time_min": null,
+      "times": [],
+      "energy": null,
+      "energies": [],
+      "repeats": 1,
+      "successful_reps": 0,
+      "error": "== GPU options ==\n  device_k       : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\nHIP error in /home/hotaisle/dmrg-implementations/gpu-rocm/dmrg2-gpu-opt/src/dmrg2_gpu_opt_impl.h:1339 - an illegal memory access was encountered\nrocBLAS error during freeing of allocated memory in handle destructor: rocblas_status_internal_error\n",
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "16",
+        "64",
+        "20",
+        "--josephson",
+        "--nmax",
+        "2"
+      ],
+      "nmax": 2
     }
   ],
   "provenance": {
