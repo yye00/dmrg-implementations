@@ -80,11 +80,13 @@ The state machine, by phase:
 |-------|--------|--------|
 | **bootstrap-running** | `/tmp/g1_bootstrap.log` last line is not `BOOTSTRAP COMPLETE` and bootstrap PID alive | Wait. Print last 10 lines of bootstrap log. |
 | **smoke-in-progress** | `g1_smoke_*.log` mtime within last 5 min, launcher PID alive | Wait. Print configs done / total / FAILs. |
-| **smoke-clean** | smoke log shows ≥ 80% pass and launcher exited | Trigger `--full` via `setsid bash benchmarks/run_g1_baseline.sh --single-gpu --skip-smoke > g1_full_$(date -u +%Y%m%d-%H%M).log 2>&1 &` |
+| **smoke-clean** | smoke log shows ≥ 80% pass AND smoke launcher exited AND **no `g1_full_*.log` exists yet** | Trigger `--full` with χ=512 skipped (paper budget): `CHI_SKIP=512 setsid bash benchmarks/run_g1_baseline.sh --single-gpu --skip-smoke > g1_full_$(date -u +%Y%m%d-%H%M).log 2>&1 &`. The `g1_full_*.log` existence check guards against re-firing if a prior poll already launched it but the launcher hasn't started writing yet. |
 | **smoke-broken** | smoke log shows < 80% pass and launcher exited | Diagnose the failure pattern, find the bug, fix it across ALL variants, push, restart bootstrap |
 | **full-in-progress** | `g1_full_*.log` mtime within last 10 min, launcher PID alive | Wait. Print percent complete. |
-| **full-done** | full launcher exited cleanly | Verify results pushed, write `reviews/g1-results-summary.md`, tell user (next time they're back) the campaign completed |
-| **idle** | No bootstrap, no smoke, no full running, no STOP_G1 file | If `~/dmrg-implementations/benchmarks/paper_results/mi300x/g1-*` has no full output, restart bootstrap. If full output present, treat as full-done. |
+| **full-done** (χ≤256 main pass) | full launcher exited cleanly AND no `g1_chi512_*.log` exists yet | Trigger χ=512 mop-up at REPEATS=1: `CHI_ONLY=512 REPEATS=1 setsid bash benchmarks/run_g1_baseline.sh --single-gpu --skip-smoke > g1_chi512_$(date -u +%Y%m%d-%H%M).log 2>&1 &`. The user explicitly opted into χ=512 single-rep coverage as a follow-on (2026-05-09). Heisenberg/TFIM only — josephson has no χ=512 row. |
+| **chi512-in-progress** | `g1_chi512_*.log` mtime within last 10 min, launcher PID alive | Wait. Print percent complete. |
+| **chi512-done** | chi512 launcher exited cleanly | Write `reviews/g1-results-summary.md`, declare campaign complete. |
+| **idle** | No bootstrap, no smoke, no full, no chi512 running, no STOP_G1 file | If no full output present, restart bootstrap. If full+chi512 both present, treat as chi512-done. If only full present and chi512 not yet run, kick off the mop-up. |
 | **dead** | SSH fails repeatedly | Note in reviews/g1-incident-<date>.md, do not auto-retry, leave for user |
 
 ## Fix-and-resmoke procedure (smoke-broken phase)

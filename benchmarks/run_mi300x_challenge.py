@@ -417,14 +417,29 @@ def run_all(impl_names, models, sizes_dict, do_warmup=True, repeats=1,
     """
     os.makedirs(output_dir, exist_ok=True)
 
-    # Build flat config list
+    # Build flat config list.
+    # CHI_SKIP env var (comma-separated bond dims, e.g. "512" or "256,512")
+    # filters out matching chi rows up-front. Used by /g1-poll's smoke-clean
+    # trigger to keep the full-grid runtime within a single GPU window.
+    # CHI_ONLY does the inverse (only run those chi values) for the
+    # mop-up follow-on pass.
+    chi_skip = {int(x) for x in os.environ.get("CHI_SKIP", "").split(",") if x.strip()}
+    chi_only = {int(x) for x in os.environ.get("CHI_ONLY", "").split(",") if x.strip()}
     configs = []
     for impl in impl_names:
         for model in models:
             if model not in sizes_dict:
                 continue
             for L, chi, sweeps in sizes_dict[model]:
+                if chi in chi_skip:
+                    continue
+                if chi_only and chi not in chi_only:
+                    continue
                 configs.append((impl, model, L, chi, sweeps))
+    if chi_skip:
+        print(f"CHI_SKIP active: removed chi in {sorted(chi_skip)}")
+    if chi_only:
+        print(f"CHI_ONLY active: kept chi in {sorted(chi_only)}")
 
     total = len(configs)
     current_group = None
