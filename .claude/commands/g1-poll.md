@@ -10,7 +10,67 @@ to keep the GPU window producing useful results — never let it sit idle.
 
 The GPU host is recorded at `~/.gpu-host` as a single line `hotaisle@<IP>`.
 If the file is missing, run `cat /tmp/g1-status.txt 2>/dev/null` to see if a
-prior poll cached it. If still missing, abort with a note for the user.
+prior poll cached it. If still missing, try the last-known IP from
+`CLAUDE.md` (the "Remote MI300X Access" section). Only abort if that also
+fails to SSH.
+
+## MANDATORY rescue step (every poll, before anything else)
+
+The VM's on-VM `result_backup.sh` commits locally but cannot push when
+GitHub auth is unconfigured (the typical fresh-VM state). Therefore the
+**ONLY durable copy of in-progress results is on the local machine**, and
+local is the only host that can push to origin.
+
+**Every /g1-poll fire MUST run the rescue BEFORE inspecting state:**
+
+```bash
+LOCAL_REPO=/home/captain/clawd/work/dmrg-implementations
+REMOTE=$(cat ~/.gpu-host)
+
+# 1. rsync result artifacts off the VM. -u means "skip files that are
+#    newer on the destination" so we never overwrite a committed local
+#    copy with a stale remote one. --partial keeps partial transfers
+#    if the SSH drops mid-run.
+rsync -avzu --partial --timeout=60 \
+    "${REMOTE}":dmrg-implementations/benchmarks/paper_results/mi300x/g1-*/ \
+    "${LOCAL_REPO}/benchmarks/paper_results/mi300x/" 2>&1 | tail -5
+
+# 2. Pull launcher logs (gitignored locally — keep outside the repo
+#    or they'll be ignored on add).
+mkdir -p "${LOCAL_REPO}/reviews/g1-vm-logs"
+rsync -avzu --partial --timeout=60 \
+    "${REMOTE}":dmrg-implementations/g1_smoke_*.log \
+    "${REMOTE}":dmrg-implementations/g1_full_*.log \
+    "${LOCAL_REPO}/reviews/g1-vm-logs/" 2>&1 | tail -3
+
+# 3. Pull diagnostic logs from /tmp (bootstrap, watchdog, backup).
+rsync -avzu --partial --timeout=60 \
+    "${REMOTE}":/tmp/g1_bootstrap.log \
+    "${REMOTE}":/tmp/hang_watcher.log \
+    "${REMOTE}":/tmp/result_backup.log \
+    "${LOCAL_REPO}/reviews/g1-vm-logs/" 2>&1 | tail -3
+
+# 4. Commit + push from local. The result JSONs are not gitignored;
+#    .log files generally are, so we hand-include the rescued logs.
+cd "${LOCAL_REPO}"
+git add -A benchmarks/paper_results/mi300x/
+git add -f reviews/g1-vm-logs/  # gitignored, force-add
+if ! git diff --cached --quiet; then
+    git commit -m "g1-rescue: $(date -u +%Y-%m-%dT%H:%M:%SZ) /g1-poll periodic backup" \
+        --quiet
+    git push origin main --quiet 2>&1 | tail -3
+fi
+```
+
+This step runs every 30 min regardless of pipeline phase. If the VM dies
+between fires, at most 30 minutes of paper results are lost — and we keep
+the launcher/watchdog/backup logs for forensic recovery.
+
+**Do NOT skip this step** even if smoke is "obviously running fine" — that
+exact assumption cost us the 2026-05-08 lost-VM incident.
+
+After the rescue completes, proceed with the pipeline-phase state machine
+below.
 
 ## Pipeline phases
 
