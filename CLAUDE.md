@@ -176,6 +176,77 @@ After repository reorganization:
 
 ---
 
+## GPU window operating protocol (G1 baseline)
+
+Whenever a Hot Aisle MI300X (or equivalent) GPU window opens, follow this
+protocol exactly. The user is generally **unreachable in real time** —
+Claude operates autonomously.
+
+### Single command on the new VM
+```bash
+ssh hotaisle@<NEW_IP>
+git clone https://github.com/yye00/dmrg-implementations.git \
+  || (cd dmrg-implementations && git pull)
+cd dmrg-implementations
+echo "hotaisle@<NEW_IP>" > ~/.gpu-host
+bash benchmarks/g1-bootstrap.sh --single-gpu
+```
+
+The bootstrap is **idempotent** — re-running picks up where it left off
+(OpenBLAS cached, builds cached, watchdog/backup loop relaunched).
+
+### What runs on the GPU host
+
+`g1-bootstrap.sh` autonomously:
+1. Pre-flights (cmake, gfortran, libopenblas-dev, git push auth, free disk).
+2. Builds OpenBLAS 0.3.28 from source (cached).
+3. Kills orphan processes from prior runs.
+4. Starts `result_backup.sh` (30s interval, **immediate first commit**) —
+   commits to `origin/main` so results survive VM teardown.
+5. Starts `hang_watcher.sh` (120s threshold, GPU<10%) — auto-kills hung
+   binaries so the launcher records FAIL and continues.
+6. Runs `--smoke` (max 4h).
+7. Exits. Decision to launch `--full` happens via Claude's `/g1-poll`.
+
+### What Claude does (every session, every poll cycle)
+
+1. **First response of the session**: invoke `Skill(loop)` with
+   `/loop 30m /g1-poll` to schedule autonomous polling. Never go silent.
+2. `/g1-poll` reads remote state, advances the pipeline:
+   - smoke-in-progress: wait, print status
+   - smoke-clean (≥80% pass): launch `--full` immediately, no confirm
+   - smoke-broken: diagnose, cross-check siblings, fix in **all variants**
+     atomically, push, restart bootstrap
+   - full-in-progress: wait
+   - full-done: write summary, tell user
+3. **Always commit + push** every code change. No uncommitted state.
+4. **Cross-check siblings** for every defect class (homogenization rule).
+   Never ship a single-variant fix.
+5. **Add a registry rule** for every new defect (D14 → D17 already exist;
+   keep adding).
+
+### Stop file
+
+`~/dmrg-implementations/STOP_G1` halts the bootstrap before its next phase.
+Use to pause for inspection without killing in-progress runs.
+
+### Lessons that drove this protocol
+
+- 2026-05-08 / 09: backup loop INTERVAL=300s → VM died inside the gap,
+  0 commits made it to `origin/main`. Now: 30s + immediate first commit.
+- 2026-05-09: smoke completed cleanly but VM idle for 12+ hours because
+  Claude wasn't using `/loop` to poll. Now: `/loop 30m /g1-poll` from
+  session-1.
+- 2026-05-08: first watchdog regex didn't match the actual binary names —
+  hang ran 81 min before manual kill. Now: working regex checked into
+  `benchmarks/hang_watcher.sh`.
+- The OpenBLAS 0.3.20 SVD bug, missing pointer_mode_guard.h include,
+  AsvdScratch move semantics, D17 race — all surfaced ON the GPU because
+  no one had compiled the code on real hardware. Now: bootstrap installs
+  the dependencies and runs the registry pre-flight before the smoke.
+
+---
+
 ## Path B workflow (paper revision, Apr-May 2026)
 
 When working on Path B defects (paper rewrite + MI300X rebench campaign):
