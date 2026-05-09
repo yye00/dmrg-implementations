@@ -1,0 +1,217 @@
+{
+  "implementation": "pdmrg-gpu",
+  "architecture": "mi300x",
+  "benchmark": "challenge",
+  "timestamp": "20260509_131557_smoke-20260509-1314",
+  "results": [
+    {
+      "impl": "pdmrg-gpu",
+      "model": "heisenberg",
+      "L": 50,
+      "chi": 64,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 5.981,
+      "time_median": 5.981,
+      "time_min": 5.981,
+      "times": [
+        5.981
+      ],
+      "energy": -21.972110272166,
+      "energies": [
+        -21.972110272166
+      ],
+      "repeats": 1,
+      "successful_reps": 1,
+      "cmd": [
+        "gpu-rocm/pdmrg-gpu/build/pdmrg_gpu",
+        "50",
+        "64",
+        "20",
+        "--warmup",
+        "2",
+        "--polish",
+        "2",
+        "--local-sweeps",
+        "1"
+      ],
+      "rocm_states": [
+        {
+          "rep": 0,
+          "pre": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1550Mhz)",
+                "fclk clock level:": "1",
+                "mclk clock speed:": "(1100Mhz)",
+                "mclk clock level:": "1",
+                "sclk clock speed:": "(208Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1000Mhz)",
+                "socclk clock level:": "1"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "38.0",
+                "Temperature (Sensor memory) (C)": "31.0",
+                "Current Socket Graphics Package Power (W)": "154.0",
+                "GPU use (%)": "1"
+              }
+            },
+            "pids": ""
+          },
+          "post": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1800Mhz)",
+                "fclk clock level:": "2",
+                "mclk clock speed:": "(1300Mhz)",
+                "mclk clock level:": "2",
+                "sclk clock speed:": "(731Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1143Mhz)",
+                "socclk clock level:": "2"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "37.0",
+                "Temperature (Sensor memory) (C)": "31.0",
+                "Current Socket Graphics Package Power (W)": "188.0",
+                "GPU use (%)": "3"
+              }
+            },
+            "pids": ""
+          },
+          "pin_rc": {
+            "rocm-smi --setperfdeterminism 1900": 0,
+            "rocm-smi --setperflevel manual": 0,
+            "rocm-smi --setpowercap 750": 2
+          },
+          "throttled": false,
+          "cotenant_changed": false
+        }
+      ],
+      "any_throttled": false,
+      "any_cotenant_changed": false,
+      "timer_scope": "include_env_build",
+      "env_build_sec": 0.008
+    }
+  ],
+  "provenance": {
+    "generated_utc": "2026-05-09T13:15:57.244318+00:00",
+    "git": {
+      "commit": "6d76c6f3710a0f38b9e9a0ba2aa3c5003958c844",
+      "commit_short": "6d76c6f3710a",
+      "branch": "main",
+      "dirty": false,
+      "dirty_files": [],
+      "last_commit_msg": "data: bootstrap probe 2026-05-09T13:14:52Z",
+      "last_commit_iso": "2026-05-09T13:14:52+00:00",
+      "ahead_of_upstream": 1,
+      "behind_upstream": 0
+    },
+    "host": {
+      "hostname": "enc1-gpuvm027",
+      "fqdn": "enc1-gpuvm027",
+      "platform": "Linux-5.15.0-170-generic-x86_64-with-glibc2.35",
+      "python": "3.10.12",
+      "cpu": "x86_64",
+      "cpu_model": "Intel(R) Xeon(R) Platinum 8470",
+      "lscpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           46 bits physical, 57 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  13\nOn-line CPU(s) list:                     0-12\nVendor ID:                               GenuineIntel\nModel name:                              Intel(R) Xeon(R) Platinum 8470\nCPU family:                              6\nModel:                                   143\nThread(s) per core:                      1\nCore(s) per socket:                      13\nSocket(s):                               1\nStepping:                                8\nBogoMIPS:                                4000.00\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc arch_perfmon rep_good nopl xtopology cpuid tsc_known_freq pni pclmulqdq vmx ssse3 fma cx16 pdcm pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer aes xsave avx f16c rdrand hypervisor lahf_lm abm 3dnowprefetch cpuid_fault invpcid_single ssbd ibrs ibpb stibp ibrs_enhanced tpr_shadow vnmi flexpriority ept vpid ept_ad fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx_vnni avx512_bf16 wbnoinvd arat avx512vbmi umip pku ospke waitpkg avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq la57 rdpid bus_lock_detect cldemote movdiri movdir64b fsrm md_clear serialize tsxldtrk avx512_fp16 arch_capabilities\nVirtualization:                          VT-x\nHypervisor vendor:                       KVM\nVirtualization type:                     full\nL1d cache:                               416 KiB (13 instances)\nL1i cache:                               416 KiB (13 instances)\nL2 cache:                                52 MiB (13 instances)\nL3 cache:                                16 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-12\nVulnerability Gather data sampling:      Not affected\nVulnerability Indirect target selection: Mitigation; Aligned branch/return thunks\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Unknown: No mitigations\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Not affected\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl and seccomp\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; PBRSB-eIBRS SW sequence; BHI SW loop, KVM SW loop\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Mitigation; TSX disabled\nVulnerability Vmscape:                   Not affected",
+      "numactl": "",
+      "meminfo": "MemTotal:       230893520 kB\nAnonHugePages:         0 kB\nShmemHugePages:        0 kB\nFileHugePages:         0 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0"
+    },
+    "gpu": {
+      "vendor": "AMD",
+      "rocm_smi_json": {
+        "card0": {
+          "VRAM Total Memory (B)": "205822885888",
+          "VRAM Total Used Memory (B)": "299687936",
+          "Card Series": "AMD Instinct MI300X VF",
+          "Card Model": "0x74b5",
+          "Card Vendor": "Advanced Micro Devices, Inc. [AMD/ATI]",
+          "Card SKU": "M3000108",
+          "Subsystem ID": "0x74a1",
+          "Device Rev": "0x00",
+          "Node ID": "1",
+          "GUID": "46235",
+          "GFX Version": "gfx942"
+        },
+        "system": {
+          "Driver version": "6.16.13"
+        }
+      }
+    },
+    "rocm": {
+      "rocm_version_file": "7.2.0",
+      "dpkg_rocm_libs": "ii  hipblas                                          3.2.0.70200-43~22.04                    amd64        ROCm BLAS marshalling library\nii  hipblas-common-dev                               1.4.0.70200-43~22.04                    amd64        Common files for hipBLAS libraries\nii  hipblas-dev                                      3.2.0.70200-43~22.04                    amd64        ROCm BLAS marshalling library\nii  hipblaslt                                        1.2.1.70200-43~22.04                    amd64        HIP library for GEMM operations with extended functionality\nii  hipblaslt-dev                                    1.2.1.70200-43~22.04                    amd64        HIP library for GEMM operations with extended functionality\nii  hipsolver                                        3.2.0.70200-43~22.04                    amd64        ROCm LAPACK marshalling library\nii  hipsolver-dev                                    3.2.0.70200-43~22.04                    amd64        ROCm LAPACK marshalling library\nii  rocblas                                          5.2.0.70200-43~22.04                    amd64        AMD library for BLAS in ROCm. Implemented in HIP and optimized for AMD GPUs\nii  rocblas-dev                                      5.2.0.70200-43~22.04                    amd64        AMD library for BLAS in ROCm. Implemented in HIP and optimized for AMD GPUs\nii  rocsolver                                        3.32.0.70200-43~22.04                   amd64        AMD ROCm SOLVER library\nii  rocsolver-dev                                    3.32.0.70200-43~22.04                   amd64        AMD ROCm SOLVER library",
+      "hipconfig": "7.2.26015-fc0010cf6a"
+    },
+    "env": {
+      "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/snap/bin",
+      "_numactl_show": ""
+    },
+    "script": {
+      "path": "/home/hotaisle/dmrg-implementations/benchmarks/run_mi300x_challenge.py",
+      "argv": [
+        "--impl",
+        "dmrg-gpu-base,dmrg-gpu,dmrg-gpu-opt,dmrg2-gpu-base,dmrg2-gpu,dmrg2-gpu-opt,pdmrg-gpu-base,pdmrg-gpu,pdmrg-gpu-opt",
+        "--pdmrg-warmup",
+        "2",
+        "--pdmrg-polish",
+        "2",
+        "--pdmrg-local",
+        "1",
+        "--repeats",
+        "1",
+        "--output-dir",
+        "benchmarks/paper_results/mi300x/g1-single-gpu-20260509-1314",
+        "--tag",
+        "smoke-20260509-1314",
+        "--trim"
+      ],
+      "cwd": "/home/hotaisle/dmrg-implementations"
+    }
+  },
+  "run_config": {
+    "grid": "ULTRA_TRIM (18 configs)",
+    "impl_names": [
+      "dmrg-gpu-base",
+      "dmrg-gpu",
+      "dmrg-gpu-opt",
+      "dmrg2-gpu-base",
+      "dmrg2-gpu",
+      "dmrg2-gpu-opt",
+      "pdmrg-gpu-base",
+      "pdmrg-gpu",
+      "pdmrg-gpu-opt"
+    ],
+    "models": [
+      "heisenberg",
+      "josephson",
+      "tfim"
+    ],
+    "repeats": 1,
+    "skip_warmup": false,
+    "trim": true,
+    "tag": "smoke-20260509-1314",
+    "pdmrg_warmup": 2,
+    "pdmrg_polish": 2,
+    "pdmrg_local": 1,
+    "pdmrg_recal": null,
+    "josephson_nmax": 2
+  },
+  "binary": {
+    "path": "/home/hotaisle/dmrg-implementations/gpu-rocm/pdmrg-gpu/build/pdmrg_gpu",
+    "exists": true,
+    "size": 21635288,
+    "mtime": "2026-05-09T13:15:47.829081+00:00",
+    "sha256": "a717cdc22908a6c52a47a8f49e5a9bb9e464c7ecded3cd04f64c5ae1c26ec415"
+  }
+}
