@@ -95,6 +95,33 @@
       "any_cotenant_changed": false,
       "timer_scope": "include_env_build",
       "env_build_sec": null
+    },
+    {
+      "impl": "dmrg2-gpu-opt",
+      "model": "heisenberg",
+      "L": 50,
+      "chi": 128,
+      "sweeps": 20,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": false,
+      "time": null,
+      "time_median": null,
+      "time_min": null,
+      "times": [],
+      "energy": null,
+      "energies": [],
+      "repeats": 1,
+      "successful_reps": 0,
+      "error": "== GPU options ==\n  device_k       : off\n  lanczos_graph  : off\n  rsvd           : off\n  sparse_mpo     : off\n  fuse_lanczos   : off\n  d_pad          : off\n  profile        : off\n",
+      "cmd": [
+        "gpu-rocm/dmrg2-gpu-opt/build/dmrg2_gpu_opt",
+        "50",
+        "128",
+        "20"
+      ]
     }
   ],
   "provenance": {
