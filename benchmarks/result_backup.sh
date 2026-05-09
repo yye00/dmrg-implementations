@@ -82,17 +82,26 @@ while true; do
     cd "$REPO" || continue
     now=$(date +%s)
     msg="data: auto-backup $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    if stage_and_push "$msg"; then
+    stage_and_push "$msg"
+    rc=$?
+    # rc=0 pushed, rc=1 nothing to commit, rc=2 commit kept locally (push
+    # failed). A local commit IS liveness — without auth on the VM every
+    # cycle returns rc=2, and if we only reset last_heartbeat on rc=0 the
+    # heartbeat fires every INTERVAL after the first HEARTBEAT_EVERY window
+    # elapses (38 commits in 25 min on 2026-05-09).
+    if (( rc == 0 || rc == 2 )); then
         last_heartbeat="$now"
     fi
     # Heartbeat: if nothing was committed in HEARTBEAT_EVERY seconds, force
-    # an empty/timestamp commit so we see liveness in origin/main.
+    # an empty/timestamp commit so we see liveness in origin/main (or at
+    # least in the on-VM .git when push auth is broken).
     if (( now - last_heartbeat > HEARTBEAT_EVERY )); then
-        # Touch a heartbeat marker
         mkdir -p reports/.heartbeat
         echo "$(date -Iseconds) hostname=$(hostname) gpu=$(rocm-smi --showuse 2>/dev/null | grep 'GPU use' | awk -F: '{print $NF}' | tr -d ' ')%" \
             > reports/.heartbeat/g1.txt
-        if stage_and_push "data: heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"; then
+        stage_and_push "data: heartbeat $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        hb_rc=$?
+        if (( hb_rc == 0 || hb_rc == 2 )); then
             last_heartbeat="$now"
         fi
     fi
