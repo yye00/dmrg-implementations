@@ -38,7 +38,27 @@ The state machine, by phase:
 6. Commit with the standard message format and push to origin/main.
 7. SSH and re-run the bootstrap: `bash benchmarks/g1-bootstrap.sh --single-gpu`.
    It is idempotent; OpenBLAS won't rebuild.
-8. Schedule the next poll: `/loop 30m /g1-poll`.
+8. The cron-scheduled poll fires every 30 min — no need to re-schedule.
+
+## Escalation: fallback to unaffected variants
+
+After **two unsuccessful fix attempts** for the same failing variant
+(i.e., smoke still shows that variant FAIL after two re-pushes), do
+NOT keep blocking the GPU window:
+
+1. Mark the variant as **deferred** in `reviews/g1-deferred-bugs-<utc>.md`
+   with the failure pattern, attempted fixes, and reproduction config.
+2. Run `--full` with that variant excluded:
+   `VARIANT_SKIP=<variant1>,<variant2> bash benchmarks/run_g1_baseline.sh --single-gpu --skip-smoke`
+3. The remaining variants still produce paper-grade numbers — partial
+   data is far better than no data when the GPU clock is ticking.
+4. Commit the deferred-bugs file. The user picks up the failures next
+   time they're online.
+
+**The GPU must always be doing useful work.** Idle GPU = wasted budget.
+If a fix is genuinely beyond your reach, run unaffected configurations.
+
+## Discipline
 
 ## Discipline
 
