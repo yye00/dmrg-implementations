@@ -114,6 +114,29 @@ else
     VARIANTS=("${SINGLE_GPU_VARIANTS[@]}")
     # GPU machine = GPU only. CPU baselines (quimb) run on a separate CPU host
     # via a different launcher; never on the $$$/hour MI300X.
+
+    # VARIANT_SKIP escalation hook (used by /g1-poll when a variant is
+    # deferred after two failed fix attempts). Comma-separated list, e.g.
+    # VARIANT_SKIP=dmrg2-gpu-opt,pdmrg-gpu-base. Filters VARIANTS in place
+    # so IMPL_FILTER and the build/run loops all see the reduced set.
+    if [[ -n "${VARIANT_SKIP:-}" ]]; then
+        IFS=',' read -r -a SKIP_LIST <<< "$VARIANT_SKIP"
+        FILTERED=()
+        for v in "${VARIANTS[@]}"; do
+            keep=1
+            for s in "${SKIP_LIST[@]}"; do
+                [[ "$v" == "$s" ]] && { keep=0; break; }
+            done
+            (( keep == 1 )) && FILTERED+=("$v")
+        done
+        if (( ${#FILTERED[@]} == 0 )); then
+            echo "FAIL: VARIANT_SKIP=$VARIANT_SKIP excluded every variant. Aborting."
+            exit 1
+        fi
+        echo "VARIANT_SKIP active: removed [$VARIANT_SKIP], running [${FILTERED[*]}]"
+        VARIANTS=("${FILTERED[@]}")
+    fi
+
     IMPL_FILTER="--impl $(IFS=,; echo "${VARIANTS[*]}")"
 fi
 
