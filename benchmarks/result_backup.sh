@@ -32,13 +32,30 @@ last_heartbeat=$(date +%s)
 stage_and_push() {
     local msg="$1"
     git pull --rebase --autostash --quiet origin main 2>>"$LOG" || true
-    git add -A benchmarks/paper_results/ \
-                benchmarks/results/ \
-                reports/ \
-                reviews/ \
-                g1_smoke_*.log g1_full_*.log \
-                /tmp/g1_bootstrap.log \
-                2>/dev/null
+
+    # Mirror /tmp/g1_bootstrap.log into the repo so it gets backed up like
+    # any other tracked artifact. Doing `git add /tmp/...` directly fails
+    # with "is outside repository" and — worse — fails the WHOLE git add
+    # invocation, leaving every other pathspec unstaged. That bug ran for
+    # 1h25m on 2026-05-09 with 4 result JSONs un-staged the entire smoke.
+    if [[ -f /tmp/g1_bootstrap.log ]]; then
+        mkdir -p reports/.heartbeat
+        cp /tmp/g1_bootstrap.log reports/.heartbeat/g1_bootstrap.log 2>/dev/null || true
+    fi
+
+    # Only stage paths that actually exist as repo-relative paths. Trailing
+    # globs that match no files (e.g. g1_full_*.log before --full launches)
+    # would otherwise fail the whole add too — guard each glob.
+    local -a add_paths=(benchmarks/paper_results/ benchmarks/results/ reports/ reviews/)
+    shopt -s nullglob
+    local smoke_logs=(g1_smoke_*.log)
+    local full_logs=(g1_full_*.log)
+    shopt -u nullglob
+    (( ${#smoke_logs[@]} )) && add_paths+=("${smoke_logs[@]}")
+    (( ${#full_logs[@]} )) && add_paths+=("${full_logs[@]}")
+
+    git add -A "${add_paths[@]}" 2>>"$LOG" || true
+
     if git diff --cached --quiet; then
         return 1
     fi
@@ -47,7 +64,11 @@ stage_and_push() {
             echo "$(date -Iseconds) PUSH: $msg" >> "$LOG"
             return 0
         fi
-        echo "$(date -Iseconds) PUSH FAILED: $msg" >> "$LOG"
+        # Push failed — local commit still preserves the data on this VM's
+        # disk. Log so /g1-poll can scp the .git bundle as an emergency
+        # rescue if push auth never gets configured.
+        echo "$(date -Iseconds) PUSH FAILED (commit kept locally): $msg" >> "$LOG"
+        return 2
     fi
     return 2
 }
