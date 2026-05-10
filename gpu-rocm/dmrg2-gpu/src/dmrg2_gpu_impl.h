@@ -207,7 +207,14 @@ DMRG2GPU<Scalar>::DMRG2GPU(int L, int d, int chi_max, int D_mpo, double tol)
     }
 
     if (opts_.rsvd) {
-        int r_max = chi_max_ + RSVD_OVERSAMPLE_;
+        // D-G1-1 sibling fix: in two-site, svd_max_k = chi_max·d, so
+        // r_max = chi_max + OVERSAMPLE shrinks the standard-SVD buffers
+        // below what rocsolver_gesvd_auto writes when use_rsvd_ falls
+        // through to the standard path (full_k ≤ k+OVERSAMPLE or m ≤ 2k).
+        // Take max(...) to keep the standard path safe. See
+        // dmrg2-gpu-opt/src/dmrg2_gpu_opt_impl.h for the full hang
+        // analysis.
+        int r_max = std::max(chi_max_ + RSVD_OVERSAMPLE_, svd_max_k);
         HIP_CHECK(hipFree(d_svd_S_));
         HIP_CHECK(hipFree(d_svd_E_));
         HIP_CHECK(hipFree(d_svd_U_));

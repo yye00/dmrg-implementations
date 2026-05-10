@@ -226,8 +226,20 @@ DMRG2GPUOpt<Scalar>::DMRG2GPUOpt(int L, int d, int chi_max, int D_mpo, double to
     // Randomized SVD workspace — allocated EAGERLY (round-5 A8 fix). See
     // dmrg-gpu-opt for rationale: J2 setter set_rsvd(true) post-ctor would
     // leave buffers nullptr if gated. Two-site sizing: m = chi_max·d, n = d·chi_max.
+    //
+    // D-G1-1 fix (χ≥128 hang): the reallocated d_svd_{S,E,U,Vh} must
+    // continue to fit the STANDARD SVD path's full_k = min(m,n) =
+    // chi_max·d. In single-site (dmrg-gpu-opt) svd_max_k = chi_max, so
+    // r_max = chi_max + OVERSAMPLE ≥ svd_max_k automatically. In two-site
+    // svd_max_k = chi_max·d, and r_max = chi_max + OVERSAMPLE shrinks
+    // these buffers below what rocsolver_gesvd_auto writes — producing
+    // hundreds of KB of out-of-bounds writes that corrupt adjacent device
+    // allocations and stall the GPU at 0%. Taking max(...) keeps the
+    // standard-SVD path safe; RSVD itself caps r_use at min(k+OVERSAMPLE,
+    // full_k, rsvd_r_max_), so the larger r_max doesn't change behavior,
+    // only adds a few hundred KB.
     {
-        int r_max = chi_max_ + RSVD_OVERSAMPLE_;
+        int r_max = std::max(chi_max_ + RSVD_OVERSAMPLE_, svd_max_k);
         if (d_svd_S_)  HIP_CHECK(hipFree(d_svd_S_));
         if (d_svd_E_)  HIP_CHECK(hipFree(d_svd_E_));
         if (d_svd_U_)  HIP_CHECK(hipFree(d_svd_U_));

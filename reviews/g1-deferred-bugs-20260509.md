@@ -2,8 +2,57 @@
 
 ## D-G1-1: dmrg2-gpu-opt hangs at χ≥128
 
-**Status**: Deferred. Excluded from --full via `VARIANT_SKIP=dmrg2-gpu-opt`
-in `/g1-poll`'s smoke-clean trigger. User picks up next time online.
+**Status**: Fix proposed 2026-05-10 on branch
+`claude/fix-dmrg2-gpu-opt-chi-hang`. Deferred from the in-flight G1
+campaign via `VARIANT_SKIP=dmrg2-gpu-opt`; remove the skip after the
+fix is verified at χ=128/256 on a fresh GPU window.
+
+**Root cause (identified 2026-05-10 by static analysis)**: the
+"eager RSVD allocation" block in
+`gpu-rocm/dmrg2-gpu-opt/src/dmrg2_gpu_opt_impl.h:226-246` `hipFree`s
+the four standard-SVD buffers `d_svd_{S,E,U,Vh}` and reallocates them
+sized to `r_max = chi_max + RSVD_OVERSAMPLE_` (= chi_max + 10).
+That's correct in single-site (`dmrg-gpu-opt`) where
+`svd_max_k = chi_max`, so `r_max ≥ svd_max_k`. In two-site,
+`svd_max_k = chi_max · d`, so for d=2 and chi_max ≥ 11 the realloc
+**shrinks** the buffers. When `use_rsvd_=false` (the default — launcher
+doesn't export `DMRG_GPU_OPT_RSVD=1`), the standard
+`rocsolver_gesvd_auto` path writes `full_k = min(m,n) = chi_max·d`
+singular values into a `chi_max+10` buffer. At χ=128: 256 svals into a
+138-element buffer = 245 KB out-of-bounds writes per buffer (S, U, Vh,
+E), corrupting whatever rocsolver/HIP allocated next. GPU drops to 0%
+because the corrupted state takes a downstream call into a
+non-progressing kernel launch / sync-with-no-work state, not because of
+a Davidson-specific bug.
+
+`χ=64` survives because the overrun (128 − 74 = 54 svals worth) lands
+in slack rather than critical adjacent state.
+
+`dmrg2-gpu` (the non-`-opt` sibling) has the same pattern but gates the
+realloc on `if (opts_.rsvd)`; since the launcher doesn't set
+`DMRG_GPU_OPT_RSVD=1`, that gate is false and the bug never fires there.
+
+**Fix**: replace
+```cpp
+int r_max = chi_max_ + RSVD_OVERSAMPLE_;
+```
+with
+```cpp
+int r_max = std::max(chi_max_ + RSVD_OVERSAMPLE_, svd_max_k);
+```
+in both `dmrg2-gpu-opt/src/dmrg2_gpu_opt_impl.h` (always-on realloc) and
+`dmrg2-gpu/src/dmrg2_gpu_impl.h` (rsvd-gated realloc, defensive
+sibling fix). Memory delta: a few hundred KB on a 192 GB GPU.
+
+**Verification plan**:
+1. `cd gpu-rocm/dmrg2-gpu-opt && bash build_mi300x.sh`
+2. `./build/dmrg2_gpu_opt 50 128 20` — must complete with sane E, GPU
+   stays >50% utilized.
+3. `./build/dmrg2_gpu_opt 16 256 15 --josephson` — must complete.
+4. Re-run smoke and confirm 0 watchdog kills on dmrg2-gpu-opt.
+5. Remove `VARIANT_SKIP=dmrg2-gpu-opt` from
+   `.claude/commands/g1-poll.md` smoke-clean and chi512 mop-up
+   triggers.
 
 **Failure pattern (smoke run 20260509-1314)**:
 
