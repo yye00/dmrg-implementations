@@ -1,1 +1,1 @@
-2026-05-11T22:42:24+00:00 hostname=enc1-gpuvm027 gpu=96%
+2026-05-11T22:52:31+00:00 hostname=enc1-gpuvm027 gpu=93%
