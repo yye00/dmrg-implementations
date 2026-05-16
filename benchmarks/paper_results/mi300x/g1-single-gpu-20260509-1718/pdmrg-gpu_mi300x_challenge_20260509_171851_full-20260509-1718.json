@@ -19288,6 +19288,627 @@
       "any_cotenant_changed": false,
       "timer_scope": "include_env_build",
       "env_build_sec": 0.012
+    },
+    {
+      "impl": "pdmrg-gpu",
+      "model": "tfim",
+      "L": 100,
+      "chi": 256,
+      "sweeps": 15,
+      "arch": "mi300x",
+      "benchmark": "challenge",
+      "threads": 1,
+      "np": 1,
+      "success": true,
+      "time": 96.786,
+      "time_median": 96.786,
+      "time_min": 79.481,
+      "times": [
+        93.691,
+        130.168,
+        113.652,
+        115.688,
+        95.35,
+        79.481,
+        96.6,
+        96.786,
+        130.362,
+        96.36
+      ],
+      "energy": -126.961876739674,
+      "energies": [
+        -126.961876739727,
+        -126.961876739736,
+        -126.961876739763,
+        -126.961876739715,
+        -126.961876739641,
+        -126.961876739681,
+        -126.961876739655,
+        -126.961876739772,
+        -126.961876739602,
+        -126.961876739674
+      ],
+      "repeats": 10,
+      "successful_reps": 10,
+      "cmd": [
+        "gpu-rocm/pdmrg-gpu/build/pdmrg_gpu",
+        "100",
+        "256",
+        "15",
+        "--tfim",
+        "--warmup",
+        "2",
+        "--polish",
+        "2",
+        "--local-sweeps",
+        "1"
+      ],
+      "rocm_states": [
+        {
+          "rep": 0,
+          "pre": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1550Mhz)",
+                "fclk clock level:": "1",
+                "mclk clock speed:": "(1100Mhz)",
+                "mclk clock level:": "1",
+                "sclk clock speed:": "(183Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1000Mhz)",
+                "socclk clock level:": "1"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "38.0",
+                "Temperature (Sensor memory) (C)": "32.0",
+                "Current Socket Graphics Package Power (W)": "155.0",
+                "GPU use (%)": "0"
+              }
+            },
+            "pids": ""
+          },
+          "post": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1800Mhz)",
+                "fclk clock level:": "2",
+                "mclk clock speed:": "(1300Mhz)",
+                "mclk clock level:": "2",
+                "sclk clock speed:": "(681Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1143Mhz)",
+                "socclk clock level:": "2"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "191.0",
+                "GPU use (%)": "3"
+              }
+            },
+            "pids": ""
+          },
+          "pin_rc": {
+            "rocm-smi --setperfdeterminism 1900": 0,
+            "rocm-smi --setperflevel manual": 0,
+            "rocm-smi --setpowercap 750": 2
+          },
+          "throttled": false,
+          "cotenant_changed": false
+        },
+        {
+          "rep": 1,
+          "pre": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1550Mhz)",
+                "fclk clock level:": "1",
+                "mclk clock speed:": "(1100Mhz)",
+                "mclk clock level:": "1",
+                "sclk clock speed:": "(195Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1000Mhz)",
+                "socclk clock level:": "1"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "32.0",
+                "Current Socket Graphics Package Power (W)": "158.0",
+                "GPU use (%)": "0"
+              }
+            },
+            "pids": ""
+          },
+          "post": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1800Mhz)",
+                "fclk clock level:": "2",
+                "mclk clock speed:": "(1300Mhz)",
+                "mclk clock level:": "2",
+                "sclk clock speed:": "(670Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1143Mhz)",
+                "socclk clock level:": "2"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "190.0",
+                "GPU use (%)": "3"
+              }
+            },
+            "pids": ""
+          },
+          "pin_rc": {
+            "rocm-smi --setperfdeterminism 1900": 0,
+            "rocm-smi --setperflevel manual": 0,
+            "rocm-smi --setpowercap 750": 2
+          },
+          "throttled": false,
+          "cotenant_changed": false
+        },
+        {
+          "rep": 2,
+          "pre": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1550Mhz)",
+                "fclk clock level:": "1",
+                "mclk clock speed:": "(1100Mhz)",
+                "mclk clock level:": "1",
+                "sclk clock speed:": "(193Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1000Mhz)",
+                "socclk clock level:": "1"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "157.0",
+                "GPU use (%)": "0"
+              }
+            },
+            "pids": ""
+          },
+          "post": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1800Mhz)",
+                "fclk clock level:": "2",
+                "mclk clock speed:": "(1300Mhz)",
+                "mclk clock level:": "2",
+                "sclk clock speed:": "(679Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1143Mhz)",
+                "socclk clock level:": "2"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "190.0",
+                "GPU use (%)": "3"
+              }
+            },
+            "pids": ""
+          },
+          "pin_rc": {
+            "rocm-smi --setperfdeterminism 1900": 0,
+            "rocm-smi --setperflevel manual": 0,
+            "rocm-smi --setpowercap 750": 2
+          },
+          "throttled": false,
+          "cotenant_changed": false
+        },
+        {
+          "rep": 3,
+          "pre": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1550Mhz)",
+                "fclk clock level:": "1",
+                "mclk clock speed:": "(1100Mhz)",
+                "mclk clock level:": "1",
+                "sclk clock speed:": "(194Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1000Mhz)",
+                "socclk clock level:": "1"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "158.0",
+                "GPU use (%)": "0"
+              }
+            },
+            "pids": ""
+          },
+          "post": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1800Mhz)",
+                "fclk clock level:": "2",
+                "mclk clock speed:": "(1300Mhz)",
+                "mclk clock level:": "2",
+                "sclk clock speed:": "(678Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1143Mhz)",
+                "socclk clock level:": "2"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "191.0",
+                "GPU use (%)": "3"
+              }
+            },
+            "pids": ""
+          },
+          "pin_rc": {
+            "rocm-smi --setperfdeterminism 1900": 0,
+            "rocm-smi --setperflevel manual": 0,
+            "rocm-smi --setpowercap 750": 2
+          },
+          "throttled": false,
+          "cotenant_changed": false
+        },
+        {
+          "rep": 4,
+          "pre": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1550Mhz)",
+                "fclk clock level:": "1",
+                "mclk clock speed:": "(1100Mhz)",
+                "mclk clock level:": "1",
+                "sclk clock speed:": "(193Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1000Mhz)",
+                "socclk clock level:": "1"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "158.0",
+                "GPU use (%)": "0"
+              }
+            },
+            "pids": ""
+          },
+          "post": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1800Mhz)",
+                "fclk clock level:": "2",
+                "mclk clock speed:": "(1300Mhz)",
+                "mclk clock level:": "2",
+                "sclk clock speed:": "(674Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1143Mhz)",
+                "socclk clock level:": "2"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "190.0",
+                "GPU use (%)": "3"
+              }
+            },
+            "pids": ""
+          },
+          "pin_rc": {
+            "rocm-smi --setperfdeterminism 1900": 0,
+            "rocm-smi --setperflevel manual": 0,
+            "rocm-smi --setpowercap 750": 2
+          },
+          "throttled": false,
+          "cotenant_changed": false
+        },
+        {
+          "rep": 5,
+          "pre": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1550Mhz)",
+                "fclk clock level:": "1",
+                "mclk clock speed:": "(1100Mhz)",
+                "mclk clock level:": "1",
+                "sclk clock speed:": "(193Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1000Mhz)",
+                "socclk clock level:": "1"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "158.0",
+                "GPU use (%)": "0"
+              }
+            },
+            "pids": ""
+          },
+          "post": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1800Mhz)",
+                "fclk clock level:": "2",
+                "mclk clock speed:": "(1300Mhz)",
+                "mclk clock level:": "2",
+                "sclk clock speed:": "(681Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1143Mhz)",
+                "socclk clock level:": "2"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "190.0",
+                "GPU use (%)": "3"
+              }
+            },
+            "pids": ""
+          },
+          "pin_rc": {
+            "rocm-smi --setperfdeterminism 1900": 0,
+            "rocm-smi --setperflevel manual": 0,
+            "rocm-smi --setpowercap 750": 2
+          },
+          "throttled": false,
+          "cotenant_changed": false
+        },
+        {
+          "rep": 6,
+          "pre": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1550Mhz)",
+                "fclk clock level:": "1",
+                "mclk clock speed:": "(1100Mhz)",
+                "mclk clock level:": "1",
+                "sclk clock speed:": "(202Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1000Mhz)",
+                "socclk clock level:": "1"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "158.0",
+                "GPU use (%)": "0"
+              }
+            },
+            "pids": ""
+          },
+          "post": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1800Mhz)",
+                "fclk clock level:": "2",
+                "mclk clock speed:": "(1300Mhz)",
+                "mclk clock level:": "2",
+                "sclk clock speed:": "(681Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1143Mhz)",
+                "socclk clock level:": "2"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "190.0",
+                "GPU use (%)": "3"
+              }
+            },
+            "pids": ""
+          },
+          "pin_rc": {
+            "rocm-smi --setperfdeterminism 1900": 0,
+            "rocm-smi --setperflevel manual": 0,
+            "rocm-smi --setpowercap 750": 2
+          },
+          "throttled": false,
+          "cotenant_changed": false
+        },
+        {
+          "rep": 7,
+          "pre": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1550Mhz)",
+                "fclk clock level:": "1",
+                "mclk clock speed:": "(1100Mhz)",
+                "mclk clock level:": "1",
+                "sclk clock speed:": "(195Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1000Mhz)",
+                "socclk clock level:": "1"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "158.0",
+                "GPU use (%)": "0"
+              }
+            },
+            "pids": ""
+          },
+          "post": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1800Mhz)",
+                "fclk clock level:": "2",
+                "mclk clock speed:": "(1300Mhz)",
+                "mclk clock level:": "2",
+                "sclk clock speed:": "(679Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1143Mhz)",
+                "socclk clock level:": "2"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "191.0",
+                "GPU use (%)": "3"
+              }
+            },
+            "pids": ""
+          },
+          "pin_rc": {
+            "rocm-smi --setperfdeterminism 1900": 0,
+            "rocm-smi --setperflevel manual": 0,
+            "rocm-smi --setpowercap 750": 2
+          },
+          "throttled": false,
+          "cotenant_changed": false
+        },
+        {
+          "rep": 8,
+          "pre": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1550Mhz)",
+                "fclk clock level:": "1",
+                "mclk clock speed:": "(1100Mhz)",
+                "mclk clock level:": "1",
+                "sclk clock speed:": "(193Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1000Mhz)",
+                "socclk clock level:": "1"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "158.0",
+                "GPU use (%)": "0"
+              }
+            },
+            "pids": ""
+          },
+          "post": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1800Mhz)",
+                "fclk clock level:": "2",
+                "mclk clock speed:": "(1300Mhz)",
+                "mclk clock level:": "2",
+                "sclk clock speed:": "(677Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1143Mhz)",
+                "socclk clock level:": "2"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "191.0",
+                "GPU use (%)": "3"
+              }
+            },
+            "pids": ""
+          },
+          "pin_rc": {
+            "rocm-smi --setperfdeterminism 1900": 0,
+            "rocm-smi --setperflevel manual": 0,
+            "rocm-smi --setpowercap 750": 2
+          },
+          "throttled": false,
+          "cotenant_changed": false
+        },
+        {
+          "rep": 9,
+          "pre": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1550Mhz)",
+                "fclk clock level:": "1",
+                "mclk clock speed:": "(1100Mhz)",
+                "mclk clock level:": "1",
+                "sclk clock speed:": "(194Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1000Mhz)",
+                "socclk clock level:": "1"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "158.0",
+                "GPU use (%)": "0"
+              }
+            },
+            "pids": ""
+          },
+          "post": {
+            "clocks": {
+              "card0": {
+                "fclk clock speed:": "(1800Mhz)",
+                "fclk clock level:": "2",
+                "mclk clock speed:": "(1300Mhz)",
+                "mclk clock level:": "2",
+                "sclk clock speed:": "(675Mhz)",
+                "sclk clock level:": "1",
+                "socclk clock speed:": "(1143Mhz)",
+                "socclk clock level:": "2"
+              }
+            },
+            "thermals": {
+              "card0": {
+                "Temperature (Sensor junction) (C)": "39.0",
+                "Temperature (Sensor memory) (C)": "33.0",
+                "Current Socket Graphics Package Power (W)": "190.0",
+                "GPU use (%)": "3"
+              }
+            },
+            "pids": ""
+          },
+          "pin_rc": {
+            "rocm-smi --setperfdeterminism 1900": 0,
+            "rocm-smi --setperflevel manual": 0,
+            "rocm-smi --setpowercap 750": 2
+          },
+          "throttled": false,
+          "cotenant_changed": false
+        }
+      ],
+      "any_throttled": false,
+      "any_cotenant_changed": false,
+      "timer_scope": "include_env_build",
+      "env_build_sec": 0.016
     }
   ],
   "provenance": {
