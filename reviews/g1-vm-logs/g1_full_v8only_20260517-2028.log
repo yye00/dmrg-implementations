@@ -1,0 +1,86 @@
+VARIANT_SKIP active: removed [dmrg-gpu-base,dmrg-gpu,dmrg-gpu-opt,dmrg2-gpu-base,dmrg2-gpu,dmrg2-gpu-opt,pdmrg-gpu-base,pdmrg-gpu], running [pdmrg-gpu-opt]
+============================================================
+ G1 baseline launcher — 2026-05-17T20:28:24Z
+============================================================
+Repo:    /home/hotaisle/dmrg-implementations
+Out:     benchmarks/paper_results/mi300x/g1-single-gpu-20260517-2028
+HEAD:    183f61bfc1d08b222ec38532b73c110e43f471e5
+Branch:  main
+Target:  single-gpu
+Mode:    smoke=0 full=1 skip_smoke=1
+Reps:    10
+PDMRG:   warmup=2 polish=2 local=1
+Variants: pdmrg-gpu-opt
+Filter:  --impl pdmrg-gpu-opt
+============================================================
+
+[1/4] Environment verification
+------------------------------
+hipcc: HIP version: 7.2.26015-fc0010cf6a
+ROCm: 7.2.0
+WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status
+GPU[0]		: Card Series: 		AMD Instinct MI300X VF
+GPU[0]		: Card Model: 		0x74b5
+GPU[0]		: Card Vendor: 		Advanced Micro Devices, Inc. [AMD/ATI]
+
+[2/4] Defect-class registry pre-flight
+--------------------------------------
+Registry: TOTAL HITS = 0
+
+[3/4] Building 1 GPU variants
+--------------------------------------
+
+--- Building pdmrg-gpu-opt ---
+OK: pdmrg-gpu-opt -> gpu-rocm/pdmrg-gpu-opt/build/pdmrg_gpu_opt
+
+[4/4] Running benchmarks
+------------------------
+
+==== FULL G1 BASELINE (CHALLENGE_SIZES, ~6-12 h) ====
+
+--- Grid: full-20260517-2028 ---
+
+#################################################################
+  MI300X Challenge Benchmarks
+  Grid:             CHALLENGE (44 configs)
+  Implementations:  pdmrg-gpu-opt
+  Models:           heisenberg, josephson, tfim
+  Configs:          44  (× 10 repeats)
+  GPU warmup:       ON
+  PDMRG overrides:  warmup=2, polish=2, local=1, recal=None
+  Timestamp:        20260517_202836_full-20260517-2028
+  Output:           benchmarks/paper_results/mi300x/g1-single-gpu-20260517-2028
+#################################################################
+  Git commit:       183f61bfc1d0 (main)
+CHI_SKIP active: removed chi in [512]
+
+=================================================================
+  pdmrg-gpu-opt — heisenberg
+=================================================================
+  [  1/37] L= 50 chi= 64 sw=20      
+        rep 1/10: t=8.815s  E=-21.9721035351
+        rep 2/10: t=8.738s  E=-21.9721031512
+        rep 3/10: t=8.794s  E=-21.9721042193
+        rep 4/10: t=8.655s  E=-21.9721028474
+        rep 5/10: t=8.667s  E=-21.9721034784
+        rep 6/10: t=7.782s  E=-21.9721032706
+        rep 7/10: t=7.636s  E=-21.9721035983
+        rep 8/10: t=8.792s  E=-21.9721039606
+        rep 9/10: t=7.550s  E=-21.9721035479
+        rep 10/10: t=8.884s  E=-21.9721040262
+  [  2/37] L= 50 chi=128 sw=20      
+        rep 1/10: t=16.811s  E=-21.9721002797
+        rep 2/10: t=16.806s  E=-21.9720980904
+        rep 3/10: t=16.779s  E=-21.9720981953
+        rep 4/10: t=16.633s  E=-21.9720999691
+        rep 5/10: t=16.860s  E=-21.9720995271
+        rep 6/10: t=16.444s  E=-21.9720980804
+        rep 7/10: t=16.883s  E=-21.9720984066
+        rep 8/10: t=16.527s  E=-21.9720985972
+        rep 9/10: t=16.629s  E=-21.9720995914
+        rep 10/10: t=16.749s  E=-21.9721007937
+  [  3/37] L= 50 chi=256 sw=15      
+        rep 1/10: t=50.630s  E=-21.9721009593
+        rep 2/10: t=51.967s  E=-21.9721005857
+        rep 3/10: t=51.194s  E=-21.9720988635
+        rep 4/10: t=50.962s  E=-21.9721001365
